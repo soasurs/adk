@@ -1,93 +1,167 @@
-# Agent Development Kit
+# ADK - Agent Development Kit
 
+一个基于 Go 的无状态 Agent 框架，使用 PostgreSQL 进行消息持久化，支持 HTTP API 访问。
 
+## 架构特点
 
-## Getting started
+- **无状态 Agent**: Agent 不持有任何状态，所有上下文从 PostgreSQL 加载
+- **多 Agent 编排**: 支持多个专业 Agent 协同工作，内置工作流引擎
+- **PostgreSQL 持久化**: 所有会话、消息、运行记录、工作流定义都存储在数据库中
+- **HTTP API**: RESTful API + SSE 流式支持
+- **工具系统**: 可扩展的工具注册和执行机制
+- **ReAct 模式**: 内置 ReAct 循环支持工具调用
+- **Agent 注册表**: 集中管理多个专业 Agent（默认、代码、写作等）
+- **工作流引擎**: 支持顺序、并行、条件执行等多种编排模式
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## 项目结构
 
 ```
-cd existing_repo
-git remote add origin https://soasurs.dev/soasurs/adk.git
-git branch -M master
-git push -uf origin master
+adk/
+├── cmd/
+│   ├── api/              # HTTP API 服务入口
+│   └── worker/           # 后台 Worker 入口
+├── pkg/
+│   ├── agent/            # 多 Agent 编排核心（注册表、配置）
+│   ├── orchestration/    # 工作流引擎（顺序/并行/条件执行）
+│   ├── api/              # HTTP API 层
+│   │   ├── handler/      # HTTP Handlers
+│   │   ├── middleware/   # 中间件
+│   │   └── dto/          # 请求/响应 DTO
+│   ├── llm/              # LLM 抽象层
+│   │   └── openai/       # OpenAI 实现
+│   └── tool/             # 工具系统
+│       └── builtin/      # 内置工具
+├── internal/
+│   ├── storage/          # 存储层
+│   │   └── postgres/     # PostgreSQL 实现
+│   └── config/           # 配置管理
+└── migrations/           # 数据库迁移
 ```
 
-## Integrate with your tools
+## 快速开始
 
-* [Set up project integrations](https://soasurs.dev/soasurs/adk/-/settings/integrations)
+### 1. 环境要求
 
-## Collaborate with your team
+- Go 1.21+
+- PostgreSQL 15+
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### 2. 配置
 
-## Test and Deploy
+通过环境变量或配置文件配置：
 
-Use the built-in continuous integration in GitLab.
+```bash
+# 服务器配置
+export SERVER_HOST=0.0.0.0
+export SERVER_PORT=8080
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+# 数据库配置
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_USER=postgres
+export DB_PASSWORD=postgres
+export DB_NAME=adk
+export DB_SSLMODE=disable
 
-***
+# LLM 配置
+export LLM_PROVIDER=openai
+export LLM_API_KEY=your-api-key
+export LLM_MODEL=gpt-4o
+```
 
-# Editing this README
+### 3. 运行
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```bash
+# 启动 API 服务
+go run ./cmd/api
+```
 
-## Suggestions for a good README
+### 4. API 使用
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```bash
+# 查看可用 Agent
+curl http://localhost:8080/api/v1/agents
 
-## Name
-Choose a self-explaining name for your project.
+# 创建会话（指定专业 Agent）
+curl -X POST http://localhost:8080/api/v1/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "code"}'
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+# 发送消息（自动路由到会话指定的 Agent）
+curl -X POST http://localhost:8080/api/v1/sessions/{session_id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Write a Go function to calculate factorial"}'
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+# 获取对话历史
+curl http://localhost:8080/api/v1/sessions/{session_id}/messages
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+# 流式消息 (SSE)
+curl -X POST http://localhost:8080/api/v1/sessions/{session_id}/stream \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello!"}'
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+# 获取 Agent 详情
+curl http://localhost:8080/api/v1/agents/code
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## API 端点
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+| Method | Endpoint | 说明 |
+|--------|----------|------|
+| POST | `/api/v1/sessions` | 创建会话（指定 `agent_id`） |
+| GET | `/api/v1/sessions/:id` | 获取会话 |
+| PUT | `/api/v1/sessions/:id` | 更新会话 |
+| DELETE | `/api/v1/sessions/:id` | 删除会话 |
+| GET | `/api/v1/sessions/:id/messages` | 获取消息历史 |
+| POST | `/api/v1/sessions/:id/messages` | 发送消息（同步，自动路由到对应 Agent） |
+| POST | `/api/v1/sessions/:id/stream` | 发送消息（SSE，自动路由到对应 Agent） |
+| GET | `/api/v1/runs/:id` | 获取运行记录 |
+| GET | `/api/v1/runs/session/:session_id` | 获取会话的运行列表 |
+| **Agent 管理** | | |
+| GET | `/api/v1/agents` | 获取所有注册的 Agent |
+| GET | `/api/v1/agents/:id` | 获取特定 Agent 的详细信息 |
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## 内置工具
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+- `echo`: 回显消息（测试用）
+- `calculator`: 基本算术计算
+- `http_request`: HTTP 请求
+- `shell`: Shell 命令执行（谨慎使用）
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## 添加自定义工具
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+```go
+import "soasurs.dev/soasurs/adk/pkg/tool"
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+myTool := tool.NewTool(
+    "my_tool",
+    "Description of my tool",
+    map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "param1": map[string]any{
+                "type": "string",
+                "description": "Parameter 1",
+            },
+        },
+        "required": []string{"param1"},
+    },
+    func(ctx context.Context, args map[string]any) (any, error) {
+        // 实现工具逻辑
+        return "result", nil
+    },
+)
 
-## License
-For open source projects, say how it is licensed.
+registry.Register(myTool)
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## 数据库表
+
+- `sessions`: 会话表
+- `messages`: 消息表
+- `runs`: 运行记录表
+- `tool_calls`: 工具调用记录表
+- `jobs`: 任务队列表（预留）
+
+## 许可证
+
+MIT License

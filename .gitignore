@@ -1,0 +1,35 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+cmd/api/test
+cmd/worker/test
+
+# Test binary
+*.test
+
+# Output of go coverage report
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Config
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
