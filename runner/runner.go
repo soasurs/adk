@@ -1,0 +1,101 @@
+package runner
+
+import (
+	"context"
+	"iter"
+	"time"
+
+	"github.com/bwmarrin/snowflake"
+
+	"soasurs.dev/soasurs/adk/agent"
+	snowflaker "soasurs.dev/soasurs/adk/internal/snowflake"
+	"soasurs.dev/soasurs/adk/model"
+	"soasurs.dev/soasurs/adk/session"
+	"soasurs.dev/soasurs/adk/session/message"
+)
+
+// Runner coordinates a stateless Agent with a SessionService. It loads
+// conversation history from the session, forwards it to the agent, and
+// persists every yielded message back to the session.
+type Runner struct {
+	agent      agent.Agent
+	session    session.SessionService
+	snowflaker *snowflake.Node
+}
+
+// New creates a Runner backed by the given agent and session service.
+func New(a agent.Agent, s session.SessionService) (*Runner, error) {
+	node, err := snowflaker.New()
+	if err != nil {
+		return nil, err
+	}
+	return &Runner{
+		agent:      a,
+		session:    s,
+		snowflaker: node,
+	}, nil
+}
+
+// Run handles one user turn. It fetches the session history, appends the user
+// input, invokes the agent, and yields each produced message (assistant
+// replies and tool results) while persisting them to the session.
+// The caller iterates the returned sequence and decides whether to continue
+// the conversation by calling Run again.
+func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) iter.Seq2[model.Message, error] {
+	return func(yield func(model.Message, error) bool) {
+		sess, err := r.session.GetSession(ctx, sessionID)
+		if err != nil {
+			yield(model.Message{}, err)
+			return
+		}
+
+		// Load all previous messages from the session.
+		persisted, err := sess.GetMessages(ctx, 1000, 0)
+		if err != nil {
+			yield(model.Message{}, err)
+			return
+		}
+
+		messages := make([]model.Message, 0, len(persisted)+1)
+		for _, m := range persisted {
+			messages = append(messages, m.ToModel())
+		}
+
+		// Append and persist the incoming user message.
+		userMsg := model.Message{
+			Role:    model.RoleUser,
+			Content: userInput,
+		}
+		if err := r.persistMessage(ctx, sess, userMsg); err != nil {
+			yield(model.Message{}, err)
+			return
+		}
+		messages = append(messages, userMsg)
+
+		// Run the agent, persisting and forwarding each yielded message.
+		for msg, err := range r.agent.Run(ctx, messages) {
+			if err != nil {
+				yield(model.Message{}, err)
+				return
+			}
+			if err := r.persistMessage(ctx, sess, msg); err != nil {
+				yield(model.Message{}, err)
+				return
+			}
+			if !yield(msg, nil) {
+				return
+			}
+		}
+	}
+}
+
+// persistMessage assigns a snowflake ID and timestamps, then saves the message
+// to the session.
+func (r *Runner) persistMessage(ctx context.Context, sess session.Session, msg model.Message) error {
+	now := time.Now().UnixMilli()
+	m := message.FromModel(msg)
+	m.MessageID = r.snowflaker.Generate().Int64()
+	m.CreatedAt = now
+	m.UpdatedAt = now
+	return sess.CreateMessage(ctx, m)
+}
