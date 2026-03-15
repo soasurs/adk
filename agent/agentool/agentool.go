@@ -52,8 +52,8 @@ func New(a agent.Agent) tool.Tool {
 func (t *agentTool) Definition() tool.Definition { return t.def }
 
 // Run executes the wrapped agent with the delegated task and returns the
-// agent's final assistant text response. Intermediate messages (tool calls,
-// tool results) produced by the sub-agent are consumed silently.
+// agent's final assistant text response. Partial (streaming) events and
+// intermediate messages (tool calls, tool results) are consumed silently.
 func (t *agentTool) Run(ctx context.Context, _ string, arguments string) (string, error) {
 	var req taskRequest
 	if err := json.Unmarshal([]byte(arguments), &req); err != nil {
@@ -65,13 +65,13 @@ func (t *agentTool) Run(ctx context.Context, _ string, arguments string) (string
 	}
 
 	var result string
-	for msg, err := range t.a.Run(ctx, messages) {
+	for event, err := range t.a.Run(ctx, messages) {
 		if err != nil {
 			return "", fmt.Errorf("agentool %q: %w", t.a.Name(), err)
 		}
-		// Capture the last assistant text response as the final result.
-		if msg.Role == model.RoleAssistant && msg.Content != "" {
-			result = msg.Content
+		// Only capture the last complete assistant text response.
+		if !event.Partial && event.Message.Role == model.RoleAssistant && event.Message.Content != "" {
+			result = event.Message.Content
 		}
 	}
 	return result, nil

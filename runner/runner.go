@@ -37,22 +37,23 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 }
 
 // Run handles one user turn. It fetches the session history, appends the user
-// input, invokes the agent, and yields each produced message (assistant
-// replies and tool results) while persisting them to the session.
-// The caller iterates the returned sequence and decides whether to continue
-// the conversation by calling Run again.
-func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) iter.Seq2[model.Message, error] {
-	return func(yield func(model.Message, error) bool) {
+// input, invokes the agent, and yields each produced Event to the caller.
+// Complete events (Event.Partial=false) are persisted to the session; partial
+// streaming fragments are forwarded to the caller for real-time display but
+// are not persisted. The caller iterates the returned sequence and decides
+// whether to continue the conversation by calling Run again.
+func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) iter.Seq2[*model.Event, error] {
+	return func(yield func(*model.Event, error) bool) {
 		sess, err := r.session.GetSession(ctx, sessionID)
 		if err != nil {
-			yield(model.Message{}, err)
+			yield(nil, err)
 			return
 		}
 
 		// Load all previous active messages from the session.
 		persisted, err := sess.ListMessages(ctx)
 		if err != nil {
-			yield(model.Message{}, err)
+			yield(nil, err)
 			return
 		}
 
@@ -67,22 +68,27 @@ func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) ite
 			Content: userInput,
 		}
 		if err := r.persistMessage(ctx, sess, userMsg); err != nil {
-			yield(model.Message{}, err)
+			yield(nil, err)
 			return
 		}
 		messages = append(messages, userMsg)
 
-		// Run the agent, persisting and forwarding each yielded message.
-		for msg, err := range r.agent.Run(ctx, messages) {
+		// Run the agent, forwarding every event to the caller.
+		// Only complete events (Partial=false) are persisted to the session.
+		for event, err := range r.agent.Run(ctx, messages) {
 			if err != nil {
-				yield(model.Message{}, err)
+				yield(nil, err)
 				return
 			}
-			if err := r.persistMessage(ctx, sess, msg); err != nil {
-				yield(model.Message{}, err)
-				return
+			// Persist only complete messages; partial streaming fragments are
+			// forwarded to the caller for real-time display only.
+			if !event.Partial {
+				if err := r.persistMessage(ctx, sess, event.Message); err != nil {
+					yield(nil, err)
+					return
+				}
 			}
-			if !yield(msg, nil) {
+			if !yield(event, nil) {
 				return
 			}
 		}

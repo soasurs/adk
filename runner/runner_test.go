@@ -23,28 +23,28 @@ import (
 type mockAgent struct {
 	name        string
 	description string
-	// runFunc is called by Run to produce the message sequence.
-	runFunc func(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error]
+	// runFunc is called by Run to produce the event sequence.
+	runFunc func(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error]
 	// capturedMessages records the messages argument passed to the last Run call.
 	capturedMessages []model.Message
 }
 
 func (m *mockAgent) Name() string        { return m.name }
 func (m *mockAgent) Description() string { return m.description }
-func (m *mockAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error] {
+func (m *mockAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
 	m.capturedMessages = messages
 	return m.runFunc(ctx, messages)
 }
 
-// staticAgent returns a fixed slice of messages with no errors.
+// staticAgent returns a fixed slice of complete (non-partial) events.
 func staticAgent(msgs ...model.Message) *mockAgent {
 	return &mockAgent{
 		name:        "static-agent",
 		description: "yields fixed messages",
-		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[model.Message, error] {
-			return func(yield func(model.Message, error) bool) {
+		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
 				for _, m := range msgs {
-					if !yield(m, nil) {
+					if !yield(&model.Event{Message: m, Partial: false}, nil) {
 						return
 					}
 				}
@@ -58,23 +58,25 @@ func errorAgent(err error) *mockAgent {
 	return &mockAgent{
 		name:        "error-agent",
 		description: "always errors",
-		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[model.Message, error] {
-			return func(yield func(model.Message, error) bool) {
-				yield(model.Message{}, err)
+		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				yield(nil, err)
 			}
 		},
 	}
 }
 
-// collectRun drains all messages from runner.Run into a slice.
+// collectRun drains all complete events from runner.Run into a message slice.
 func collectRun(t *testing.T, r *Runner, sessionID int64, input string) ([]model.Message, error) {
 	t.Helper()
 	var msgs []model.Message
-	for msg, err := range r.Run(context.Background(), sessionID, input) {
+	for event, err := range r.Run(context.Background(), sessionID, input) {
 		if err != nil {
 			return msgs, err
 		}
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 	return msgs, nil
 }
@@ -253,9 +255,11 @@ func TestRunner_Run_EarlyBreak(t *testing.T) {
 	r, sessionID := newRunnerWithSession(t, a)
 
 	var collected []model.Message
-	for msg, err := range r.Run(context.Background(), sessionID, "go") {
+	for event, err := range r.Run(context.Background(), sessionID, "go") {
 		require.NoError(t, err)
-		collected = append(collected, msg)
+		if !event.Partial {
+			collected = append(collected, event.Message)
+		}
 		break // stop after the first message
 	}
 
@@ -280,6 +284,75 @@ func TestRunner_Run_NoAgentMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stored, 1)
 	assert.Equal(t, "silent", stored[0].Content)
+}
+
+// streamingAgent returns an agent that yields the given partial content
+// fragments followed by a single complete message.
+func streamingAgent(partials []string, complete model.Message) *mockAgent {
+	return &mockAgent{
+		name:        "streaming-agent",
+		description: "yields partial events then a complete event",
+		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				for _, content := range partials {
+					if !yield(&model.Event{
+						Message: model.Message{Role: model.RoleAssistant, Content: content},
+						Partial: true,
+					}, nil) {
+						return
+					}
+				}
+				yield(&model.Event{Message: complete, Partial: false}, nil)
+			}
+		},
+	}
+}
+
+// TestRunner_Run_PartialEventsForwarded verifies that partial streaming events
+// produced by the agent are forwarded to the caller in the correct order.
+func TestRunner_Run_PartialEventsForwarded(t *testing.T) {
+	complete := model.Message{Role: model.RoleAssistant, Content: "Hello"}
+	a := streamingAgent([]string{"He", "llo"}, complete)
+	r, sessionID := newRunnerWithSession(t, a)
+
+	var events []*model.Event
+	for event, err := range r.Run(context.Background(), sessionID, "hi") {
+		require.NoError(t, err)
+		events = append(events, event)
+	}
+
+	// 2 partial chunks + 1 complete event must all be forwarded.
+	require.Len(t, events, 3)
+	assert.True(t, events[0].Partial)
+	assert.Equal(t, "He", events[0].Message.Content)
+	assert.True(t, events[1].Partial)
+	assert.Equal(t, "llo", events[1].Message.Content)
+	assert.False(t, events[2].Partial)
+	assert.Equal(t, "Hello", events[2].Message.Content)
+}
+
+// TestRunner_Run_PartialEventsNotPersisted verifies that partial streaming
+// events are forwarded to the caller but are NOT written to the session;
+// only the complete message is persisted alongside the user message.
+func TestRunner_Run_PartialEventsNotPersisted(t *testing.T) {
+	complete := model.Message{Role: model.RoleAssistant, Content: "Hello"}
+	a := streamingAgent([]string{"He", "llo"}, complete)
+	r, sessionID := newRunnerWithSession(t, a)
+
+	_, err := collectRun(t, r, sessionID, "stream test")
+	require.NoError(t, err)
+
+	sess, err := r.session.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	stored, err := sess.GetMessages(context.Background(), 100, 0)
+	require.NoError(t, err)
+
+	// Only user + complete assistant must be stored — the 2 partial chunks must NOT be.
+	require.Len(t, stored, 2)
+	assert.Equal(t, string(model.RoleUser), stored[0].Role)
+	assert.Equal(t, "stream test", stored[0].Content)
+	assert.Equal(t, string(model.RoleAssistant), stored[1].Role)
+	assert.Equal(t, "Hello", stored[1].Content)
 }
 
 // ---------------------------------------------------------------------------

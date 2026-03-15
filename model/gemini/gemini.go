@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"strings"
 
 	"google.golang.org/genai"
@@ -62,37 +63,141 @@ func (g *GenerateContent) Name() string {
 	return g.modelName
 }
 
-// Generate sends the request to the Gemini GenerateContent API and returns
-// the first candidate as a provider-agnostic LLMResponse.
-func (g *GenerateContent) Generate(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
-	contents, sysInstruction, err := convertMessages(req.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: convert messages: %w", err)
-	}
+// GenerateContent sends the request to the Gemini GenerateContent API.
+// When stream is false, exactly one complete *model.LLMResponse is yielded.
+// When stream is true, partial text/reasoning chunks are yielded (Partial=true)
+// followed by the assembled complete response (Partial=false, TurnComplete=true).
+func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		contents, sysInstruction, err := convertMessages(req.Messages)
+		if err != nil {
+			yield(nil, fmt.Errorf("gemini: convert messages: %w", err))
+			return
+		}
 
-	tools, err := convertTools(req.Tools)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: convert tools: %w", err)
-	}
+		tools, err := convertTools(req.Tools)
+		if err != nil {
+			yield(nil, fmt.Errorf("gemini: convert tools: %w", err))
+			return
+		}
 
-	gCfg := &genai.GenerateContentConfig{
-		SystemInstruction: sysInstruction,
-		Tools:             tools,
-	}
-	if cfg != nil {
-		applyConfig(gCfg, cfg)
-	}
+		gCfg := &genai.GenerateContentConfig{
+			SystemInstruction: sysInstruction,
+			Tools:             tools,
+		}
+		if cfg != nil {
+			applyConfig(gCfg, cfg)
+		}
 
-	resp, err := g.client.Models.GenerateContent(ctx, req.Model, contents, gCfg)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: generate content: %w", err)
-	}
+		if !stream {
+			resp, err := g.client.Models.GenerateContent(ctx, req.Model, contents, gCfg)
+			if err != nil {
+				yield(nil, fmt.Errorf("gemini: generate content: %w", err))
+				return
+			}
+			if len(resp.Candidates) == 0 {
+				yield(nil, fmt.Errorf("gemini: no candidates returned"))
+				return
+			}
+			llmResp := convertResponse(resp)
+			llmResp.TurnComplete = true
+			yield(llmResp, nil)
+			return
+		}
 
-	if len(resp.Candidates) == 0 {
-		return nil, fmt.Errorf("gemini: no candidates returned")
-	}
+		// Streaming mode.
+		var contentBuf strings.Builder
+		var reasoningBuf strings.Builder
+		var toolCalls []model.ToolCall
+		var finishReason model.FinishReason
+		var usage *model.TokenUsage
 
-	return convertResponse(resp), nil
+		for resp, err := range g.client.Models.GenerateContentStream(ctx, req.Model, contents, gCfg) {
+			if err != nil {
+				yield(nil, fmt.Errorf("gemini: stream: %w", err))
+				return
+			}
+			if len(resp.Candidates) == 0 {
+				continue
+			}
+			candidate := resp.Candidates[0]
+			if candidate.Content == nil {
+				continue
+			}
+
+			var deltaTxt string
+			var deltaReasoning string
+			for idx, part := range candidate.Content.Parts {
+				switch {
+				case part.Thought:
+					if part.Text != "" {
+						reasoningBuf.WriteString(part.Text)
+						deltaReasoning += part.Text
+					}
+				case part.FunctionCall != nil:
+					id := part.FunctionCall.ID
+					if id == "" {
+						id = fmt.Sprintf("call_%d", idx)
+					}
+					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					toolCalls = append(toolCalls, model.ToolCall{
+						ID:               id,
+						Name:             part.FunctionCall.Name,
+						Arguments:        string(argsJSON),
+						ThoughtSignature: part.ThoughtSignature,
+					})
+				case part.Text != "":
+					contentBuf.WriteString(part.Text)
+					deltaTxt += part.Text
+				}
+			}
+
+			// Yield partial event for text/reasoning deltas.
+			if deltaTxt != "" || deltaReasoning != "" {
+				if !yield(&model.LLMResponse{
+					Message: model.Message{
+						Role:             model.RoleAssistant,
+						Content:          deltaTxt,
+						ReasoningContent: deltaReasoning,
+					},
+					Partial: true,
+				}, nil) {
+					return
+				}
+			}
+
+			if candidate.FinishReason != "" {
+				finishReason = convertFinishReason(candidate.FinishReason)
+			}
+			if resp.UsageMetadata != nil {
+				usage = &model.TokenUsage{
+					PromptTokens:     int64(resp.UsageMetadata.PromptTokenCount),
+					CompletionTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
+					TotalTokens:      int64(resp.UsageMetadata.TotalTokenCount),
+				}
+			}
+		}
+
+		// Determine final finish reason.
+		if len(toolCalls) > 0 {
+			finishReason = model.FinishReasonToolCalls
+		} else if finishReason == "" {
+			finishReason = model.FinishReasonStop
+		}
+
+		// Yield final complete response.
+		yield(&model.LLMResponse{
+			Message: model.Message{
+				Role:             model.RoleAssistant,
+				Content:          contentBuf.String(),
+				ReasoningContent: reasoningBuf.String(),
+				ToolCalls:        toolCalls,
+			},
+			FinishReason: finishReason,
+			Usage:        usage,
+			TurnComplete: true,
+		}, nil)
+	}
 }
 
 // convertMessages extracts a system instruction from the message list and
