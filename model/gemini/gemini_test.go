@@ -226,11 +226,9 @@ func TestConvertMessages_UnknownRole(t *testing.T) {
 
 func TestApplyConfig_Temperature(t *testing.T) {
 	gCfg := &genai.GenerateContentConfig{}
-	applyConfig(gCfg, &model.GenerateConfig{Temperature: 0.7, TopP: 0.9})
+	applyConfig(gCfg, &model.GenerateConfig{Temperature: 0.7})
 	require.NotNil(t, gCfg.Temperature)
 	assert.InDelta(t, float32(0.7), *gCfg.Temperature, 0.001)
-	require.NotNil(t, gCfg.TopP)
-	assert.InDelta(t, float32(0.9), *gCfg.TopP, 0.001)
 }
 
 func TestApplyConfig_ReasoningEffort(t *testing.T) {
@@ -405,7 +403,6 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 
 	cfg := &model.GenerateConfig{
 		Temperature: 0.2,
-		TopP:        0.9,
 	}
 
 	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
