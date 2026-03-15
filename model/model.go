@@ -62,9 +62,15 @@ const (
 // GenerateConfig holds optional configuration for a generation request.
 type GenerateConfig struct {
 	Temperature     float64
-	TopP            float64
 	ReasoningEffort ReasoningEffort
 	ServiceTier     ServiceTier
+	// MaxTokens overrides the maximum number of tokens to generate.
+	// A zero value leaves the decision to the provider (which may use its own default).
+	MaxTokens int64
+	// ThinkingBudget overrides the token budget for extended thinking / reasoning.
+	// A zero value leaves the decision to the provider (which may use its own default).
+	// Ignored when EnableThinking is nil or false.
+	ThinkingBudget int64
 	// EnableThinking explicitly enables or disables the model's internal
 	// reasoning/thinking capability. A nil value leaves the decision to the
 	// provider. Providers that express this as an effort level (e.g. OpenAI

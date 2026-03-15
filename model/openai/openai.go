@@ -192,11 +192,11 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 // optionally appends extra request options (e.g. enable_thinking for compatible
 // providers that do not use reasoning_effort).
 func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption) {
+	if cfg.MaxTokens > 0 {
+		p.MaxCompletionTokens = param.NewOpt(cfg.MaxTokens)
+	}
 	if cfg.Temperature != 0 {
 		p.Temperature = param.NewOpt(cfg.Temperature)
-	}
-	if cfg.TopP != 0 {
-		p.TopP = param.NewOpt(cfg.TopP)
 	}
 	if cfg.ReasoningEffort != "" {
 		p.ReasoningEffort = shared.ReasoningEffort(cfg.ReasoningEffort)

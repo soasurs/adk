@@ -294,7 +294,6 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 
 	cfg := &model.GenerateConfig{
 		Temperature: 0.2,
-		TopP:        0.9,
 	}
 
 	resp, err := llm.Generate(context.Background(), &model.LLMRequest{

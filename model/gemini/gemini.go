@@ -247,13 +247,12 @@ func convertTools(tools []tool.Tool) ([]*genai.Tool, error) {
 
 // applyConfig transfers GenerateConfig settings into a Gemini GenerateContentConfig.
 func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig) {
+	if cfg.MaxTokens > 0 {
+		gCfg.MaxOutputTokens = int32(cfg.MaxTokens)
+	}
 	if cfg.Temperature != 0 {
 		t := float32(cfg.Temperature)
 		gCfg.Temperature = &t
-	}
-	if cfg.TopP != 0 {
-		p := float32(cfg.TopP)
-		gCfg.TopP = &p
 	}
 
 	// Map ReasoningEffort / EnableThinking → Gemini ThinkingConfig.
