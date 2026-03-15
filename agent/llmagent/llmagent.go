@@ -76,6 +76,9 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 				return
 			}
 
+			// Attach token usage to the assistant message so callers can persist it.
+			resp.Message.Usage = resp.Usage
+
 			// Yield the assistant message (may contain tool_calls).
 			if !yield(resp.Message, nil) {
 				return

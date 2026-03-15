@@ -72,7 +72,7 @@ func (c *ChatCompletion) Generate(ctx context.Context, req *model.LLMRequest, cf
 		return nil, fmt.Errorf("openai: no choices returned")
 	}
 
-	return convertResponse(resp.Choices[0]), nil
+	return convertResponse(resp.Choices[0], &resp.Usage), nil
 }
 
 // convertMessages maps model.Message slice to openai ChatCompletionMessageParamUnion slice.
@@ -94,6 +94,33 @@ func convertMessage(m model.Message) (goopenai.ChatCompletionMessageParamUnion, 
 		return goopenai.SystemMessage(m.Content), nil
 
 	case model.RoleUser:
+		if len(m.Parts) > 0 {
+			parts := make([]goopenai.ChatCompletionContentPartUnionParam, 0, len(m.Parts))
+			for _, p := range m.Parts {
+				switch p.Type {
+				case model.ContentPartTypeText:
+					parts = append(parts, goopenai.TextContentPart(p.Text))
+				case model.ContentPartTypeImageURL:
+					parts = append(parts, goopenai.ImageContentPart(
+						goopenai.ChatCompletionContentPartImageImageURLParam{
+							URL:    p.ImageURL,
+							Detail: string(p.ImageDetail),
+						},
+					))
+				case model.ContentPartTypeImageBase64:
+					dataURI := fmt.Sprintf("data:%s;base64,%s", p.MIMEType, p.ImageBase64)
+					parts = append(parts, goopenai.ImageContentPart(
+						goopenai.ChatCompletionContentPartImageImageURLParam{
+							URL:    dataURI,
+							Detail: string(p.ImageDetail),
+						},
+					))
+				default:
+					return goopenai.ChatCompletionMessageParamUnion{}, fmt.Errorf("unknown content part type: %q", p.Type)
+				}
+			}
+			return goopenai.UserMessage(parts), nil
+		}
 		return goopenai.UserMessage(m.Content), nil
 
 	case model.RoleAssistant:
@@ -188,8 +215,8 @@ func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig,
 	}
 }
 
-// convertResponse maps the first OpenAI choice to model.LLMResponse.
-func convertResponse(choice goopenai.ChatCompletionChoice) *model.LLMResponse {
+// convertResponse maps the first OpenAI choice and usage to model.LLMResponse.
+func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.CompletionUsage) *model.LLMResponse {
 	msg := model.Message{
 		Role:    model.RoleAssistant,
 		Content: choice.Message.Content,
@@ -221,6 +248,11 @@ func convertResponse(choice goopenai.ChatCompletionChoice) *model.LLMResponse {
 	return &model.LLMResponse{
 		Message:      msg,
 		FinishReason: convertFinishReason(choice.FinishReason),
+		Usage: &model.TokenUsage{
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
+		},
 	}
 }
 
