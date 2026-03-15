@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -574,4 +576,97 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 
 	assert.False(t, events[5].Partial)
 	assert.Equal(t, "The result: streaming", events[5].Message.Content)
+}
+
+// ---------------------------------------------------------------------------
+// Parallel tool execution tests
+// ---------------------------------------------------------------------------
+
+// slowTool is a test double that sleeps for a configurable duration before
+// returning a fixed result, allowing tests to verify concurrent execution.
+type slowTool struct {
+	name    string
+	delay   time.Duration
+	result  string
+	callLog *atomic.Int64 // counts how many times Run has been called
+}
+
+func (s *slowTool) Definition() tool.Definition {
+	return tool.Definition{Name: s.name, Description: "a slow tool for testing"}
+}
+
+func (s *slowTool) Run(_ context.Context, _ string, _ string) (string, error) {
+	s.callLog.Add(1)
+	time.Sleep(s.delay)
+	return s.result, nil
+}
+
+// TestLlmAgent_ParallelToolExecution verifies that multiple tool calls issued
+// by a single LLM response are executed concurrently rather than sequentially.
+// Two tools each sleep for 100 ms; if run sequentially the total elapsed time
+// would be ≥ 200 ms, but parallel execution should complete in < 200 ms.
+func TestLlmAgent_ParallelToolExecution(t *testing.T) {
+	const delay = 100 * time.Millisecond
+
+	var callCount atomic.Int64
+	toolA := &slowTool{name: "tool-a", delay: delay, result: "result-a", callLog: &callCount}
+	toolB := &slowTool{name: "tool-b", delay: delay, result: "result-b", callLog: &callCount}
+
+	mock := &mockLLM{
+		name: "mock-parallel",
+		responses: []*model.LLMResponse{
+			// First call: LLM requests both tools simultaneously.
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-a", Name: "tool-a", Arguments: `{}`},
+						{ID: "tc-b", Name: "tool-b", Arguments: `{}`},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			// Second call: final answer.
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	a := New(Config{
+		Name:  "parallel-agent",
+		Model: mock,
+		Tools: []tool.Tool{toolA, toolB},
+	}).(*LlmAgent)
+
+	start := time.Now()
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "run both tools"},
+	})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+
+	// Both tools must have been called exactly once.
+	assert.Equal(t, int64(2), callCount.Load(), "both tools should be called")
+
+	// Verify tool result messages are present and ordered correctly.
+	var toolMsgs []model.Message
+	for _, m := range msgs {
+		if m.Role == model.RoleTool {
+			toolMsgs = append(toolMsgs, m)
+		}
+	}
+	require.Len(t, toolMsgs, 2)
+	assert.Equal(t, "tc-a", toolMsgs[0].ToolCallID)
+	assert.Equal(t, "result-a", toolMsgs[0].Content)
+	assert.Equal(t, "tc-b", toolMsgs[1].ToolCallID)
+	assert.Equal(t, "result-b", toolMsgs[1].Content)
+
+	// Parallel execution should finish well under 2×delay.
+	assert.Less(t, elapsed, 2*delay,
+		"parallel tool execution should be faster than sequential (elapsed=%v, 2×delay=%v)", elapsed, 2*delay)
+
+	t.Logf("elapsed=%v (2×delay=%v)", elapsed, 2*delay)
 }
