@@ -50,7 +50,9 @@ func (tl *ToolCalls) Scan(src any) error {
 type Message struct {
 	MessageID int64  `json:"message_id" db:"message_id"`
 	Role      string `json:"role" db:"role"`
-	Content   string `json:"content" db:"content"`
+	// Name optionally identifies the producer of this message (e.g. an agent name).
+	Name    string `json:"name" db:"name"`
+	Content string `json:"content" db:"content"`
 	// ReasoningContent stores the model's chain-of-thought output when provided.
 	ReasoningContent string    `json:"reasoning_content" db:"reasoning_content"`
 	ToolCalls        ToolCalls `json:"tool_calls" db:"tool_calls"`
@@ -82,6 +84,7 @@ func (m *Message) ToModel() model.Message {
 	}
 	msg := model.Message{
 		Role:             model.Role(m.Role),
+		Name:             m.Name,
 		Content:          m.Content,
 		ReasoningContent: m.ReasoningContent,
 		ToolCalls:        toolCalls,
@@ -110,6 +113,7 @@ func FromModel(m model.Message) *Message {
 	}
 	msg := &Message{
 		Role:             string(m.Role),
+		Name:             m.Name,
 		Content:          m.Content,
 		ReasoningContent: m.ReasoningContent,
 		ToolCalls:        toolCalls,

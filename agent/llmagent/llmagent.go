@@ -10,26 +10,26 @@ import (
 	"soasurs.dev/soasurs/adk/tool"
 )
 
-// LlmAgentConfig holds the configuration for an LLM-backed agent.
-type LlmAgentConfig struct {
+// Config holds the configuration for an LLM-backed agent.
+type Config struct {
 	Name        string
 	Description string
 	Model       model.LLM
 	Tools       []tool.Tool
-	// SystemPrompt is prepended as a system message on every Run call.
-	SystemPrompt string
+	// Instruction is prepended as a system message on every Run call.
+	Instruction string
 	// GenerateConfig controls optional LLM generation parameters.
 	GenerateConfig *model.GenerateConfig
 }
 
 // LlmAgent is a stateless agent that drives an LLM through a tool-call loop.
 type LlmAgent struct {
-	config *LlmAgentConfig
+	config *Config
 	tools  map[string]tool.Tool
 }
 
 // New creates a new LlmAgent from the given config.
-func New(config LlmAgentConfig) agent.Agent {
+func New(config Config) agent.Agent {
 	tools := make(map[string]tool.Tool, len(config.Tools))
 	for _, t := range config.Tools {
 		tools[t.Definition().Name] = t
@@ -55,10 +55,10 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 	return func(yield func(model.Message, error) bool) {
 		// Prepend system prompt when configured.
 		history := make([]model.Message, 0, len(messages)+1)
-		if a.config.SystemPrompt != "" {
+		if a.config.Instruction != "" {
 			history = append(history, model.Message{
 				Role:    model.RoleSystem,
-				Content: a.config.SystemPrompt,
+				Content: a.config.Instruction,
 			})
 		}
 		history = append(history, messages...)
