@@ -107,6 +107,7 @@ func main() {
 		Instruction: "You are a helpful research assistant. " +
 			"When answering questions, use the available Exa search tools " +
 			"to find up-to-date information. Always cite the sources you used.",
+		Stream: true,
 	})
 
 	// ── 4. Runner + in-memory Session ────────────────────────────────────────
@@ -140,28 +141,31 @@ func main() {
 		}
 
 		fmt.Print("Agent: ")
-		var finalAnswer string
-		for msg, err := range r.Run(ctx, sessionID, input) {
+		for event, err := range r.Run(ctx, sessionID, input) {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 				break
 			}
-			switch msg.Role {
+			if event.Partial {
+				// Stream partial content to stdout in real time.
+				fmt.Print(event.Message.Content)
+				continue
+			}
+			// Complete event.
+			switch event.Message.Role {
 			case model.RoleAssistant:
-				if len(msg.ToolCalls) > 0 {
+				if len(event.Message.ToolCalls) > 0 {
 					// Show which tools the agent is calling.
-					for _, tc := range msg.ToolCalls {
+					for _, tc := range event.Message.ToolCalls {
 						fmt.Printf("\n  [calling tool: %s]\n  Agent: ", tc.Name)
 					}
-				} else if msg.Content != "" {
-					finalAnswer = msg.Content
+				} else if event.Message.Content != "" {
+					// Non-streaming: print the complete answer.
+					fmt.Println(event.Message.Content)
 				}
 			case model.RoleTool:
 				// Tool results are processed silently; the agent will summarise them.
 			}
-		}
-		if finalAnswer != "" {
-			fmt.Println(finalAnswer)
 		}
 		fmt.Println()
 	}

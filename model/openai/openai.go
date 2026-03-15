@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
+	"strings"
 
 	goopenai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -39,40 +41,126 @@ func (c *ChatCompletion) Name() string {
 	return c.modelName
 }
 
-// Generate sends the request to the OpenAI Chat Completions API and returns
-// the first choice as a provider-agnostic LLMResponse.
-func (c *ChatCompletion) Generate(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
-	messages, err := convertMessages(req.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("openai: convert messages: %w", err)
-	}
+// GenerateContent sends the request to the OpenAI Chat Completions API.
+// When stream is false, exactly one complete *model.LLMResponse is yielded.
+// When stream is true, partial text chunks are yielded (Partial=true) followed
+// by the assembled complete response (Partial=false, TurnComplete=true).
+func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		messages, err := convertMessages(req.Messages)
+		if err != nil {
+			yield(nil, fmt.Errorf("openai: convert messages: %w", err))
+			return
+		}
 
-	tools, err := convertTools(req.Tools)
-	if err != nil {
-		return nil, fmt.Errorf("openai: convert tools: %w", err)
-	}
+		tools, err := convertTools(req.Tools)
+		if err != nil {
+			yield(nil, fmt.Errorf("openai: convert tools: %w", err))
+			return
+		}
 
-	params := goopenai.ChatCompletionNewParams{
-		Model:    shared.ChatModel(req.Model),
-		Messages: messages,
-		Tools:    tools,
-	}
+		params := goopenai.ChatCompletionNewParams{
+			Model:    shared.ChatModel(req.Model),
+			Messages: messages,
+			Tools:    tools,
+		}
 
-	var reqOpts []option.RequestOption
-	if cfg != nil {
-		applyConfig(&params, cfg, &reqOpts)
-	}
+		var reqOpts []option.RequestOption
+		if cfg != nil {
+			applyConfig(&params, cfg, &reqOpts)
+		}
 
-	resp, err := c.client.Chat.Completions.New(ctx, params, reqOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("openai: chat completion: %w", err)
-	}
+		if !stream {
+			resp, err := c.client.Chat.Completions.New(ctx, params, reqOpts...)
+			if err != nil {
+				yield(nil, fmt.Errorf("openai: chat completion: %w", err))
+				return
+			}
+			if len(resp.Choices) == 0 {
+				yield(nil, fmt.Errorf("openai: no choices returned"))
+				return
+			}
+			llmResp := convertResponse(resp.Choices[0], &resp.Usage)
+			llmResp.TurnComplete = true
+			yield(llmResp, nil)
+			return
+		}
 
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("openai: no choices returned")
-	}
+		// Streaming mode.
+		s := c.client.Chat.Completions.NewStreaming(ctx, params, reqOpts...)
 
-	return convertResponse(resp.Choices[0], &resp.Usage), nil
+		var contentBuf strings.Builder
+		toolCallAcc := make(map[int64]*model.ToolCall) // index → accumulated tool call
+		var finishReasonStr string
+
+		for s.Next() {
+			chunk := s.Current()
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+			choice := chunk.Choices[0]
+			delta := choice.Delta
+
+			// Yield delta text as a partial event.
+			if delta.Content != "" {
+				contentBuf.WriteString(delta.Content)
+				if !yield(&model.LLMResponse{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: delta.Content,
+					},
+					Partial: true,
+				}, nil) {
+					return
+				}
+			}
+
+			// Accumulate tool call fragments across chunks.
+			for _, tc := range delta.ToolCalls {
+				idx := tc.Index
+				if _, ok := toolCallAcc[idx]; !ok {
+					toolCallAcc[idx] = &model.ToolCall{}
+				}
+				acc := toolCallAcc[idx]
+				if tc.ID != "" {
+					acc.ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					acc.Name = tc.Function.Name
+				}
+				acc.Arguments += tc.Function.Arguments
+			}
+
+			if choice.FinishReason != "" {
+				finishReasonStr = string(choice.FinishReason)
+			}
+		}
+
+		if err := s.Err(); err != nil {
+			yield(nil, fmt.Errorf("openai: stream: %w", err))
+			return
+		}
+
+		// Build the final complete response.
+		msg := model.Message{
+			Role:    model.RoleAssistant,
+			Content: contentBuf.String(),
+		}
+		if len(toolCallAcc) > 0 {
+			msg.ToolCalls = make([]model.ToolCall, len(toolCallAcc))
+			for idx, tc := range toolCallAcc {
+				if int(idx) < len(msg.ToolCalls) {
+					msg.ToolCalls[idx] = *tc
+				}
+			}
+		}
+
+		yield(&model.LLMResponse{
+			Message:      msg,
+			FinishReason: convertFinishReason(finishReasonStr),
+			TurnComplete: true,
+		}, nil)
+	}
 }
 
 // convertMessages maps model.Message slice to openai ChatCompletionMessageParamUnion slice.

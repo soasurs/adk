@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"iter"
 
 	"soasurs.dev/soasurs/adk/tool"
 )
@@ -9,7 +10,11 @@ import (
 // LLM is a provider-agnostic interface for interacting with a large language model.
 type LLM interface {
 	Name() string
-	Generate(context.Context, *LLMRequest, *GenerateConfig) (*LLMResponse, error)
+	// GenerateContent sends the request to the LLM and yields responses.
+	// When stream is false, exactly one *LLMResponse is yielded (the complete response).
+	// When stream is true, zero or more partial *LLMResponse are yielded (Partial=true)
+	// followed by one complete *LLMResponse (Partial=false, TurnComplete=true).
+	GenerateContent(ctx context.Context, req *LLMRequest, cfg *GenerateConfig, stream bool) iter.Seq2[*LLMResponse, error]
 }
 
 // Role represents the role of a message participant.
@@ -195,5 +200,27 @@ type LLMResponse struct {
 	Message      Message
 	FinishReason FinishReason
 	// Usage holds the token consumption reported by the LLM provider.
+	// Only populated on the final complete response (Partial=false).
 	Usage *TokenUsage
+	// Partial indicates this response is a streaming fragment.
+	// When true, only Message.Content and Message.ReasoningContent carry
+	// incremental (delta) text; other fields may be zero-valued.
+	Partial bool
+	// TurnComplete indicates the LLM has finished generating its full response.
+	// Set to true on the final complete response (Partial=false).
+	TurnComplete bool
+}
+
+// Event is the fundamental unit emitted by Agent.Run. It wraps a Message and
+// signals whether the content is a streaming fragment or a complete message.
+type Event struct {
+	// Message contains the content of this event.
+	// When Partial=true, only Message.Content and Message.ReasoningContent
+	// carry incremental (delta) text; all other fields may be zero-valued.
+	// When Partial=false, Message is fully assembled.
+	Message Message
+	// Partial indicates this is a streaming fragment, not a complete message.
+	// Callers (e.g. Runner) should forward partial events to the client for
+	// real-time display but only persist complete events (Partial=false).
+	Partial bool
 }

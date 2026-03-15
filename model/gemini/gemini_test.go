@@ -18,6 +18,21 @@ import (
 // boolPtr returns a pointer to the given bool value.
 func boolPtr(b bool) *bool { return &b }
 
+// callGenerate is a test helper that calls GenerateContent(stream=false) and
+// returns the single complete response, mimicking the old Generate API.
+func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
+	var resp *model.LLMResponse
+	for r, err := range llm.GenerateContent(ctx, req, cfg, false) {
+		if err != nil {
+			return nil, err
+		}
+		if !r.Partial {
+			resp = r
+		}
+	}
+	return resp, nil
+}
+
 // newClientFromEnv creates a GenerateContent from environment variables.
 // Required: GEMINI_API_KEY — test is skipped when absent.
 // Optional: GEMINI_MODEL — model name; defaults to "gemini-2.0-flash" when absent.
@@ -315,7 +330,7 @@ func TestConvertTools_EchoTool(t *testing.T) {
 func TestGenerateContent_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 		Model: llm.modelName,
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
@@ -334,7 +349,7 @@ func TestGenerateContent_Generate_Text(t *testing.T) {
 func TestGenerateContent_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 		Model: llm.modelName,
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
@@ -361,7 +376,7 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
-		resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 			Model:    llm.modelName,
 			Messages: messages,
 			Tools:    tools,
@@ -405,7 +420,7 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 		Temperature: 0.2,
 	}
 
-	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 		Model: llm.modelName,
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
@@ -423,7 +438,7 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 func TestGenerateContent_Generate_Thinking(t *testing.T) {
 	llm := newThinkingClientFromEnv(t)
 
-	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 		Model: llm.modelName,
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
@@ -446,7 +461,7 @@ func TestGenerateContent_Generate_Thinking(t *testing.T) {
 func TestVertexAI_Generate_Text(t *testing.T) {
 	llm := newVertexAIClientFromEnv(t)
 
-	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 		Model: llm.modelName,
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
@@ -474,7 +489,7 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
-		resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
 			Model:    llm.modelName,
 			Messages: messages,
 			Tools:    tools,

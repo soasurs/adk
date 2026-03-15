@@ -3,6 +3,7 @@ package parallel
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"testing"
 	"time"
@@ -29,13 +30,16 @@ type mockLLM struct {
 
 func (m *mockLLM) Name() string { return m.name }
 
-func (m *mockLLM) Generate(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
-	if m.callIdx >= len(m.responses) {
-		return nil, fmt.Errorf("mockLLM %q: no more responses (call %d)", m.name, m.callIdx)
+func (m *mockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.callIdx >= len(m.responses) {
+			yield(nil, fmt.Errorf("mockLLM %q: no more responses (call %d)", m.name, m.callIdx))
+			return
+		}
+		resp := m.responses[m.callIdx]
+		m.callIdx++
+		yield(resp, nil)
 	}
-	resp := m.responses[m.callIdx]
-	m.callIdx++
-	return resp, nil
 }
 
 // blockingMockLLM signals on ready when Generate is called, then waits for
@@ -49,15 +53,17 @@ type blockingMockLLM struct {
 
 func (b *blockingMockLLM) Name() string { return b.name }
 
-func (b *blockingMockLLM) Generate(ctx context.Context, _ *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
-	// Signal that this goroutine has started.
-	b.ready <- struct{}{}
-	// Wait until the test releases all agents, or the context is cancelled.
-	select {
-	case <-b.gate:
-		return b.response, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+func (b *blockingMockLLM) GenerateContent(ctx context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		// Signal that this goroutine has started.
+		b.ready <- struct{}{}
+		// Wait until the test releases all agents, or the context is cancelled.
+		select {
+		case <-b.gate:
+			yield(b.response, nil)
+		case <-ctx.Done():
+			yield(nil, ctx.Err())
+		}
 	}
 }
 
@@ -131,11 +137,13 @@ func TestParallelAgent_SingleAgent(t *testing.T) {
 	pa := New(Config{Name: "fanout", Description: "single-agent fanout", Agents: []agent.Agent{a}})
 
 	var msgs []model.Message
-	for msg, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "Hi"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	require.Len(t, msgs, 1)
@@ -174,11 +182,13 @@ func TestParallelAgent_TwoAgents_Merged(t *testing.T) {
 	})
 
 	var msgs []model.Message
-	for msg, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	// Always exactly one merged message.
@@ -221,14 +231,16 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for msg, err := range pa.Run(context.Background(), []model.Message{
+		for event, err := range pa.Run(context.Background(), []model.Message{
 			{Role: model.RoleUser, Content: "go"},
 		}) {
 			if err != nil {
 				runErr = err
 				return
 			}
-			collectedMsgs = append(collectedMsgs, msg)
+			if !event.Partial {
+				collectedMsgs = append(collectedMsgs, event.Message)
+			}
 		}
 	}()
 
@@ -286,11 +298,13 @@ func TestParallelAgent_EarlyStop(t *testing.T) {
 	})
 
 	var msgs []model.Message
-	for msg, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 		break // stop after the first (and only) merged message
 	}
 
@@ -388,11 +402,13 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 	})
 
 	var msgs []model.Message
-	for msg, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	require.Len(t, msgs, 1)
@@ -433,11 +449,13 @@ func TestParallelAgent_DefaultMergeFunc_OmitsEmptyAgents(t *testing.T) {
 	})
 
 	var msgs []model.Message
-	for msg, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	require.Len(t, msgs, 1)
@@ -493,10 +511,13 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 	defer cancel()
 
 	var msgs []model.Message
-	for msg, err := range fanout.Run(ctx, input) {
+	for event, err := range fanout.Run(ctx, input) {
 		require.NoError(t, err)
-		logMessage(t, len(msgs), msg)
-		msgs = append(msgs, msg)
+		if event.Partial {
+			continue
+		}
+		logMessage(t, len(msgs), event.Message)
+		msgs = append(msgs, event.Message)
 	}
 
 	// Always exactly one merged assistant message.

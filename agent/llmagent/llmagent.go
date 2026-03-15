@@ -20,6 +20,10 @@ type Config struct {
 	Instruction string
 	// GenerateConfig controls optional LLM generation parameters.
 	GenerateConfig *model.GenerateConfig
+	// Stream enables streaming responses. When true, the agent yields partial
+	// Events (Event.Partial=true) with incremental text as the LLM generates,
+	// followed by complete Events (Event.Partial=false) for each full message.
+	Stream bool
 }
 
 // LlmAgent is a stateless agent that drives an LLM through a tool-call loop.
@@ -48,11 +52,12 @@ func (a *LlmAgent) Description() string {
 	return a.config.Description
 }
 
-// Run executes the agent, yielding each message produced during the tool-call
-// loop: assistant messages (with or without tool calls) and tool result
-// messages. Iteration ends when the LLM produces a stop response.
-func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error] {
-	return func(yield func(model.Message, error) bool) {
+// Run executes the agent, yielding each Event produced during the tool-call
+// loop. When Stream is true, partial events with incremental text are yielded
+// before each complete assistant message. Tool result messages are always
+// yielded as complete events. Iteration ends when the LLM stops calling tools.
+func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+	return func(yield func(*model.Event, error) bool) {
 		// Prepend system prompt when configured.
 		history := make([]model.Message, 0, len(messages)+1)
 		if a.config.Instruction != "" {
@@ -70,32 +75,47 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 		}
 
 		for {
-			resp, err := a.config.Model.Generate(ctx, req, a.config.GenerateConfig)
-			if err != nil {
-				yield(model.Message{}, err)
+			// Collect the LLM response, yielding partial events along the way.
+			var completeResp *model.LLMResponse
+			for resp, err := range a.config.Model.GenerateContent(ctx, req, a.config.GenerateConfig, a.config.Stream) {
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if resp.Partial {
+					// Yield streaming fragment for real-time display.
+					if !yield(&model.Event{Message: resp.Message, Partial: true}, nil) {
+						return
+					}
+				} else {
+					completeResp = resp
+				}
+			}
+
+			if completeResp == nil {
 				return
 			}
 
-			// Attach token usage to the assistant message so callers can persist it.
-			resp.Message.Usage = resp.Usage
+			// Attach token usage to the complete assistant message.
+			completeResp.Message.Usage = completeResp.Usage
 
-			// Yield the assistant message (may contain tool_calls).
-			if !yield(resp.Message, nil) {
+			// Yield the complete assistant message (may contain tool_calls).
+			if !yield(&model.Event{Message: completeResp.Message, Partial: false}, nil) {
 				return
 			}
 
 			// No tool calls — generation is complete.
-			if resp.FinishReason != model.FinishReasonToolCalls {
+			if completeResp.FinishReason != model.FinishReasonToolCalls {
 				return
 			}
 
 			// Append the assistant message before executing tools.
-			req.Messages = append(req.Messages, resp.Message)
+			req.Messages = append(req.Messages, completeResp.Message)
 
 			// Execute each requested tool call and yield its result.
-			for _, tc := range resp.Message.ToolCalls {
+			for _, tc := range completeResp.Message.ToolCalls {
 				toolMsg := a.runToolCall(ctx, tc)
-				if !yield(toolMsg, nil) {
+				if !yield(&model.Event{Message: toolMsg, Partial: false}, nil) {
 					return
 				}
 				req.Messages = append(req.Messages, toolMsg)

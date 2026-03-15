@@ -3,6 +3,7 @@ package agentool_test
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"testing"
 
@@ -43,13 +44,16 @@ type mockLLM struct {
 
 func (m *mockLLM) Name() string { return m.name }
 
-func (m *mockLLM) Generate(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
-	if m.callIdx >= len(m.responses) {
-		return nil, fmt.Errorf("mockLLM: no more responses (call %d)", m.callIdx)
+func (m *mockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.callIdx >= len(m.responses) {
+			yield(nil, fmt.Errorf("mockLLM: no more responses (call %d)", m.callIdx))
+			return
+		}
+		resp := m.responses[m.callIdx]
+		m.callIdx++
+		yield(resp, nil)
 	}
-	resp := m.responses[m.callIdx]
-	m.callIdx++
-	return resp, nil
 }
 
 // TestAgentTool_OrchestratorFlow verifies the full Thought→Action→Observation
@@ -104,11 +108,13 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 
 	// --- run --------------------------------------------------------------
 	var msgs []model.Message
-	for msg, err := range orchestrator.Run(context.Background(), []model.Message{
+	for event, err := range orchestrator.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "What is 2+2?"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	// Expected sequence:
@@ -186,12 +192,15 @@ func TestAgentTool_Integration_OrchestratorDelegation(t *testing.T) {
 	t.Log("=== output ===")
 
 	var msgs []model.Message
-	for msg, err := range orchestrator.Run(context.Background(), []model.Message{
+	for event, err := range orchestrator.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "Please translate 'hello' to Chinese."},
 	}) {
 		require.NoError(t, err)
-		logMessage(t, len(msgs), msg)
-		msgs = append(msgs, msg)
+		if event.Partial {
+			continue
+		}
+		logMessage(t, len(msgs), event.Message)
+		msgs = append(msgs, event.Message)
 	}
 
 	require.NotEmpty(t, msgs, "expected at least one output message")

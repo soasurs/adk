@@ -46,16 +46,16 @@ func (s *SequentialAgent) Description() string { return s.config.Description }
 // Run executes the agent pipeline sequentially.
 //
 // For each agent in the list:
-//  1. Build its input as: original messages + all messages produced so far.
+//  1. Build its input as: original messages + all complete messages produced so far.
 //  2. For agents after the first, inject a handoff user message.
-//  3. Run it and yield every message it produces.
-//  4. Append those messages to the accumulated context for the next agent.
+//  3. Run it and yield every event it produces (including partial streaming events).
+//  4. Append complete (non-partial) messages to the accumulated context for the next agent.
 //
 // Iteration stops early (without error) if the caller breaks out of the loop.
 // If any agent returns an error, the error is yielded and iteration stops.
-func (s *SequentialAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error] {
-	return func(yield func(model.Message, error) bool) {
-		// accumulated holds messages produced by agents that have already run.
+func (s *SequentialAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+	return func(yield func(*model.Event, error) bool) {
+		// accumulated holds complete messages produced by agents that have already run.
 		accumulated := make([]model.Message, 0)
 
 		for i, a := range s.config.Agents {
@@ -74,15 +74,18 @@ func (s *SequentialAgent) Run(ctx context.Context, messages []model.Message) ite
 				input = append(input, handoff)
 			}
 
-			for msg, err := range a.Run(ctx, input) {
+			for event, err := range a.Run(ctx, input) {
 				if err != nil {
-					yield(model.Message{}, err)
+					yield(nil, err)
 					return
 				}
-				if !yield(msg, nil) {
+				if !yield(event, nil) {
 					return
 				}
-				accumulated = append(accumulated, msg)
+				// Only complete (non-partial) messages contribute to accumulated context.
+				if !event.Partial {
+					accumulated = append(accumulated, event.Message)
+				}
 			}
 		}
 	}

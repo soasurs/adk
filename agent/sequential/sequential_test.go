@@ -3,6 +3,7 @@ package sequential_test
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"testing"
 	"time"
@@ -30,13 +31,16 @@ type mockLLM struct {
 
 func (m *mockLLM) Name() string { return m.name }
 
-func (m *mockLLM) Generate(_ context.Context, req *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
-	if m.callIdx >= len(m.responses) {
-		return nil, fmt.Errorf("mockLLM %q: no more responses (call %d, got %d messages)", m.name, m.callIdx, len(req.Messages))
+func (m *mockLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.callIdx >= len(m.responses) {
+			yield(nil, fmt.Errorf("mockLLM %q: no more responses (call %d, got %d messages)", m.name, m.callIdx, len(req.Messages)))
+			return
+		}
+		resp := m.responses[m.callIdx]
+		m.callIdx++
+		yield(resp, nil)
 	}
-	resp := m.responses[m.callIdx]
-	m.callIdx++
-	return resp, nil
 }
 
 // newLLMFromEnv creates a real LLM from environment variables.
@@ -112,11 +116,13 @@ func TestSequentialAgent_SingleAgent(t *testing.T) {
 	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
 
 	var msgs []model.Message
-	for msg, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "Hi"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	require.Len(t, msgs, 1)
@@ -156,11 +162,13 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
-	for msg, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "ping"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	// Both agents contribute one message each.
@@ -209,11 +217,13 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
-	for msg, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "start"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 	}
 
 	require.Len(t, msgs, 2)
@@ -235,9 +245,9 @@ type capturingMockLLM struct {
 	capture *[]model.Message
 }
 
-func (c *capturingMockLLM) Generate(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
+func (c *capturingMockLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	*c.capture = append(*c.capture, req.Messages...)
-	return c.mockLLM.Generate(ctx, req, cfg)
+	return c.mockLLM.GenerateContent(ctx, req, cfg, stream)
 }
 
 // TestSequentialAgent_EarlyStop verifies that if the caller breaks out of the
@@ -267,11 +277,13 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
-	for msg, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(context.Background(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
-		msgs = append(msgs, msg)
+		if !event.Partial {
+			msgs = append(msgs, event.Message)
+		}
 		break // stop after the first message
 	}
 
@@ -370,10 +382,13 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 	defer cancel()
 
 	var msgs []model.Message
-	for msg, err := range pipeline.Run(ctx, input) {
+	for event, err := range pipeline.Run(ctx, input) {
 		require.NoError(t, err)
-		logMessage(t, len(msgs), msg)
-		msgs = append(msgs, msg)
+		if event.Partial {
+			continue
+		}
+		logMessage(t, len(msgs), event.Message)
+		msgs = append(msgs, event.Message)
 	}
 
 	// Expect exactly two assistant messages: one from each agent.

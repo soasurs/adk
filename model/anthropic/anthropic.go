@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"strings"
 
 	goanthropic "github.com/anthropics/anthropic-sdk-go"
@@ -43,44 +44,52 @@ func (m *Messages) Name() string {
 	return m.modelName
 }
 
-// Generate sends the request to the Anthropic Messages API and returns
-// the response as a provider-agnostic LLMResponse.
-func (m *Messages) Generate(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
-	messages, system, err := convertMessages(req.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: convert messages: %w", err)
-	}
+// GenerateContent sends the request to the Anthropic Messages API.
+// When stream is false (or true, as streaming is not yet implemented),
+// exactly one complete *model.LLMResponse is yielded.
+func (m *Messages) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		messages, system, err := convertMessages(req.Messages)
+		if err != nil {
+			yield(nil, fmt.Errorf("anthropic: convert messages: %w", err))
+			return
+		}
 
-	tools, err := convertTools(req.Tools)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: convert tools: %w", err)
-	}
+		tools, err := convertTools(req.Tools)
+		if err != nil {
+			yield(nil, fmt.Errorf("anthropic: convert tools: %w", err))
+			return
+		}
 
-	maxTokens := int64(defaultMaxTokens)
-	if cfg != nil && cfg.MaxTokens > 0 {
-		maxTokens = cfg.MaxTokens
-	}
+		maxTokens := int64(defaultMaxTokens)
+		if cfg != nil && cfg.MaxTokens > 0 {
+			maxTokens = cfg.MaxTokens
+		}
 
-	params := goanthropic.MessageNewParams{
-		Model:     goanthropic.Model(req.Model),
-		Messages:  messages,
-		System:    system,
-		MaxTokens: maxTokens,
-	}
-	if len(tools) > 0 {
-		params.Tools = tools
-	}
+		params := goanthropic.MessageNewParams{
+			Model:     goanthropic.Model(req.Model),
+			Messages:  messages,
+			System:    system,
+			MaxTokens: maxTokens,
+		}
+		if len(tools) > 0 {
+			params.Tools = tools
+		}
 
-	if cfg != nil {
-		applyConfig(&params, cfg)
-	}
+		if cfg != nil {
+			applyConfig(&params, cfg)
+		}
 
-	resp, err := m.client.Messages.New(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: messages new: %w", err)
-	}
+		resp, err := m.client.Messages.New(ctx, params)
+		if err != nil {
+			yield(nil, fmt.Errorf("anthropic: messages new: %w", err))
+			return
+		}
 
-	return convertResponse(resp), nil
+		llmResp := convertResponse(resp)
+		llmResp.TurnComplete = true
+		yield(llmResp, nil)
+	}
 }
 
 // convertMessages maps model.Message slice to Anthropic MessageParam slice,

@@ -110,7 +110,7 @@ type agentResult struct {
 }
 
 // Run fans out to all agents concurrently, waits for all to complete, merges
-// their outputs via MergeFunc, and yields the single resulting message.
+// their outputs via MergeFunc, and yields the single resulting complete event.
 //
 // Execution model:
 //  1. A child context is derived from ctx; all agents share it.
@@ -119,8 +119,11 @@ type agentResult struct {
 //  4. If any agent errors, the child context is cancelled immediately so that
 //     sibling agents can detect cancellation and exit early.
 //  5. All AgentOutputs are passed to MergeFunc; the returned message is yielded.
-func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error] {
-	return func(yield func(model.Message, error) bool) {
+//
+// Note: partial (streaming) events from sub-agents are consumed silently;
+// only complete messages are collected and merged.
+func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+	return func(yield func(*model.Event, error) bool) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
@@ -132,13 +135,16 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 			go func(idx int, ag agent.Agent) {
 				defer wg.Done()
 				var collected []model.Message
-				for msg, err := range ag.Run(ctx, messages) {
+				for event, err := range ag.Run(ctx, messages) {
 					if err != nil {
 						results[idx] = agentResult{err: err}
 						cancel() // signal sibling agents to stop
 						return
 					}
-					collected = append(collected, msg)
+					// Only accumulate complete messages for merging.
+					if !event.Partial {
+						collected = append(collected, event.Message)
+					}
 				}
 				results[idx] = agentResult{
 					output: AgentOutput{
@@ -155,14 +161,14 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 		outputs := make([]AgentOutput, 0, len(results))
 		for _, r := range results {
 			if r.err != nil {
-				yield(model.Message{}, r.err)
+				yield(nil, r.err)
 				return
 			}
 			outputs = append(outputs, r.output)
 		}
 
-		// Merge all outputs into a single message and yield it.
+		// Merge all outputs into a single message and yield it as a complete event.
 		merged := p.config.MergeFunc(outputs)
-		yield(merged, nil)
+		yield(&model.Event{Message: merged, Partial: false}, nil)
 	}
 }

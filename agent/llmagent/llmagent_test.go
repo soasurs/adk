@@ -3,6 +3,7 @@ package llmagent
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"testing"
 
@@ -64,13 +65,43 @@ type mockLLM struct {
 
 func (m *mockLLM) Name() string { return m.name }
 
-func (m *mockLLM) Generate(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
-	if m.callIdx >= len(m.responses) {
-		return nil, fmt.Errorf("mockLLM: no more responses (call %d)", m.callIdx)
+func (m *mockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.callIdx >= len(m.responses) {
+			yield(nil, fmt.Errorf("mockLLM: no more responses (call %d)", m.callIdx))
+			return
+		}
+		resp := m.responses[m.callIdx]
+		m.callIdx++
+		yield(resp, nil)
 	}
-	resp := m.responses[m.callIdx]
-	m.callIdx++
-	return resp, nil
+}
+
+// streamingMockLLM is a test double that yields multiple *model.LLMResponse
+// values per GenerateContent call, simulating LLM streaming behaviour.
+// calls[i] is the ordered sequence of responses yielded on the (i+1)-th call.
+type streamingMockLLM struct {
+	name    string
+	calls   [][]*model.LLMResponse
+	callIdx int
+}
+
+func (m *streamingMockLLM) Name() string { return m.name }
+
+func (m *streamingMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.callIdx >= len(m.calls) {
+			yield(nil, fmt.Errorf("streamingMockLLM: no more responses (call %d)", m.callIdx))
+			return
+		}
+		resps := m.calls[m.callIdx]
+		m.callIdx++
+		for _, resp := range resps {
+			if !yield(resp, nil) {
+				return
+			}
+		}
+	}
 }
 
 // logMessage prints a single message in a concise one-line format.
@@ -92,8 +123,9 @@ func logMessage(t *testing.T, idx int, m model.Message) {
 	t.Logf("  [%d] %-9s %s", idx, m.Role, m.Content)
 }
 
-// collectMessages drains the agent Run iterator, logs every yielded message,
-// and returns all messages plus the first error encountered (if any).
+// collectMessages drains the agent Run iterator, logs every complete yielded
+// message, and returns all complete messages plus the first error (if any).
+// Partial streaming events are consumed silently.
 func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([]model.Message, error) {
 	t.Helper()
 	t.Log("  --- input ---")
@@ -102,12 +134,15 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([
 	}
 	t.Log("  --- output ---")
 	var collected []model.Message
-	for msg, err := range agent.Run(context.Background(), messages) {
+	for event, err := range agent.Run(context.Background(), messages) {
 		if err != nil {
 			return collected, err
 		}
-		logMessage(t, len(collected), msg)
-		collected = append(collected, msg)
+		if event.Partial {
+			continue
+		}
+		logMessage(t, len(collected), event.Message)
+		collected = append(collected, event.Message)
 	}
 	return collected, nil
 }
@@ -238,6 +273,50 @@ func TestLlmAgent_MultiTurn(t *testing.T) {
 	assert.Contains(t, last.Content, "Alice")
 }
 
+// TestLlmAgent_Streaming_Integration verifies that a real LLM with Stream:true
+// delivers at least one partial event before the final complete assistant
+// message. Requires OPENAI_API_KEY; skipped when absent.
+func TestLlmAgent_Streaming_Integration(t *testing.T) {
+	llm := newLLMFromEnv(t)
+
+	a := New(Config{
+		Name:        "streaming-agent",
+		Description: "A streaming integration test agent",
+		Model:       llm,
+		Stream:      true,
+	}).(*LlmAgent)
+
+	var partialEvents []*model.Event
+	var completeEvents []*model.Event
+
+	for event, err := range a.Run(context.Background(), []model.Message{
+		{Role: model.RoleUser, Content: "Count from 1 to 5, one number per line."},
+	}) {
+		require.NoError(t, err)
+		if event.Partial {
+			partialEvents = append(partialEvents, event)
+			t.Logf("  [partial +%d] %q", len(partialEvents), event.Message.Content)
+		} else {
+			completeEvents = append(completeEvents, event)
+			t.Logf("  [complete] role=%s content=%q", event.Message.Role, event.Message.Content)
+		}
+	}
+
+	// The real LLM must have emitted at least one streaming chunk.
+	assert.NotEmpty(t, partialEvents, "expected at least one partial streaming event from the LLM")
+
+	// There must be exactly one final complete assistant message.
+	require.NotEmpty(t, completeEvents, "expected a complete assistant event")
+	last := completeEvents[len(completeEvents)-1]
+	assert.Equal(t, model.RoleAssistant, last.Message.Role)
+	assert.NotEmpty(t, last.Message.Content)
+
+	// All partial chunks must carry assistant role.
+	for i, ev := range partialEvents {
+		assert.Equal(t, model.RoleAssistant, ev.Message.Role, "partial event [%d] must have assistant role", i)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Reasoning tests
 // ---------------------------------------------------------------------------
@@ -359,4 +438,140 @@ func TestLlmAgent_ReasoningModel(t *testing.T) {
 	assert.Equal(t, model.RoleAssistant, last.Role)
 	assert.NotEmpty(t, last.Content)
 	assert.NotEmpty(t, last.ReasoningContent, "expected reasoning model to return non-empty ReasoningContent")
+}
+
+// ---------------------------------------------------------------------------
+// Streaming unit tests
+// ---------------------------------------------------------------------------
+
+// TestLlmAgent_Streaming_YieldsPartialThenComplete verifies that when the LLM
+// yields streaming fragments (Partial=true) the agent forwards each one as a
+// partial Event before emitting the final complete Event.
+func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
+	llm := &streamingMockLLM{
+		name: "streaming-mock",
+		calls: [][]*model.LLMResponse{
+			{
+				// Three incremental chunks.
+				{Message: model.Message{Role: model.RoleAssistant, Content: "He"}, Partial: true},
+				{Message: model.Message{Role: model.RoleAssistant, Content: "llo"}, Partial: true},
+				{Message: model.Message{Role: model.RoleAssistant, Content: " World"}, Partial: true},
+				// Final assembled response.
+				{
+					Message:      model.Message{Role: model.RoleAssistant, Content: "Hello World"},
+					FinishReason: model.FinishReasonStop,
+					TurnComplete: true,
+				},
+			},
+		},
+	}
+
+	a := New(Config{
+		Name:   "streaming-agent",
+		Model:  llm,
+		Stream: true,
+	}).(*LlmAgent)
+
+	var events []*model.Event
+	for event, err := range a.Run(context.Background(), []model.Message{
+		{Role: model.RoleUser, Content: "Say hello"},
+	}) {
+		require.NoError(t, err)
+		events = append(events, event)
+	}
+
+	// 3 partial chunks + 1 complete event.
+	require.Len(t, events, 4)
+
+	assert.True(t, events[0].Partial)
+	assert.Equal(t, "He", events[0].Message.Content)
+
+	assert.True(t, events[1].Partial)
+	assert.Equal(t, "llo", events[1].Message.Content)
+
+	assert.True(t, events[2].Partial)
+	assert.Equal(t, " World", events[2].Message.Content)
+
+	assert.False(t, events[3].Partial)
+	assert.Equal(t, model.RoleAssistant, events[3].Message.Role)
+	assert.Equal(t, "Hello World", events[3].Message.Content)
+}
+
+// TestLlmAgent_Streaming_WithToolCall verifies the full streaming + tool-call
+// loop: partial events are forwarded for each LLM call, tool results are
+// always emitted as complete events, and the sequence order is correct.
+func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
+	echoTool := builtin.NewEchoTool()
+
+	llm := &streamingMockLLM{
+		name: "streaming-tool-mock",
+		calls: [][]*model.LLMResponse{
+			// First call: a streaming preamble then the tool-call decision.
+			{
+				{Message: model.Message{Role: model.RoleAssistant, Content: "Let me echo that..."}, Partial: true},
+				{
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "echo", Arguments: `{"message":"streaming"}`}},
+					},
+					FinishReason: model.FinishReasonToolCalls,
+				},
+			},
+			// Second call: streaming final answer.
+			{
+				{Message: model.Message{Role: model.RoleAssistant, Content: "The result: "}, Partial: true},
+				{Message: model.Message{Role: model.RoleAssistant, Content: "streaming"}, Partial: true},
+				{
+					Message:      model.Message{Role: model.RoleAssistant, Content: "The result: streaming"},
+					FinishReason: model.FinishReasonStop,
+					TurnComplete: true,
+				},
+			},
+		},
+	}
+
+	a := New(Config{
+		Name:   "streaming-tool-agent",
+		Model:  llm,
+		Stream: true,
+		Tools:  []tool.Tool{echoTool},
+	}).(*LlmAgent)
+
+	var events []*model.Event
+	for event, err := range a.Run(context.Background(), []model.Message{
+		{Role: model.RoleUser, Content: "Echo streaming"},
+	}) {
+		require.NoError(t, err)
+		events = append(events, event)
+	}
+
+	// Expected order:
+	// [0] partial  – "Let me echo that..."     (streaming preamble, call 1)
+	// [1] complete – assistant w/ ToolCalls    (complete, call 1)
+	// [2] complete – tool result               (complete, tool execution)
+	// [3] partial  – "The result: "            (streaming chunk, call 2)
+	// [4] partial  – "streaming"               (streaming chunk, call 2)
+	// [5] complete – "The result: streaming"   (complete, call 2)
+	require.Len(t, events, 6)
+
+	assert.True(t, events[0].Partial)
+	assert.Equal(t, "Let me echo that...", events[0].Message.Content)
+
+	assert.False(t, events[1].Partial)
+	assert.Equal(t, model.RoleAssistant, events[1].Message.Role)
+	require.Len(t, events[1].Message.ToolCalls, 1)
+	assert.Equal(t, "echo", events[1].Message.ToolCalls[0].Name)
+
+	assert.False(t, events[2].Partial)
+	assert.Equal(t, model.RoleTool, events[2].Message.Role)
+	assert.Equal(t, "tc-1", events[2].Message.ToolCallID)
+
+	assert.True(t, events[3].Partial)
+	assert.Equal(t, "The result: ", events[3].Message.Content)
+
+	assert.True(t, events[4].Partial)
+	assert.Equal(t, "streaming", events[4].Message.Content)
+
+	assert.False(t, events[5].Partial)
+	assert.Equal(t, "The result: streaming", events[5].Message.Content)
 }
