@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"sync"
 
 	"soasurs.dev/soasurs/adk/agent"
 	"soasurs.dev/soasurs/adk/model"
@@ -112,9 +113,19 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 			// Append the assistant message before executing tools.
 			req.Messages = append(req.Messages, completeResp.Message)
 
-			// Execute each requested tool call and yield its result.
-			for _, tc := range completeResp.Message.ToolCalls {
-				toolMsg := a.runToolCall(ctx, tc)
+			// Execute all tool calls in parallel, preserving original order.
+			toolMsgs := make([]model.Message, len(completeResp.Message.ToolCalls))
+			var wg sync.WaitGroup
+			for i, tc := range completeResp.Message.ToolCalls {
+				wg.Add(1)
+				go func(i int, tc model.ToolCall) {
+					defer wg.Done()
+					toolMsgs[i] = a.runToolCall(ctx, tc)
+				}(i, tc)
+			}
+			wg.Wait()
+
+			for _, toolMsg := range toolMsgs {
 				if !yield(&model.Event{Message: toolMsg, Partial: false}, nil) {
 					return
 				}
