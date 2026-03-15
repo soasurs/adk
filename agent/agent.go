@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	"soasurs.dev/soasurs/adk/model"
+	"github.com/soasurs/adk/model"
 )
 
 type Agent interface {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/tool"
 )
 
 // LLM is a provider-agnostic interface for interacting with a large language model.

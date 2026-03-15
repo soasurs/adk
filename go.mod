@@ -1,4 +1,4 @@
-module soasurs.dev/soasurs/adk
+module github.com/soasurs/adk
 
 go 1.26
 

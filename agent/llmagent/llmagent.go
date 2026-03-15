@@ -6,9 +6,9 @@ import (
 	"iter"
 	"sync"
 
-	"soasurs.dev/soasurs/adk/agent"
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/agent"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // Config holds the configuration for an LLM-backed agent.

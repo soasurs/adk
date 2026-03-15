@@ -8,7 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"soasurs.dev/soasurs/adk/session"
+	"github.com/soasurs/adk/session"
 )
 
 const (

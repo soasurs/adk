@@ -9,7 +9,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/tool"
 )
 
 // ToolSet connects to an MCP server and dynamically exposes its tools as tool.Tool instances.

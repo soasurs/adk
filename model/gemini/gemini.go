@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/genai"
 
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // GenerateContent implements model.LLM using the Gemini GenerateContent API.

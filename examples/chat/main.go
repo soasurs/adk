@@ -21,13 +21,13 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"soasurs.dev/soasurs/adk/agent/llmagent"
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/model/openai"
-	"soasurs.dev/soasurs/adk/runner"
-	"soasurs.dev/soasurs/adk/session/memory"
-	"soasurs.dev/soasurs/adk/tool"
-	"soasurs.dev/soasurs/adk/tool/mcp"
+	"github.com/soasurs/adk/agent/llmagent"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/openai"
+	"github.com/soasurs/adk/runner"
+	"github.com/soasurs/adk/session/memory"
+	"github.com/soasurs/adk/tool"
+	"github.com/soasurs/adk/tool/mcp"
 )
 
 const (

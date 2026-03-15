@@ -12,8 +12,8 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
 
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // ChatCompletion implements model.LLM using the OpenAI Chat Completions API.

@@ -12,9 +12,9 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
-	"soasurs.dev/soasurs/adk/tool/builtin"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
+	"github.com/soasurs/adk/tool/builtin"
 )
 
 // boolPtr returns a pointer to the given bool value.

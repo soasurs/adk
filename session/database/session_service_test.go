@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"soasurs.dev/soasurs/adk/internal/snowflake"
+	"github.com/soasurs/adk/internal/snowflake"
 )
 
 func TestDatabaseSessionService_CreateSession(t *testing.T) {

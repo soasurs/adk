@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"soasurs.dev/soasurs/adk/agent"
-	"soasurs.dev/soasurs/adk/model"
+	"github.com/soasurs/adk/agent"
+	"github.com/soasurs/adk/model"
 )
 
 // MergeFunc combines the collected outputs of all agents into a single

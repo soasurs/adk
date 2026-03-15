@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"soasurs.dev/soasurs/adk/model"
+	"github.com/soasurs/adk/model"
 )
 
 // ToolCall represents a persisted tool call within an assistant message.

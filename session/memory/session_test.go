@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"soasurs.dev/soasurs/adk/internal/snowflake"
-	"soasurs.dev/soasurs/adk/session/message"
+	"github.com/soasurs/adk/internal/snowflake"
+	"github.com/soasurs/adk/session/message"
 )
 
 func newTestMessage(id int64, content string) *message.Message {

@@ -3,7 +3,7 @@
 一个轻量、符合 Go 惯用风格的生产级 AI 智能体构建库。  
 ADK 将智能体逻辑与 LLM 提供商、会话存储和工具集成彻底解耦，让你可以按需自由组合各个部分。
 
-> **模块路径：** `soasurs.dev/soasurs/adk`  
+> **模块路径：** `github.com/soasurs/adk`  
 > **Go 版本：** 1.26+
 
 ---
@@ -26,7 +26,7 @@ ADK 将智能体逻辑与 LLM 提供商、会话存储和工具集成彻底解�
 ## 安装
 
 ```bash
-go get soasurs.dev/soasurs/adk
+go get github.com/soasurs/adk
 ```
 
 ---
@@ -92,7 +92,7 @@ go get soasurs.dev/soasurs/adk
 **OpenAI：**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/openai"
+import "github.com/soasurs/adk/model/openai"
 
 llm := openai.New(openai.Config{
     APIKey: os.Getenv("OPENAI_API_KEY"),
@@ -103,7 +103,7 @@ llm := openai.New(openai.Config{
 **Google Gemini：**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/gemini"
+import "github.com/soasurs/adk/model/gemini"
 
 llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 // 或使用 Vertex AI：
@@ -113,7 +113,7 @@ llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 **Anthropic Claude：**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/anthropic"
+import "github.com/soasurs/adk/model/anthropic"
 
 llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
 ```
@@ -122,8 +122,8 @@ llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
 
 ```go
 import (
-    "soasurs.dev/soasurs/adk/agent/llmagent"
-    "soasurs.dev/soasurs/adk/model"
+    "github.com/soasurs/adk/agent/llmagent"
+    "github.com/soasurs/adk/model"
 )
 
 agent := llmagent.New(llmagent.Config{
@@ -139,7 +139,7 @@ agent := llmagent.New(llmagent.Config{
 **内存存储**（适合测试或单进程场景）：
 
 ```go
-import "soasurs.dev/soasurs/adk/session/memory"
+import "github.com/soasurs/adk/session/memory"
 
 svc := memory.NewSessionService()
 ```
@@ -147,7 +147,7 @@ svc := memory.NewSessionService()
 **SQLite 存储**（跨重启持久化）：
 
 ```go
-import "soasurs.dev/soasurs/adk/session/database"
+import "github.com/soasurs/adk/session/database"
 
 svc, err := database.NewSessionService("sessions.db")
 ```
@@ -155,7 +155,7 @@ svc, err := database.NewSessionService("sessions.db")
 ### 4. 创建 Runner 并运行
 
 ```go
-import "soasurs.dev/soasurs/adk/runner"
+import "github.com/soasurs/adk/runner"
 
 r, err := runner.New(agent, svc)
 if err != nil { /* … */ }
@@ -261,7 +261,7 @@ archived, _ := sess.ListCompactedMessages(ctx)
 
 ```go
 import (
-    "soasurs.dev/soasurs/adk/tool/mcp"
+    "github.com/soasurs/adk/tool/mcp"
     sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -287,7 +287,7 @@ agent := llmagent.New(llmagent.Config{
 将多个智能体链式组合成流水线，每个智能体都能看到之前所有智能体的输出：
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/sequential"
+import "github.com/soasurs/adk/agent/sequential"
 
 pipeline := sequential.New(sequential.Config{
     Name:        "research-pipeline",
@@ -305,7 +305,7 @@ pipeline := sequential.New(sequential.Config{
 并发执行多个智能体并合并它们的输出：
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/parallel"
+import "github.com/soasurs/adk/agent/parallel"
 
 ensemble := parallel.New(parallel.Config{
     Name:        "multi-model-ensemble",
@@ -327,7 +327,7 @@ ensemble := parallel.New(parallel.Config{
 通过 LLM 的函数调用机制将任务委托给子智能体：
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/agentool"
+import "github.com/soasurs/adk/agent/agentool"
 
 // 将智能体包装为工具
 calculatorTool := agentool.New(calculatorAgent)

@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/tool"
 )
 
 type echo struct {

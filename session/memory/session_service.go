@@ -4,7 +4,7 @@ import (
 	"context"
 	"slices"
 
-	"soasurs.dev/soasurs/adk/session"
+	"github.com/soasurs/adk/session"
 )
 
 type memorySessionService struct {

@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"soasurs.dev/soasurs/adk/agent"
-	"soasurs.dev/soasurs/adk/agent/llmagent"
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/model/openai"
+	"github.com/soasurs/adk/agent"
+	"github.com/soasurs/adk/agent/llmagent"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/openai"
 )
 
 // ---------------------------------------------------------------------------

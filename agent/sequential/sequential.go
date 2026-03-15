@@ -4,8 +4,8 @@ import (
 	"context"
 	"iter"
 
-	"soasurs.dev/soasurs/adk/agent"
-	"soasurs.dev/soasurs/adk/model"
+	"github.com/soasurs/adk/agent"
+	"github.com/soasurs/adk/model"
 )
 
 // Config holds the configuration for a SequentialAgent.

@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/session"
-	memorysession "soasurs.dev/soasurs/adk/session/memory"
-	"soasurs.dev/soasurs/adk/session/message"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/session"
+	memorysession "github.com/soasurs/adk/session/memory"
+	"github.com/soasurs/adk/session/message"
 )
 
 // ---------------------------------------------------------------------------

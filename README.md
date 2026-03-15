@@ -6,7 +6,7 @@ A lightweight, idiomatic Go library for building production-ready AI agents.
 ADK decouples agent logic from LLM providers, session storage, and tool
 integrations so you can compose exactly the pieces you need.
 
-> **Module path:** `soasurs.dev/soasurs/adk`  
+> **Module path:** `github.com/soasurs/adk`  
 > **Go version:** 1.26+
 
 ---
@@ -29,7 +29,7 @@ integrations so you can compose exactly the pieces you need.
 ## Installation
 
 ```bash
-go get soasurs.dev/soasurs/adk
+go get github.com/soasurs/adk
 ```
 
 ---
@@ -96,7 +96,7 @@ results; it has no memory of previous turns.
 **OpenAI:**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/openai"
+import "github.com/soasurs/adk/model/openai"
 
 llm := openai.New(openai.Config{
     APIKey: os.Getenv("OPENAI_API_KEY"),
@@ -107,7 +107,7 @@ llm := openai.New(openai.Config{
 **Google Gemini:**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/gemini"
+import "github.com/soasurs/adk/model/gemini"
 
 llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 // Or use Vertex AI:
@@ -117,7 +117,7 @@ llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 **Anthropic Claude:**
 
 ```go
-import "soasurs.dev/soasurs/adk/model/anthropic"
+import "github.com/soasurs/adk/model/anthropic"
 
 llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
 ```
@@ -126,8 +126,8 @@ llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
 
 ```go
 import (
-    "soasurs.dev/soasurs/adk/agent/llmagent"
-    "soasurs.dev/soasurs/adk/model"
+    "github.com/soasurs/adk/agent/llmagent"
+    "github.com/soasurs/adk/model"
 )
 
 agent := llmagent.New(llmagent.Config{
@@ -143,7 +143,7 @@ agent := llmagent.New(llmagent.Config{
 **In-memory** (great for testing or single-process use):
 
 ```go
-import "soasurs.dev/soasurs/adk/session/memory"
+import "github.com/soasurs/adk/session/memory"
 
 svc := memory.NewSessionService()
 ```
@@ -151,7 +151,7 @@ svc := memory.NewSessionService()
 **SQLite** (persistent across restarts):
 
 ```go
-import "soasurs.dev/soasurs/adk/session/database"
+import "github.com/soasurs/adk/session/database"
 
 svc, err := database.NewSessionService("sessions.db")
 ```
@@ -160,7 +160,7 @@ svc, err := database.NewSessionService("sessions.db")
 
 ```go
 import (
-    "soasurs.dev/soasurs/adk/runner"
+    "github.com/soasurs/adk/runner"
 )
 
 r, err := runner.New(agent, svc)
@@ -273,7 +273,7 @@ Connect any MCP server and expose all its tools to your agent:
 
 ```go
 import (
-    "soasurs.dev/soasurs/adk/tool/mcp"
+    "github.com/soasurs/adk/tool/mcp"
     sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -300,7 +300,7 @@ Chain multiple agents into a pipeline where each agent sees the output of all
 previous agents:
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/sequential"
+import "github.com/soasurs/adk/agent/sequential"
 
 pipeline := sequential.New(sequential.Config{
     Name:        "research-pipeline",
@@ -318,7 +318,7 @@ pipeline := sequential.New(sequential.Config{
 Run multiple agents concurrently and merge their outputs:
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/parallel"
+import "github.com/soasurs/adk/agent/parallel"
 
 ensemble := parallel.New(parallel.Config{
     Name:        "multi-model-ensemble",
@@ -340,7 +340,7 @@ ensemble := parallel.New(parallel.Config{
 Delegate tasks to sub-agents via the LLM's function-calling mechanism:
 
 ```go
-import "soasurs.dev/soasurs/adk/agent/agentool"
+import "github.com/soasurs/adk/agent/agentool"
 
 // Wrap an agent as a tool
 calculatorTool := agentool.New(calculatorAgent)

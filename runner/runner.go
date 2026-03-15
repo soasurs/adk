@@ -7,11 +7,11 @@ import (
 
 	"github.com/bwmarrin/snowflake"
 
-	"soasurs.dev/soasurs/adk/agent"
-	snowflaker "soasurs.dev/soasurs/adk/internal/snowflake"
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/session"
-	"soasurs.dev/soasurs/adk/session/message"
+	"github.com/soasurs/adk/agent"
+	snowflaker "github.com/soasurs/adk/internal/snowflake"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/session"
+	"github.com/soasurs/adk/session/message"
 )
 
 // Runner coordinates a stateless Agent with a SessionService. It loads

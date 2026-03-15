@@ -5,8 +5,8 @@ import (
 	"slices"
 	"time"
 
-	"soasurs.dev/soasurs/adk/session"
-	"soasurs.dev/soasurs/adk/session/message"
+	"github.com/soasurs/adk/session"
+	"github.com/soasurs/adk/session/message"
 )
 
 type memorySession struct {

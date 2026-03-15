@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"soasurs.dev/soasurs/adk/session/message"
+	"github.com/soasurs/adk/session/message"
 )
 
 type Session interface {

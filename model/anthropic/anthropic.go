@@ -11,8 +11,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // defaultMaxTokens is the default maximum number of tokens for a response.

@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
-	"soasurs.dev/soasurs/adk/agent"
-	"soasurs.dev/soasurs/adk/model"
-	"soasurs.dev/soasurs/adk/tool"
+	"github.com/soasurs/adk/agent"
+	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // agentTool wraps an agent.Agent as a tool.Tool so it can be invoked by an
