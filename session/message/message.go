@@ -56,7 +56,10 @@ type Message struct {
 	ToolCallID string `json:"tool_call_id" db:"tool_call_id"`
 	CreatedAt  int64  `json:"created_at" db:"created_at"`
 	UpdatedAt  int64  `json:"updated_at" db:"updated_at"`
-	DeletedAt  int64  `json:"deleted_at" db:"deleted_at"`
+	// CompactedAt is set when the message has been archived by a CompactMessages call.
+	// A non-zero value means the message is compacted and no longer part of the active history.
+	CompactedAt int64 `json:"compacted_at" db:"compacted_at"`
+	DeletedAt   int64 `json:"deleted_at" db:"deleted_at"`
 }
 
 // ToModel converts a persisted Message to a model.Message for LLM consumption.

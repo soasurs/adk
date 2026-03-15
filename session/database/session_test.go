@@ -37,6 +37,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 			tool_call_id TEXT    NOT NULL DEFAULT '',
 			created_at   INTEGER NOT NULL,
 			updated_at   INTEGER NOT NULL,
+			compacted_at INTEGER NOT NULL DEFAULT 0,
 			deleted_at   INTEGER NOT NULL
 		)
 	`)
@@ -183,10 +184,19 @@ func TestDatabaseSession_CompactMessages(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
+	// Active history: only the summary.
 	msgs, err := session.GetMessages(ctx, 10, 0)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, int64(100), msgs[0].MessageID)
+
+	// Compacted messages are accessible.
+	compacted, err := session.ListCompactedMessages(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, compacted, 4)
+	for _, m := range compacted {
+		assert.Greater(t, m.CompactedAt, int64(0))
+	}
 }
 
 func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
@@ -213,6 +223,11 @@ func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, int64(100), msgs[0].MessageID)
+
+	// No original messages to compact.
+	compacted, err := session.ListCompactedMessages(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, compacted)
 }
 
 func TestDatabaseSession_CompactMessages_CallbackError(t *testing.T) {
@@ -238,6 +253,94 @@ func TestDatabaseSession_CompactMessages_CallbackError(t *testing.T) {
 	msgs, err := session.GetMessages(ctx, 10, 0)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 1)
+
+	// Failed compaction must not archive any messages.
+	compacted, err := session.ListCompactedMessages(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, compacted)
+}
+
+func TestDatabaseSession_ListMessages(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	snowflaker, err := snowflake.New()
+	require.NoError(t, err)
+	sessionID := snowflaker.Generate().Int64()
+
+	ctx := context.Background()
+	session, err := NewDatabaseSession(ctx, db, sessionID)
+	require.NoError(t, err)
+
+	for i := int64(1); i <= 5; i++ {
+		require.NoError(t, session.CreateMessage(ctx, newTestMessage(i, "msg")))
+	}
+
+	msgs, err := session.ListMessages(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, msgs, 5)
+}
+
+func TestDatabaseSession_ListCompactedMessages_BeforeCompaction(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	snowflaker, err := snowflake.New()
+	require.NoError(t, err)
+	sessionID := snowflaker.Generate().Int64()
+
+	ctx := context.Background()
+	session, err := NewDatabaseSession(ctx, db, sessionID)
+	require.NoError(t, err)
+
+	require.NoError(t, session.CreateMessage(ctx, newTestMessage(1, "hello")))
+
+	compacted, err := session.ListCompactedMessages(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, compacted)
+}
+
+func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	snowflaker, err := snowflake.New()
+	require.NoError(t, err)
+	sessionID := snowflaker.Generate().Int64()
+
+	ctx := context.Background()
+	sess, err := NewDatabaseSession(ctx, db, sessionID)
+	require.NoError(t, err)
+
+	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(1, "a")))
+	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(2, "b")))
+
+	// First compaction.
+	err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
+		return newTestMessage(10, "summary1"), nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(3, "c")))
+
+	// Second compaction.
+	err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
+		// Should receive summary1 + c.
+		assert.Len(t, msgs, 2)
+		return newTestMessage(20, "summary2"), nil
+	})
+	require.NoError(t, err)
+
+	// Active: only summary2.
+	active, err := sess.ListMessages(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, active, 1)
+	assert.Equal(t, int64(20), active[0].MessageID)
+
+	// Compacted: a, b (round 1) + summary1, c (round 2) = 4 messages.
+	compacted, err := sess.ListCompactedMessages(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, compacted, 4)
 }
 
 func TestDatabaseSession_GetSessionID(t *testing.T) {

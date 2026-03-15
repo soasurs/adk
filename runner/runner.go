@@ -49,8 +49,8 @@ func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) ite
 			return
 		}
 
-		// Load all previous messages from the session.
-		persisted, err := sess.GetMessages(ctx, 1000, 0)
+		// Load all previous active messages from the session.
+		persisted, err := sess.ListMessages(ctx)
 		if err != nil {
 			yield(model.Message{}, err)
 			return

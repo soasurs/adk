@@ -3,18 +3,24 @@ package memory
 import (
 	"context"
 	"slices"
+	"time"
 
 	"soasurs.dev/soasurs/adk/session"
 	"soasurs.dev/soasurs/adk/session/message"
 )
 
 type memorySession struct {
-	sessionID int64
-	messages  []*message.Message
+	sessionID         int64
+	messages          []*message.Message // active messages
+	compactedMessages []*message.Message // archived by CompactMessages
 }
 
 func NewMemorySession(sessionID int64) session.Session {
-	return &memorySession{sessionID: sessionID, messages: make([]*message.Message, 0)}
+	return &memorySession{
+		sessionID:         sessionID,
+		messages:          make([]*message.Message, 0),
+		compactedMessages: make([]*message.Message, 0),
+	}
 }
 
 func (s *memorySession) GetSessionID() int64 {
@@ -49,11 +55,31 @@ func (s *memorySession) GetMessages(ctx context.Context, limit, offset int64) ([
 	return s.messages[offset:end], nil
 }
 
+func (s *memorySession) ListMessages(ctx context.Context) ([]*message.Message, error) {
+	out := make([]*message.Message, len(s.messages))
+	copy(out, s.messages)
+	return out, nil
+}
+
+func (s *memorySession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
+	out := make([]*message.Message, len(s.compactedMessages))
+	copy(out, s.compactedMessages)
+	return out, nil
+}
+
 func (s *memorySession) CompactMessages(ctx context.Context, compactor func(context.Context, []*message.Message) (*message.Message, error)) error {
 	summary, err := compactor(ctx, s.messages)
 	if err != nil {
 		return err
 	}
+
+	// Archive current active messages with a compaction timestamp.
+	now := time.Now().UnixMilli()
+	for _, m := range s.messages {
+		m.CompactedAt = now
+		s.compactedMessages = append(s.compactedMessages, m)
+	}
+
 	s.messages = []*message.Message{summary}
 	return nil
 }

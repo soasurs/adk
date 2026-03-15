@@ -12,12 +12,15 @@ import (
 )
 
 const (
-	createSessionExpr     = "INSERT INTO sessions (session_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4)"
-	createMessageExpr     = "INSERT INTO messages (message_id, role, content, tool_calls, tool_call_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, 0, 0)"
-	deleteMessageExpr     = "DELETE FROM messages WHERE message_id = $1 AND deleted_at = $2"
-	getMessagesExpr       = "SELECT * FROM messages WHERE deleted_at = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3"
-	getAllMessagesExpr    = "SELECT * FROM messages WHERE deleted_at = $1 ORDER BY created_at ASC"
-	deleteAllMessagesExpr = "UPDATE messages SET deleted_at = $1 WHERE deleted_at = $2"
+	createSessionExpr = "INSERT INTO sessions (session_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4)"
+	// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0.
+	createMessageExpr         = "INSERT INTO messages (message_id, role, content, tool_calls, tool_call_id, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0)"
+	deleteMessageExpr         = "DELETE FROM messages WHERE message_id = $1 AND deleted_at = 0"
+	getMessagesExpr           = "SELECT * FROM messages WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $1 OFFSET $2"
+	listMessagesExpr          = "SELECT * FROM messages WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC"
+	listCompactedMessagesExpr = "SELECT * FROM messages WHERE compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC"
+	// compactActiveMessagesExpr sets compacted_at on all currently active messages.
+	compactActiveMessagesExpr = "UPDATE messages SET compacted_at = $1 WHERE deleted_at = 0 AND compacted_at = 0"
 )
 
 type databaseSession struct {
@@ -61,7 +64,25 @@ func (s *databaseSession) DeleteMessage(ctx context.Context, messageID int64) er
 
 func (s *databaseSession) GetMessages(ctx context.Context, limit, offset int64) ([]*message.Message, error) {
 	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, getMessagesExpr, 0, limit, offset)
+	err := s.db.SelectContext(ctx, &messages, getMessagesExpr, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (s *databaseSession) ListMessages(ctx context.Context) ([]*message.Message, error) {
+	messages := make([]*message.Message, 0)
+	err := s.db.SelectContext(ctx, &messages, listMessagesExpr)
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (s *databaseSession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
+	messages := make([]*message.Message, 0)
+	err := s.db.SelectContext(ctx, &messages, listCompactedMessagesExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -69,13 +90,14 @@ func (s *databaseSession) GetMessages(ctx context.Context, limit, offset int64) 
 }
 
 func (s *databaseSession) CompactMessages(ctx context.Context, compactor func(context.Context, []*message.Message) (*message.Message, error)) error {
-	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, getAllMessagesExpr, 0)
+	// Fetch all currently active messages to pass to the compactor.
+	active := make([]*message.Message, 0)
+	err := s.db.SelectContext(ctx, &active, listMessagesExpr)
 	if err != nil {
 		return err
 	}
 
-	summary, err := compactor(ctx, messages)
+	summary, err := compactor(ctx, active)
 	if err != nil {
 		return err
 	}
@@ -83,13 +105,18 @@ func (s *databaseSession) CompactMessages(ctx context.Context, compactor func(co
 	now := time.Now()
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, deleteAllMessagesExpr, now.UnixMilli(), 0)
+	// Archive active messages by setting compacted_at.
+	_, err = tx.ExecContext(ctx, compactActiveMessagesExpr, now.UnixMilli())
 	if err != nil {
 		return err
 	}
 
+	// Insert the summary as a new active message.
 	_, err = tx.ExecContext(
 		ctx,
 		createMessageExpr,
