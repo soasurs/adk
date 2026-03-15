@@ -124,6 +124,11 @@ type ToolCall struct {
 	Name string
 	// Arguments is a JSON-encoded string of the tool's input parameters.
 	Arguments string
+	// ThoughtSignature is an opaque token that some providers (e.g. Gemini thinking
+	// models) attach to a function-call part. It must be echoed back verbatim in the
+	// subsequent request so the provider can restore its reasoning context.
+	// Non-Gemini adapters leave this field nil and ignore it on input.
+	ThoughtSignature []byte
 }
 
 // TokenUsage holds the token consumption statistics for a single LLM call.
