@@ -35,11 +35,11 @@ func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg
 	return resp, nil
 }
 
-// newClientFromEnv creates a ChatCompletion from environment variables.
+// newClientFromEnv creates a model.LLM from environment variables.
 // Required: OPENAI_API_KEY — test is skipped when absent.
 // Optional: OPENAI_BASE_URL — overrides the default OpenAI endpoint.
 // Optional: OPENAI_MODEL   — model name; defaults to "gpt-4o-mini" when absent.
-func newClientFromEnv(t *testing.T) *ChatCompletion {
+func newClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -53,10 +53,10 @@ func newClientFromEnv(t *testing.T) *ChatCompletion {
 	return New(apiKey, baseURL, modelName)
 }
 
-// newReasoningClientFromEnv creates a ChatCompletion for reasoning model tests.
+// newReasoningClientFromEnv creates a model.LLM for reasoning model tests.
 // Required: OPENAI_API_KEY + OPENAI_REASONING_MODEL — test is skipped when either is absent.
 // Optional: OPENAI_BASE_URL — overrides the default endpoint (e.g. DeepSeek).
-func newReasoningClientFromEnv(t *testing.T) *ChatCompletion {
+func newReasoningClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -224,7 +224,7 @@ func TestChatCompletion_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 		},
@@ -241,7 +241,7 @@ func TestChatCompletion_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
 			{Role: model.RoleUser, Content: "What is 1+1?"},
@@ -268,7 +268,7 @@ func TestChatCompletion_Generate_WithTool(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-			Model:    llm.modelName,
+			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
 		}, nil)
@@ -312,7 +312,7 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 	}
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
 		},
@@ -331,7 +331,7 @@ func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
 	llm := newReasoningClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
@@ -354,7 +354,7 @@ func TestChatCompletion_Generate_EnableThinkingFalse(t *testing.T) {
 	llm := newReasoningClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13?"},
 		},

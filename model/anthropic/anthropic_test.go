@@ -32,10 +32,10 @@ func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg
 	return resp, nil
 }
 
-// newClientFromEnv creates a Messages client from environment variables.
+// newClientFromEnv creates a model.LLM from environment variables.
 // Required: ANTHROPIC_API_KEY — test is skipped when absent.
 // Optional: ANTHROPIC_MODEL — model name; defaults to "claude-haiku-4-5" when absent.
-func newClientFromEnv(t *testing.T) *Messages {
+func newClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
@@ -48,9 +48,9 @@ func newClientFromEnv(t *testing.T) *Messages {
 	return New(apiKey, modelName)
 }
 
-// newThinkingClientFromEnv creates a Messages client for thinking model tests.
+// newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL — test is skipped when either is absent.
-func newThinkingClientFromEnv(t *testing.T) *Messages {
+func newThinkingClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
@@ -68,7 +68,7 @@ func newThinkingClientFromEnv(t *testing.T) *Messages {
 // ---------------------------------------------------------------------------
 
 func TestMessages_Name(t *testing.T) {
-	m := &Messages{modelName: "claude-haiku-4-5"}
+	m := &Model{modelName: "claude-haiku-4-5"}
 	assert.Equal(t, "claude-haiku-4-5", m.Name())
 }
 
@@ -266,7 +266,7 @@ func TestMessages_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 		},
@@ -285,7 +285,7 @@ func TestMessages_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
 			{Role: model.RoleUser, Content: "What is 1+1?"},
@@ -312,7 +312,7 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-			Model:    llm.modelName,
+			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
 		}, nil)
@@ -356,7 +356,7 @@ func TestMessages_Generate_WithConfig(t *testing.T) {
 	}
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
 		},
@@ -374,7 +374,7 @@ func TestMessages_Generate_Thinking(t *testing.T) {
 	llm := newThinkingClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},

@@ -13,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/retry"
 	"github.com/soasurs/adk/tool"
 )
 
@@ -20,20 +21,29 @@ import (
 type ChatCompletion struct {
 	client    goopenai.Client
 	modelName string
+	retryCfg  retry.Config
 }
 
 // New creates a new ChatCompletion instance.
 // apiKey is required. baseURL is optional; when non-empty it overrides the
 // default OpenAI endpoint, which allows using any OpenAI-compatible provider.
-func New(apiKey, baseURL, modelName string) *ChatCompletion {
+// retryCfg is optional; when provided it enables automatic retry with
+// exponential backoff on transient errors (rate limits, 5xx, network issues).
+func New(apiKey, baseURL, modelName string, retryCfg ...retry.Config) *ChatCompletion {
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	return &ChatCompletion{
+	cc := &ChatCompletion{
 		client:    goopenai.NewClient(opts...),
 		modelName: modelName,
 	}
+	if len(retryCfg) > 0 {
+		cc.retryCfg = retryCfg[0]
+	} else {
+		cc.retryCfg = retry.DefaultConfig()
+	}
+	return cc
 }
 
 // Name returns the model identifier.
@@ -45,6 +55,8 @@ func (c *ChatCompletion) Name() string {
 // When stream is false, exactly one complete *model.LLMResponse is yielded.
 // When stream is true, partial text chunks are yielded (Partial=true) followed
 // by the assembled complete response (Partial=false, TurnComplete=true).
+// Transient errors are automatically retried according to the retry.Config
+// provided at construction time.
 func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		messages, err := convertMessages(req.Messages)
@@ -70,6 +82,24 @@ func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequ
 			applyConfig(&params, cfg, &reqOpts)
 		}
 
+		for resp, err := range retry.Seq2(ctx, c.retryCfg,
+			func() iter.Seq2[*model.LLMResponse, error] {
+				return c.callAPI(ctx, params, reqOpts, stream)
+			},
+			func(r *model.LLMResponse) bool { return r != nil && r.Partial },
+		) {
+			if !yield(resp, err) {
+				return
+			}
+		}
+	}
+}
+
+// callAPI performs a single (non-retried) call to the OpenAI API and returns
+// its result as an iter.Seq2. It is called by GenerateContent, potentially
+// multiple times when retries are enabled.
+func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatCompletionNewParams, reqOpts []option.RequestOption, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
 		if !stream {
 			resp, err := c.client.Chat.Completions.New(ctx, params, reqOpts...)
 			if err != nil {

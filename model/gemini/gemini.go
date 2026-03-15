@@ -11,6 +11,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/retry"
 	"github.com/soasurs/adk/tool"
 )
 
@@ -18,12 +19,15 @@ import (
 type GenerateContent struct {
 	client    *genai.Client
 	modelName string
+	retryCfg  retry.Config
 }
 
 // New creates a new GenerateContent instance for the Gemini Developer API.
 // apiKey is required. modelName is the identifier of the Gemini model to use
 // (e.g. "gemini-2.0-flash", "gemini-2.5-pro").
-func New(ctx context.Context, apiKey, modelName string) (*GenerateContent, error) {
+// retryCfg is optional; when provided it enables automatic retry with
+// exponential backoff on transient errors (rate limits, 5xx, network issues).
+func New(ctx context.Context, apiKey, modelName string, retryCfg ...retry.Config) (*GenerateContent, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -31,10 +35,16 @@ func New(ctx context.Context, apiKey, modelName string) (*GenerateContent, error
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create client: %w", err)
 	}
-	return &GenerateContent{
+	gc := &GenerateContent{
 		client:    client,
 		modelName: modelName,
-	}, nil
+	}
+	if len(retryCfg) > 0 {
+		gc.retryCfg = retryCfg[0]
+	} else {
+		gc.retryCfg = retry.DefaultConfig()
+	}
+	return gc, nil
 }
 
 // NewVertexAI creates a new GenerateContent instance backed by Google Cloud Vertex AI.
@@ -43,7 +53,9 @@ func New(ctx context.Context, apiKey, modelName string) (*GenerateContent, error
 // Authentication uses Application Default Credentials (ADC) by default; set up
 // credentials via `gcloud auth application-default login` or a service account
 // key file pointed to by the GOOGLE_APPLICATION_CREDENTIALS environment variable.
-func NewVertexAI(ctx context.Context, project, location, modelName string) (*GenerateContent, error) {
+// retryCfg is optional; when provided it enables automatic retry with
+// exponential backoff on transient errors (rate limits, 5xx, network issues).
+func NewVertexAI(ctx context.Context, project, location, modelName string, retryCfg ...retry.Config) (*GenerateContent, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		Backend:  genai.BackendVertexAI,
 		Project:  project,
@@ -52,10 +64,14 @@ func NewVertexAI(ctx context.Context, project, location, modelName string) (*Gen
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create vertex ai client: %w", err)
 	}
-	return &GenerateContent{
+	gc := &GenerateContent{
 		client:    client,
 		modelName: modelName,
-	}, nil
+	}
+	if len(retryCfg) > 0 {
+		gc.retryCfg = retryCfg[0]
+	}
+	return gc, nil
 }
 
 // Name returns the model identifier.
@@ -67,6 +83,8 @@ func (g *GenerateContent) Name() string {
 // When stream is false, exactly one complete *model.LLMResponse is yielded.
 // When stream is true, partial text/reasoning chunks are yielded (Partial=true)
 // followed by the assembled complete response (Partial=false, TurnComplete=true).
+// Transient errors are automatically retried according to the retry.Config
+// provided at construction time.
 func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		contents, sysInstruction, err := convertMessages(req.Messages)
@@ -89,8 +107,26 @@ func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMReq
 			applyConfig(gCfg, cfg)
 		}
 
+		for resp, err := range retry.Seq2(ctx, g.retryCfg,
+			func() iter.Seq2[*model.LLMResponse, error] {
+				return g.callAPI(ctx, req.Model, contents, gCfg, stream)
+			},
+			func(r *model.LLMResponse) bool { return r != nil && r.Partial },
+		) {
+			if !yield(resp, err) {
+				return
+			}
+		}
+	}
+}
+
+// callAPI performs a single (non-retried) call to the Gemini API and returns
+// its result as an iter.Seq2. It is called by GenerateContent, potentially
+// multiple times when retries are enabled.
+func (g *GenerateContent) callAPI(ctx context.Context, modelName string, contents []*genai.Content, gCfg *genai.GenerateContentConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
 		if !stream {
-			resp, err := g.client.Models.GenerateContent(ctx, req.Model, contents, gCfg)
+			resp, err := g.client.Models.GenerateContent(ctx, modelName, contents, gCfg)
 			if err != nil {
 				yield(nil, fmt.Errorf("gemini: generate content: %w", err))
 				return
@@ -112,7 +148,7 @@ func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMReq
 		var finishReason model.FinishReason
 		var usage *model.TokenUsage
 
-		for resp, err := range g.client.Models.GenerateContentStream(ctx, req.Model, contents, gCfg) {
+		for resp, err := range g.client.Models.GenerateContentStream(ctx, modelName, contents, gCfg) {
 			if err != nil {
 				yield(nil, fmt.Errorf("gemini: stream: %w", err))
 				return

@@ -33,10 +33,10 @@ func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg
 	return resp, nil
 }
 
-// newClientFromEnv creates a GenerateContent from environment variables.
+// newClientFromEnv creates a model.LLM from environment variables.
 // Required: GEMINI_API_KEY — test is skipped when absent.
 // Optional: GEMINI_MODEL — model name; defaults to "gemini-2.0-flash" when absent.
-func newClientFromEnv(t *testing.T) *GenerateContent {
+func newClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -51,11 +51,11 @@ func newClientFromEnv(t *testing.T) *GenerateContent {
 	return llm
 }
 
-// newVertexAIClientFromEnv creates a GenerateContent backed by Vertex AI from environment variables.
+// newVertexAIClientFromEnv creates a model.LLM backed by Vertex AI from environment variables.
 // Required: VERTEX_AI_PROJECT + VERTEX_AI_LOCATION — test is skipped when either is absent.
 // Optional: VERTEX_AI_MODEL — defaults to "gemini-2.0-flash" when absent.
 // Authentication relies on Application Default Credentials (ADC).
-func newVertexAIClientFromEnv(t *testing.T) *GenerateContent {
+func newVertexAIClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	project := os.Getenv("VERTEX_AI_PROJECT")
 	if project == "" {
@@ -74,9 +74,9 @@ func newVertexAIClientFromEnv(t *testing.T) *GenerateContent {
 	return llm
 }
 
-// newThinkingClientFromEnv creates a GenerateContent for thinking model tests.
+// newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: GEMINI_API_KEY + GEMINI_THINKING_MODEL — test is skipped when either is absent.
-func newThinkingClientFromEnv(t *testing.T) *GenerateContent {
+func newThinkingClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -331,7 +331,7 @@ func TestGenerateContent_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 		},
@@ -350,7 +350,7 @@ func TestGenerateContent_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
 			{Role: model.RoleUser, Content: "What is 1+1?"},
@@ -377,7 +377,7 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-			Model:    llm.modelName,
+			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
 		}, nil)
@@ -421,7 +421,7 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 	}
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
 		},
@@ -439,7 +439,7 @@ func TestGenerateContent_Generate_Thinking(t *testing.T) {
 	llm := newThinkingClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
@@ -462,7 +462,7 @@ func TestVertexAI_Generate_Text(t *testing.T) {
 	llm := newVertexAIClientFromEnv(t)
 
 	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-		Model: llm.modelName,
+		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 		},
@@ -490,7 +490,7 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
 		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
-			Model:    llm.modelName,
+			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
 		}, nil)

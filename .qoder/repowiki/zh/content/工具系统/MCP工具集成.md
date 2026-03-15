@@ -10,16 +10,27 @@
 - [README.md](file://README.md)
 </cite>
 
+## 更新摘要
+**变更内容**
+- 补充了详细的API参考文档，包括所有公共方法和字段的完整说明
+- 新增了连接配置和传输层的详细说明
+- 增加了工具调用流程的完整API文档
+- 补充了错误处理和故障排除的详细指南
+- 添加了实际使用示例和最佳实践
+
 ## 目录
 1. [简介](#简介)
 2. [项目结构](#项目结构)
 3. [核心组件](#核心组件)
 4. [架构概览](#架构概览)
 5. [详细组件分析](#详细组件分析)
-6. [依赖关系分析](#依赖关系分析)
-7. [性能考虑](#性能考虑)
-8. [故障排除指南](#故障排除指南)
-9. [结论](#结论)
+6. [API参考文档](#api参考文档)
+7. [连接配置指南](#连接配置指南)
+8. [工具调用流程](#工具调用流程)
+9. [依赖关系分析](#依赖关系分析)
+10. [性能考虑](#性能考虑)
+11. [故障排除指南](#故障排除指南)
+12. [结论](#结论)
 
 ## 简介
 
@@ -233,6 +244,278 @@ stateDiagram-v2
 **章节来源**
 - [mcp.go:74-80](file://tool/mcp/mcp.go#L74-L80)
 
+## API参考文档
+
+### ToolSet 结构体
+
+ToolSet是MCP工具集成的核心结构体，负责管理与MCP服务器的连接和工具发现。
+
+**字段说明**
+
+| 字段名 | 类型 | 描述 | 默认值 |
+|--------|------|------|--------|
+| client | *sdkmcp.Client | MCP客户端实例 | nil |
+| transport | sdkmcp.Transport | 传输层接口 | nil |
+| session | *sdkmcp.ClientSession | MCP会话实例 | nil |
+
+**构造函数**
+
+```go
+func NewToolSet(transport sdkmcp.Transport) *ToolSet
+```
+
+**方法说明**
+
+| 方法签名 | 返回值 | 描述 |
+|----------|--------|------|
+| NewToolSet(transport) | *ToolSet | 创建新的ToolSet实例 |
+| Connect(ctx) | error | 建立与MCP服务器的连接 |
+| Tools(ctx) | ([]tool.Tool, error) | 发现并返回可用工具列表 |
+| Close() | error | 关闭MCP连接 |
+
+**使用示例**
+
+```go
+// 创建传输层
+transport := &sdkmcp.StreamableClientTransport{
+    Endpoint: "https://mcp.example.com/mcp",
+}
+
+// 创建ToolSet
+ts := mcp.NewToolSet(transport)
+
+// 建立连接
+err := ts.Connect(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 获取工具列表
+tools, err := ts.Tools(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 关闭连接
+ts.Close()
+```
+
+**章节来源**
+- [mcp.go:15-43](file://tool/mcp/mcp.go#L15-L43)
+
+### toolWrapper 结构体
+
+toolWrapper是MCP工具的包装器，实现了统一的`tool.Tool`接口。
+
+**字段说明**
+
+| 字段名 | 类型 | 描述 |
+|--------|------|------|
+| session | *sdkmcp.ClientSession | MCP会话实例 |
+| def | tool.Definition | 工具定义信息 |
+
+**方法说明**
+
+| 方法签名 | 返回值 | 描述 |
+|----------|--------|------|
+| Definition() | tool.Definition | 返回工具定义信息 |
+| Run(ctx, toolCallID, arguments) | (string, error) | 执行工具调用 |
+
+**章节来源**
+- [mcp.go:82-109](file://tool/mcp/mcp.go#L82-L109)
+
+### Definition 结构体
+
+Definition包含工具的元数据信息，用于LLM理解和调用工具。
+
+**字段说明**
+
+| 字段名 | 类型 | 描述 |
+|--------|------|------|
+| Name | string | 工具名称 |
+| Description | string | 工具描述 |
+| InputSchema | *jsonschema.Schema | 输入参数的JSON Schema |
+
+**章节来源**
+- [tool.go:9-15](file://tool/tool.go#L9-L15)
+
+### Tool 接口
+
+Tool接口定义了工具的标准行为，支持本地工具和MCP工具的统一处理。
+
+**方法说明**
+
+| 方法签名 | 返回值 | 描述 |
+|----------|--------|------|
+| Definition() | Definition | 返回工具元数据 |
+| Run(ctx, toolCallID, arguments) | (string, error) | 执行工具调用 |
+
+**章节来源**
+- [tool.go:17-23](file://tool/tool.go#L17-L23)
+
+## 连接配置指南
+
+### 传输层配置
+
+ADK支持多种MCP传输方式，每种都有特定的配置要求：
+
+#### HTTP流式传输
+
+```go
+transport := &sdkmcp.StreamableClientTransport{
+    Endpoint: "https://mcp.example.com/mcp",
+    HTTPClient: &http.Client{
+        Timeout: 30 * time.Second,
+        Transport: &apiKeyTransport{
+            base: http.DefaultTransport,
+            header: "Authorization",
+            value: "Bearer YOUR_TOKEN",
+        },
+    },
+}
+```
+
+#### STDIO传输
+
+```go
+transport := &sdkmcp.STDIOTransport{
+    Command: "mcp-server",
+    Args: []string{"--flag", "value"},
+    Env: map[string]string{
+        "ENV_VAR": "value",
+    },
+}
+```
+
+#### 自定义传输
+
+```go
+type CustomTransport struct {
+    RoundTrip func(req *http.Request) (*http.Response, error)
+}
+
+func (t *CustomTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    // 自定义逻辑
+    return t.RoundTrip(req)
+}
+```
+
+### 认证配置
+
+#### API密钥认证
+
+```go
+type apiKeyTransport struct {
+    base   http.RoundTripper
+    header string
+    value  string
+}
+
+func (t *apiKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    clone := req.Clone(req.Context())
+    clone.Header.Set(t.header, t.value)
+    return t.base.RoundTrip(clone)
+}
+```
+
+#### Bearer Token认证
+
+```go
+transport := &sdkmcp.StreamableClientTransport{
+    Endpoint: endpoint,
+    HTTPClient: &http.Client{
+        Transport: &bearerAuthTransport{
+            base: http.DefaultTransport,
+            token: "YOUR_BEARER_TOKEN",
+        },
+    },
+}
+```
+
+### 超时和重连配置
+
+```go
+// 设置连接超时
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 实现重连机制
+for i := 0; i < maxRetries; i++ {
+    if err := ts.Connect(ctx); err == nil {
+        break
+    }
+    time.Sleep(backoffDelay(i))
+}
+```
+
+**章节来源**
+- [mcp_test.go:21-42](file://tool/mcp/mcp_test.go#L21-L42)
+- [main.go:39-80](file://examples/chat/main.go#L39-L80)
+
+## 工具调用流程
+
+### 完整调用流程
+
+```mermaid
+sequenceDiagram
+participant Client as 客户端
+participant ToolSet as ToolSet
+participant Session as MCP会话
+participant Server as MCP服务器
+participant Wrapper as toolWrapper
+Client->>ToolSet : Tools(ctx)
+ToolSet->>Session : session.Tools(ctx)
+Session->>Server : ListTools请求
+Server-->>Session : 工具定义列表
+Session-->>ToolSet : 工具定义
+ToolSet->>Wrapper : 创建toolWrapper实例
+ToolSet-->>Client : 工具实例数组
+Client->>Wrapper : Run(ctx, toolCallID, arguments)
+Wrapper->>Session : CallTool请求
+Session->>Server : 执行工具调用
+Server-->>Session : 工具执行结果
+Session-->>Wrapper : CallToolResult
+Wrapper->>Wrapper : extractText()
+Wrapper-->>Client : 处理后的结果
+```
+
+**图表来源**
+- [mcp.go:45-109](file://tool/mcp/mcp.go#L45-L109)
+
+### 参数处理流程
+
+```mermaid
+flowchart TD
+Start([工具调用开始]) --> ParseJSON["解析JSON参数字符串"]
+ParseJSON --> ValidateSchema["使用JSON Schema验证"]
+ValidateSchema --> Valid{参数有效?}
+Valid --> |否| Error["返回参数验证错误"]
+Valid --> |是| CallMCP["调用MCP工具"]
+CallMCP --> ProcessResult["处理MCP返回结果"]
+ProcessResult --> ExtractText["提取文本内容"]
+ExtractText --> CheckError{检查错误状态}
+CheckError --> |有错误| ReturnError["返回工具执行错误"]
+CheckError --> |无错误| Success["返回成功结果"]
+Error --> End([结束])
+ReturnError --> End
+Success --> End
+```
+
+**图表来源**
+- [mcp.go:92-120](file://tool/mcp/mcp.go#L92-L120)
+
+### 错误处理机制
+
+MCP工具调用包含多层错误处理：
+
+1. **连接错误**：连接MCP服务器失败
+2. **工具发现错误**：无法获取工具列表
+3. **参数验证错误**：JSON参数不符合Schema
+4. **工具执行错误**：MCP服务器返回错误状态
+
+**章节来源**
+- [mcp.go:35-120](file://tool/mcp/mcp.go#L35-L120)
+
 ## 依赖关系分析
 
 MCP工具集成的依赖关系体现了清晰的分层架构：
@@ -352,3 +635,7 @@ ADK框架的MCP工具集成机制为AI代理开发提供了强大而灵活的工
 - 增强的监控和诊断功能
 
 通过持续的优化和改进，ADK的MCP工具集成机制将继续为AI代理开发提供强有力的支持。
+
+**章节来源**
+- [README.md:270-291](file://README.md#L270-L291)
+- [examples/chat/main.go:52-177](file://examples/chat/main.go#L52-L177)

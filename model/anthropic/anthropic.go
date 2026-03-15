@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/retry"
 	"github.com/soasurs/adk/tool"
 )
 
@@ -22,32 +23,41 @@ const defaultMaxTokens = 4096
 // Must be ≥1024 and less than maxTokens.
 const defaultThinkingBudget = 3000
 
-// Messages implements model.LLM using the Anthropic Messages API.
-type Messages struct {
+// Model implements model.LLM using the Anthropic Messages API.
+type Model struct {
 	client    goanthropic.Client
 	modelName string
+	retryCfg  retry.Config
 }
 
-// New creates a new Messages instance.
+// New creates a new Model instance.
 // apiKey is required. modelName is the identifier of the Anthropic model to use
 // (e.g. "claude-sonnet-4-5", "claude-opus-4-5").
-func New(apiKey, modelName string) *Messages {
+// retryCfg is optional; when provided it enables automatic retry with
+// exponential backoff on transient errors (rate limits, 5xx, network issues).
+func New(apiKey, modelName string, retryCfg ...retry.Config) *Model {
 	client := goanthropic.NewClient(option.WithAPIKey(apiKey))
-	return &Messages{
+	m := &Model{
 		client:    client,
 		modelName: modelName,
 	}
+	if len(retryCfg) > 0 {
+		m.retryCfg = retryCfg[0]
+	} else {
+		m.retryCfg = retry.DefaultConfig()
+	}
+	return m
 }
 
 // Name returns the model identifier.
-func (m *Messages) Name() string {
+func (m *Model) Name() string {
 	return m.modelName
 }
 
 // GenerateContent sends the request to the Anthropic Messages API.
-// When stream is false (or true, as streaming is not yet implemented),
-// exactly one complete *model.LLMResponse is yielded.
-func (m *Messages) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+// Transient errors are automatically retried according to the retry.Config
+// provided at construction time.
+func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		messages, system, err := convertMessages(req.Messages)
 		if err != nil {
@@ -80,12 +90,29 @@ func (m *Messages) GenerateContent(ctx context.Context, req *model.LLMRequest, c
 			applyConfig(&params, cfg)
 		}
 
+		for resp, err := range retry.Seq2(ctx, m.retryCfg,
+			func() iter.Seq2[*model.LLMResponse, error] {
+				return m.callAPI(ctx, params)
+			},
+			func(r *model.LLMResponse) bool { return r != nil && r.Partial },
+		) {
+			if !yield(resp, err) {
+				return
+			}
+		}
+	}
+}
+
+// callAPI performs a single (non-retried) call to the Anthropic Messages API
+// and returns its result as an iter.Seq2. It is called by GenerateContent,
+// potentially multiple times when retries are enabled.
+func (m *Model) callAPI(ctx context.Context, params goanthropic.MessageNewParams) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
 		resp, err := m.client.Messages.New(ctx, params)
 		if err != nil {
 			yield(nil, fmt.Errorf("anthropic: messages new: %w", err))
 			return
 		}
-
 		llmResp := convertResponse(resp)
 		llmResp.TurnComplete = true
 		yield(llmResp, nil)
