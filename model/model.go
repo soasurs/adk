@@ -65,6 +65,11 @@ type GenerateConfig struct {
 	TopP            float64
 	ReasoningEffort ReasoningEffort
 	ServiceTier     ServiceTier
+	// EnableThinking explicitly enables or disables the model's internal
+	// reasoning/thinking capability. A nil value leaves the decision to the
+	// provider. Providers that express this as an effort level (e.g. OpenAI
+	// reasoning_effort) will map false → "none" when ReasoningEffort is unset.
+	EnableThinking *bool
 }
 
 // ToolCall represents a single tool invocation requested by the LLM.
@@ -83,6 +88,11 @@ type Message struct {
 	Role Role
 	// Content is the text content of the message.
 	Content string
+	// ReasoningContent holds the model's internal chain-of-thought output, when
+	// returned by reasoning models (e.g. DeepSeek-R1, o-series via compatible
+	// providers). It is informational only and is not forwarded to the LLM on
+	// subsequent turns.
+	ReasoningContent string
 	// ToolCalls is populated when Role is RoleAssistant and the model requests tool invocations.
 	ToolCalls []ToolCall
 	// ToolCallID links a RoleTool message back to the ToolCall.ID it is responding to.

@@ -48,10 +48,12 @@ func (tl *ToolCalls) Scan(src any) error {
 
 // Message represents a persisted conversation message.
 type Message struct {
-	MessageID int64     `json:"message_id" db:"message_id"`
-	Role      string    `json:"role" db:"role"`
-	Content   string    `json:"content" db:"content"`
-	ToolCalls ToolCalls `json:"tool_calls" db:"tool_calls"`
+	MessageID int64  `json:"message_id" db:"message_id"`
+	Role      string `json:"role" db:"role"`
+	Content   string `json:"content" db:"content"`
+	// ReasoningContent stores the model's chain-of-thought output when provided.
+	ReasoningContent string    `json:"reasoning_content" db:"reasoning_content"`
+	ToolCalls        ToolCalls `json:"tool_calls" db:"tool_calls"`
 	// ToolCallID links a tool-role message back to the assistant's ToolCall.ID it responds to.
 	ToolCallID string `json:"tool_call_id" db:"tool_call_id"`
 	CreatedAt  int64  `json:"created_at" db:"created_at"`
@@ -73,10 +75,11 @@ func (m *Message) ToModel() model.Message {
 		}
 	}
 	return model.Message{
-		Role:       model.Role(m.Role),
-		Content:    m.Content,
-		ToolCalls:  toolCalls,
-		ToolCallID: m.ToolCallID,
+		Role:             model.Role(m.Role),
+		Content:          m.Content,
+		ReasoningContent: m.ReasoningContent,
+		ToolCalls:        toolCalls,
+		ToolCallID:       m.ToolCallID,
 	}
 }
 
@@ -92,9 +95,10 @@ func FromModel(m model.Message) *Message {
 		}
 	}
 	return &Message{
-		Role:       string(m.Role),
-		Content:    m.Content,
-		ToolCalls:  toolCalls,
-		ToolCallID: m.ToolCallID,
+		Role:             string(m.Role),
+		Content:          m.Content,
+		ReasoningContent: m.ReasoningContent,
+		ToolCalls:        toolCalls,
+		ToolCallID:       m.ToolCallID,
 	}
 }

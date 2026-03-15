@@ -8,10 +8,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	goopenai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/shared"
+
 	"soasurs.dev/soasurs/adk/model"
 	"soasurs.dev/soasurs/adk/tool"
 	"soasurs.dev/soasurs/adk/tool/builtin"
 )
+
+// boolPtr returns a pointer to the given bool value.
+func boolPtr(b bool) *bool { return &b }
 
 // newClientFromEnv creates a ChatCompletion from environment variables.
 // Required: OPENAI_API_KEY — test is skipped when absent.
@@ -28,6 +35,23 @@ func newClientFromEnv(t *testing.T) *ChatCompletion {
 	if modelName == "" {
 		modelName = "gpt-4o-mini"
 	}
+	return New(apiKey, baseURL, modelName)
+}
+
+// newReasoningClientFromEnv creates a ChatCompletion for reasoning model tests.
+// Required: OPENAI_API_KEY + OPENAI_REASONING_MODEL — test is skipped when either is absent.
+// Optional: OPENAI_BASE_URL — overrides the default endpoint (e.g. DeepSeek).
+func newReasoningClientFromEnv(t *testing.T) *ChatCompletion {
+	t.Helper()
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set")
+	}
+	modelName := os.Getenv("OPENAI_REASONING_MODEL")
+	if modelName == "" {
+		t.Skip("OPENAI_REASONING_MODEL not set")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
 	return New(apiKey, baseURL, modelName)
 }
 
@@ -106,6 +130,58 @@ func TestConvertMessage_Tool(t *testing.T) {
 func TestConvertMessage_UnknownRole(t *testing.T) {
 	_, err := convertMessage(model.Message{Role: "invalid"})
 	assert.Error(t, err)
+}
+
+// TestApplyConfig_EnableThinking verifies the EnableThinking → ReasoningEffort /
+// enable_thinking mapping logic inside applyConfig.
+func TestApplyConfig_EnableThinking(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             model.GenerateConfig
+		wantEffort      shared.ReasoningEffort
+		wantEnableThink *bool // nil means we don't expect the option to be injected
+	}{
+		{
+			name:            "false with no effort → reasoning_effort=none + enable_thinking=false",
+			cfg:             model.GenerateConfig{EnableThinking: boolPtr(false)},
+			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortNone),
+			wantEnableThink: boolPtr(false),
+		},
+		{
+			name: "false with explicit effort → effort wins, enable_thinking NOT injected",
+			cfg: model.GenerateConfig{
+				EnableThinking:  boolPtr(false),
+				ReasoningEffort: model.ReasoningEffortHigh,
+			},
+			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortHigh),
+			wantEnableThink: nil, // ReasoningEffort set → skip enable_thinking injection
+		},
+		{
+			name:            "true with no effort → enable_thinking=true injected",
+			cfg:             model.GenerateConfig{EnableThinking: boolPtr(true)},
+			wantEffort:      "",
+			wantEnableThink: boolPtr(true),
+		},
+		{
+			name:            "nil → nothing injected",
+			cfg:             model.GenerateConfig{},
+			wantEffort:      "",
+			wantEnableThink: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &goopenai.ChatCompletionNewParams{}
+			var opts []option.RequestOption
+			applyConfig(p, &tt.cfg, &opts)
+			assert.Equal(t, tt.wantEffort, p.ReasoningEffort)
+			if tt.wantEnableThink == nil {
+				assert.Empty(t, opts, "expected no extra options")
+			} else {
+				assert.Len(t, opts, 1, "expected exactly one extra option for enable_thinking")
+			}
+		})
+	}
 }
 
 func TestConvertTools_Empty(t *testing.T) {
@@ -231,4 +307,49 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.NotEmpty(t, resp.Message.Content)
+}
+
+// TestChatCompletion_Generate_EnableThinkingTrue verifies that a reasoning model
+// returns non-empty ReasoningContent when thinking is explicitly enabled.
+// Required env vars: OPENAI_API_KEY + OPENAI_REASONING_MODEL
+// Optional env var:  OPENAI_BASE_URL
+func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
+	llm := newReasoningClientFromEnv(t)
+
+	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+		Model: llm.modelName,
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
+		},
+	}, &model.GenerateConfig{EnableThinking: boolPtr(true)})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, model.RoleAssistant, resp.Message.Role)
+	assert.NotEmpty(t, resp.Message.Content)
+	assert.NotEmpty(t, resp.Message.ReasoningContent, "expected reasoning model to populate ReasoningContent")
+	t.Logf("reasoning: %s", resp.Message.ReasoningContent)
+	t.Logf("answer:    %s", resp.Message.Content)
+}
+
+// TestChatCompletion_Generate_EnableThinkingFalse verifies that disabling thinking
+// via EnableThinking=false produces no ReasoningContent.
+// Required env vars: OPENAI_API_KEY + OPENAI_REASONING_MODEL
+// Optional env var:  OPENAI_BASE_URL
+func TestChatCompletion_Generate_EnableThinkingFalse(t *testing.T) {
+	llm := newReasoningClientFromEnv(t)
+
+	resp, err := llm.Generate(context.Background(), &model.LLMRequest{
+		Model: llm.modelName,
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What is 12 * 13?"},
+		},
+	}, &model.GenerateConfig{EnableThinking: boolPtr(false)})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, model.RoleAssistant, resp.Message.Role)
+	assert.NotEmpty(t, resp.Message.Content)
+	assert.Empty(t, resp.Message.ReasoningContent, "expected no ReasoningContent when thinking is disabled")
+	t.Logf("answer: %s", resp.Message.Content)
 }

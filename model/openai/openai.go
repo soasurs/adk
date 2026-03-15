@@ -58,11 +58,12 @@ func (c *ChatCompletion) Generate(ctx context.Context, req *model.LLMRequest, cf
 		Tools:    tools,
 	}
 
+	var reqOpts []option.RequestOption
 	if cfg != nil {
-		applyConfig(&params, cfg)
+		applyConfig(&params, cfg, &reqOpts)
 	}
 
-	resp, err := c.client.Chat.Completions.New(ctx, params)
+	resp, err := c.client.Chat.Completions.New(ctx, params, reqOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("openai: chat completion: %w", err)
 	}
@@ -160,8 +161,10 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 	return result, nil
 }
 
-// applyConfig transfers GenerateConfig settings to ChatCompletionNewParams.
-func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig) {
+// applyConfig transfers GenerateConfig settings to ChatCompletionNewParams and
+// optionally appends extra request options (e.g. enable_thinking for compatible
+// providers that do not use reasoning_effort).
+func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption) {
 	if cfg.Temperature != 0 {
 		p.Temperature = param.NewOpt(cfg.Temperature)
 	}
@@ -170,6 +173,15 @@ func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig)
 	}
 	if cfg.ReasoningEffort != "" {
 		p.ReasoningEffort = shared.ReasoningEffort(cfg.ReasoningEffort)
+	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking {
+		// No explicit effort level set but thinking is disabled: map to "none".
+		p.ReasoningEffort = shared.ReasoningEffort(model.ReasoningEffortNone)
+	}
+	// Inject enable_thinking for providers that use a boolean toggle instead of
+	// reasoning_effort (e.g. DeepSeek, Qwen). When ReasoningEffort is already
+	// set we trust the caller used the more specific control and skip this.
+	if cfg.EnableThinking != nil && cfg.ReasoningEffort == "" {
+		*opts = append(*opts, option.WithJSONSet("enable_thinking", *cfg.EnableThinking))
 	}
 	if cfg.ServiceTier != "" {
 		p.ServiceTier = goopenai.ChatCompletionNewParamsServiceTier(cfg.ServiceTier)
@@ -181,6 +193,18 @@ func convertResponse(choice goopenai.ChatCompletionChoice) *model.LLMResponse {
 	msg := model.Message{
 		Role:    model.RoleAssistant,
 		Content: choice.Message.Content,
+	}
+
+	// Extract reasoning_content from the raw JSON response when present.
+	// This field is not part of the standard OpenAI SDK struct but is returned
+	// by reasoning-capable providers (e.g. DeepSeek-R1, compatible endpoints).
+	if raw := choice.Message.RawJSON(); raw != "" {
+		var envelope struct {
+			ReasoningContent string `json:"reasoning_content"`
+		}
+		if err := json.Unmarshal([]byte(raw), &envelope); err == nil && envelope.ReasoningContent != "" {
+			msg.ReasoningContent = envelope.ReasoningContent
+		}
 	}
 
 	if len(choice.Message.ToolCalls) > 0 {

@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -32,6 +33,46 @@ func newLLMFromEnv(t *testing.T) model.LLM {
 	return openai.New(apiKey, baseURL, modelName)
 }
 
+// newReasoningLLMFromEnv creates a model.LLM intended for reasoning tests.
+// Required: OPENAI_API_KEY and OPENAI_REASONING_MODEL — test is skipped when either is absent.
+// Optional: OPENAI_BASE_URL — overrides the default OpenAI endpoint (e.g. DeepSeek base URL).
+func newReasoningLLMFromEnv(t *testing.T) model.LLM {
+	t.Helper()
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set")
+	}
+	modelName := os.Getenv("OPENAI_REASONING_MODEL")
+	if modelName == "" {
+		t.Skip("OPENAI_REASONING_MODEL not set")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	return openai.New(apiKey, baseURL, modelName)
+}
+
+// ---------------------------------------------------------------------------
+// Mock LLM for unit tests
+// ---------------------------------------------------------------------------
+
+// mockLLM is a deterministic model.LLM implementation that replays a fixed
+// sequence of responses, enabling unit tests without a real API.
+type mockLLM struct {
+	name      string
+	responses []*model.LLMResponse
+	callIdx   int
+}
+
+func (m *mockLLM) Name() string { return m.name }
+
+func (m *mockLLM) Generate(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig) (*model.LLMResponse, error) {
+	if m.callIdx >= len(m.responses) {
+		return nil, fmt.Errorf("mockLLM: no more responses (call %d)", m.callIdx)
+	}
+	resp := m.responses[m.callIdx]
+	m.callIdx++
+	return resp, nil
+}
+
 // logMessage prints a single message in a concise one-line format.
 func logMessage(t *testing.T, idx int, m model.Message) {
 	t.Helper()
@@ -44,6 +85,9 @@ func logMessage(t *testing.T, idx int, m model.Message) {
 	if m.ToolCallID != "" {
 		t.Logf("  [%d] %-9s result     id=%s content=%s", idx, m.Role, m.ToolCallID, m.Content)
 		return
+	}
+	if m.ReasoningContent != "" {
+		t.Logf("  [%d] %-9s reasoning  %s", idx, m.Role, m.ReasoningContent)
 	}
 	t.Logf("  [%d] %-9s %s", idx, m.Role, m.Content)
 }
@@ -192,4 +236,127 @@ func TestLlmAgent_MultiTurn(t *testing.T) {
 	last := msgs2[len(msgs2)-1]
 	assert.Equal(t, model.RoleAssistant, last.Role)
 	assert.Contains(t, last.Content, "Alice")
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning tests
+// ---------------------------------------------------------------------------
+
+// TestLlmAgent_Reasoning_PassThrough verifies that a ReasoningContent returned
+// by the LLM is present on the message yielded by the agent. This is a pure
+// unit test: no real API call is made.
+func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
+	mock := &mockLLM{
+		name: "mock-reasoning",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					Content:          "The answer is 42.",
+					ReasoningContent: "I need to think about this carefully. 6 times 7 is 42.",
+				},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	a := New(LlmAgentConfig{
+		Name:        "reasoning-agent",
+		Description: "A test agent with reasoning",
+		Model:       mock,
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "What is 6 times 7?"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
+	assert.Equal(t, "The answer is 42.", msgs[0].Content)
+	assert.Equal(t, "I need to think about this carefully. 6 times 7 is 42.", msgs[0].ReasoningContent)
+}
+
+// TestLlmAgent_Reasoning_PassThrough_WithToolCall verifies that ReasoningContent
+// on an intermediate assistant tool-call message is also correctly passed through.
+func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
+	echoTool := builtin.NewEchoTool()
+
+	mock := &mockLLM{
+		name: "mock-reasoning-tool",
+		responses: []*model.LLMResponse{
+			// First call: model reasons and decides to call echo.
+			{
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: "I should use the echo tool to repeat the message.",
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-1", Name: "echo", Arguments: `{"message":"hello"}`},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			// Second call: model produces the final answer.
+			{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "The echo result is: hello",
+				},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	a := New(LlmAgentConfig{
+		Name:        "reasoning-tool-agent",
+		Description: "A test agent with reasoning and tool call",
+		Model:       mock,
+		Tools:       []tool.Tool{echoTool},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "Echo hello"},
+	})
+
+	require.NoError(t, err)
+	// Expected: [assistant(tool_calls+reasoning), tool(result), assistant(stop)]
+	require.Len(t, msgs, 3)
+
+	// First yielded message is the assistant tool-call message with reasoning.
+	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
+	assert.Equal(t, "I should use the echo tool to repeat the message.", msgs[0].ReasoningContent)
+	assert.Len(t, msgs[0].ToolCalls, 1)
+
+	// Second is the tool result.
+	assert.Equal(t, model.RoleTool, msgs[1].Role)
+	assert.Equal(t, "tc-1", msgs[1].ToolCallID)
+
+	// Third is the final assistant stop message.
+	assert.Equal(t, model.RoleAssistant, msgs[2].Role)
+	assert.NotEmpty(t, msgs[2].Content)
+}
+
+// TestLlmAgent_ReasoningModel is an integration test that verifies a real
+// reasoning model returns non-empty ReasoningContent.
+// Required env vars: OPENAI_API_KEY + OPENAI_REASONING_MODEL
+// Optional env var:  OPENAI_BASE_URL (e.g. https://api.deepseek.com for DeepSeek-R1)
+func TestLlmAgent_ReasoningModel(t *testing.T) {
+	llm := newReasoningLLMFromEnv(t)
+
+	a := New(LlmAgentConfig{
+		Name:        "reasoning-agent",
+		Description: "A test reasoning agent",
+		Model:       llm,
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "What is 15 * 17? Think step by step."},
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	last := msgs[len(msgs)-1]
+	assert.Equal(t, model.RoleAssistant, last.Role)
+	assert.NotEmpty(t, last.Content)
+	assert.NotEmpty(t, last.ReasoningContent, "expected reasoning model to return non-empty ReasoningContent")
 }
