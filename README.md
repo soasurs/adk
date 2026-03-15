@@ -13,9 +13,11 @@ integrations so you can compose exactly the pieces you need.
 
 ## Features
 
-- **Provider-agnostic LLM interface** — swap models without touching agent code
+- **Provider-agnostic LLM interface** — swap OpenAI, Gemini, or Anthropic without touching agent code
 - **Stateless Agent + Stateful Runner** — clean separation of concerns
 - **Automatic tool-call loop** — `LlmAgent` drives the model until a stop response
+- **Agent composition** — chain agents sequentially or run them in parallel
+- **Agent as Tool** — delegate tasks to sub-agents via function calling
 - **Pluggable session backends** — in-memory (zero config) or SQLite (persistent)
 - **Message history compaction** — soft-archive old messages without deleting them
 - **MCP tool integration** — connect any [Model Context Protocol](https://modelcontextprotocol.io) server
@@ -68,8 +70,13 @@ results; it has no memory of previous turns.
 |---|---|
 | `agent` | `Agent` interface |
 | `agent/llmagent` | LLM-backed agent with tool-call loop |
+| `agent/sequential` | Sequential agent composition (pipeline) |
+| `agent/parallel` | Parallel agent composition (fan-out) |
+| `agent/agentool` | Wrap agents as tools for delegation |
 | `model` | Provider-agnostic LLM interface and message types |
 | `model/openai` | OpenAI adapter |
+| `model/gemini` | Google Gemini adapter (Gemini API & Vertex AI) |
+| `model/anthropic` | Anthropic Claude adapter |
 | `session` | `Session` and `SessionService` interfaces |
 | `session/memory` | In-memory session backend |
 | `session/database` | SQLite session backend |
@@ -86,6 +93,8 @@ results; it has no memory of previous turns.
 
 ### 1. Create an LLM
 
+**OpenAI:**
+
 ```go
 import "soasurs.dev/soasurs/adk/model/openai"
 
@@ -93,6 +102,24 @@ llm := openai.New(openai.Config{
     APIKey: os.Getenv("OPENAI_API_KEY"),
     Model:  "gpt-4o-mini",
 })
+```
+
+**Google Gemini:**
+
+```go
+import "soasurs.dev/soasurs/adk/model/gemini"
+
+llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
+// Or use Vertex AI:
+// llm, err := gemini.NewVertexAI(ctx, "my-project", "us-central1", "gemini-2.0-flash")
+```
+
+**Anthropic Claude:**
+
+```go
+import "soasurs.dev/soasurs/adk/model/anthropic"
+
+llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
 ```
 
 ### 2. Build an Agent
@@ -103,11 +130,11 @@ import (
     "soasurs.dev/soasurs/adk/model"
 )
 
-agent := llmagent.New(llmagent.LlmAgentConfig{
+agent := llmagent.New(llmagent.Config{
     Name:         "my-agent",
     Description:  "A helpful assistant",
     Model:        llm,
-    SystemPrompt: "You are a helpful assistant.",
+    Instruction:  "You are a helpful assistant.",
 })
 ```
 
@@ -146,9 +173,15 @@ sessionID := int64(1)
 _, _ = svc.CreateSession(ctx, sessionID)
 
 // Send a user message and iterate over the results
-for msg, err := range r.Run(ctx, sessionID, "Hello!") {
+for event, err := range r.Run(ctx, sessionID, "Hello!") {
     if err != nil { /* … */ }
-    fmt.Println(msg.Role, msg.Content)
+    if event.Partial {
+        // Streaming fragment — display in real-time
+        fmt.Print(event.Message.Content)
+    } else {
+        // Complete message — persist or process
+        fmt.Println(event.Message.Role, event.Message.Content)
+    }
 }
 ```
 
@@ -190,13 +223,16 @@ A single message in a conversation. Key fields:
 type Agent interface {
     Name() string
     Description() string
-    Run(ctx context.Context, messages []model.Message) iter.Seq2[model.Message, error]
+    Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error]
 }
 ```
 
-`Run` returns a Go iterator that yields each produced message — assistant
+`Run` returns a Go iterator that yields each produced event — assistant
 replies, tool results, and intermediate steps — allowing the caller to
 stream output incrementally.
+
+Events carry a `Partial` flag: when `true`, the event is a streaming fragment
+for real-time display; when `false`, it is a complete, persistable message.
 
 ### `tool.Tool`
 
@@ -248,9 +284,74 @@ defer ts.Close()
 
 tools, err := ts.Tools(ctx)
 
-agent := llmagent.New(llmagent.LlmAgentConfig{
+agent := llmagent.New(llmagent.Config{
     // …
     Tools: tools,
+})
+```
+
+---
+
+## Agent Composition
+
+### Sequential Agent
+
+Chain multiple agents into a pipeline where each agent sees the output of all
+previous agents:
+
+```go
+import "soasurs.dev/soasurs/adk/agent/sequential"
+
+pipeline := sequential.New(sequential.Config{
+    Name:        "research-pipeline",
+    Description: "Research, draft, and review",
+    Agents: []agent.Agent{
+        researchAgent,  // Step 1: gather information
+        draftAgent,     // Step 2: write draft
+        reviewAgent,    // Step 3: review and polish
+    },
+})
+```
+
+### Parallel Agent
+
+Run multiple agents concurrently and merge their outputs:
+
+```go
+import "soasurs.dev/soasurs/adk/agent/parallel"
+
+ensemble := parallel.New(parallel.Config{
+    Name:        "multi-model-ensemble",
+    Description: "Get answers from multiple models",
+    Agents: []agent.Agent{
+        gpt4Agent,
+        claudeAgent,
+        geminiAgent,
+    },
+    // Optional: custom merge function
+    MergeFunc: func(results []parallel.AgentOutput) model.Message {
+        // Combine outputs from all agents
+    },
+})
+```
+
+### Agent as Tool
+
+Delegate tasks to sub-agents via the LLM's function-calling mechanism:
+
+```go
+import "soasurs.dev/soasurs/adk/agent/agentool"
+
+// Wrap an agent as a tool
+calculatorTool := agentool.New(calculatorAgent)
+
+// Give it to another agent
+orchestrator := llmagent.New(llmagent.Config{
+    Name:        "orchestrator",
+    Description: "Delegates calculations",
+    Model:       llm,
+    Tools:       []tool.Tool{calculatorTool},
+    Instruction: "Use the calculator tool for math problems.",
 })
 ```
 
@@ -281,6 +382,8 @@ msg := model.Message{
 | Library | Purpose |
 |---|---|
 | `github.com/openai/openai-go/v3` | OpenAI API client |
+| `google.golang.org/genai` | Google Gemini API client |
+| `github.com/anthropics/anthropic-sdk-go` | Anthropic Claude API client |
 | `github.com/modelcontextprotocol/go-sdk` | MCP client |
 | `github.com/google/jsonschema-go` | JSON Schema for tool definitions |
 | `github.com/jmoiron/sqlx` | SQL query helpers |
