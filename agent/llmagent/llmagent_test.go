@@ -121,7 +121,7 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([
 func TestLlmAgent_SimpleText(t *testing.T) {
 	llm := newLLMFromEnv(t)
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "test-agent",
 		Description: "A test agent",
 		Model:       llm,
@@ -138,16 +138,16 @@ func TestLlmAgent_SimpleText(t *testing.T) {
 	assert.NotEmpty(t, last.Content)
 }
 
-// TestLlmAgent_WithSystemPrompt verifies that the system prompt is forwarded
+// TestLlmAgent_WithInstruction verifies that the instruction is forwarded
 // and the agent still returns a valid assistant reply.
-func TestLlmAgent_WithSystemPrompt(t *testing.T) {
+func TestLlmAgent_WithInstruction(t *testing.T) {
 	llm := newLLMFromEnv(t)
 
-	a := New(LlmAgentConfig{
-		Name:         "test-agent",
-		Description:  "A test agent",
-		Model:        llm,
-		SystemPrompt: "You are a concise assistant. Keep answers to one sentence.",
+	a := New(Config{
+		Name:        "test-agent",
+		Description: "A test agent",
+		Model:       llm,
+		Instruction: "You are a concise assistant. Keep answers to one sentence.",
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Message{
@@ -168,7 +168,7 @@ func TestLlmAgent_WithEchoTool(t *testing.T) {
 
 	echoTool := builtin.NewEchoTool()
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "test-agent",
 		Description: "A test agent with echo tool",
 		Model:       llm,
@@ -204,7 +204,7 @@ func TestLlmAgent_WithEchoTool(t *testing.T) {
 func TestLlmAgent_MultiTurn(t *testing.T) {
 	llm := newLLMFromEnv(t)
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "test-agent",
 		Description: "A test agent",
 		Model:       llm,
@@ -260,7 +260,7 @@ func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
 		},
 	}
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "reasoning-agent",
 		Description: "A test agent with reasoning",
 		Model:       mock,
@@ -307,7 +307,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 		},
 	}
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "reasoning-tool-agent",
 		Description: "A test agent with reasoning and tool call",
 		Model:       mock,
@@ -343,7 +343,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 func TestLlmAgent_ReasoningModel(t *testing.T) {
 	llm := newReasoningLLMFromEnv(t)
 
-	a := New(LlmAgentConfig{
+	a := New(Config{
 		Name:        "reasoning-agent",
 		Description: "A test reasoning agent",
 		Model:       llm,

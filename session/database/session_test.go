@@ -30,15 +30,20 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 
 	_, err = db.Exec(`
 		CREATE TABLE messages (
-			message_id   INTEGER PRIMARY KEY,
-			role         TEXT    NOT NULL DEFAULT '',
-			content      TEXT    NOT NULL DEFAULT '',
-			tool_calls   TEXT    NOT NULL DEFAULT '[]',
-			tool_call_id TEXT    NOT NULL DEFAULT '',
-			created_at   INTEGER NOT NULL,
-			updated_at   INTEGER NOT NULL,
-			compacted_at INTEGER NOT NULL DEFAULT 0,
-			deleted_at   INTEGER NOT NULL
+			message_id        INTEGER PRIMARY KEY,
+			role              TEXT    NOT NULL DEFAULT '',
+			name              TEXT    NOT NULL DEFAULT '',
+			content           TEXT    NOT NULL DEFAULT '',
+			reasoning_content TEXT    NOT NULL DEFAULT '',
+			tool_calls        TEXT    NOT NULL DEFAULT '[]',
+			tool_call_id      TEXT    NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			created_at        INTEGER NOT NULL,
+			updated_at        INTEGER NOT NULL,
+			compacted_at      INTEGER NOT NULL DEFAULT 0,
+			deleted_at        INTEGER NOT NULL
 		)
 	`)
 	require.NoError(t, err)

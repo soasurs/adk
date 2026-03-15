@@ -14,7 +14,7 @@ import (
 const (
 	createSessionExpr = "INSERT INTO sessions (session_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4)"
 	// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0.
-	createMessageExpr         = "INSERT INTO messages (message_id, role, content, tool_calls, tool_call_id, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 0)"
+	createMessageExpr         = "INSERT INTO messages (message_id, role, name, content, reasoning_content, tool_calls, tool_call_id, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0, 0)"
 	deleteMessageExpr         = "DELETE FROM messages WHERE message_id = $1 AND deleted_at = 0"
 	getMessagesExpr           = "SELECT * FROM messages WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $1 OFFSET $2"
 	listMessagesExpr          = "SELECT * FROM messages WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC"
@@ -49,7 +49,9 @@ func (s *databaseSession) CreateMessage(ctx context.Context, message *message.Me
 		createMessageExpr,
 		message.MessageID,
 		message.Role,
+		message.Name,
 		message.Content,
+		message.ReasoningContent,
 		message.ToolCalls,
 		message.ToolCallID,
 		message.PromptTokens,
@@ -125,7 +127,9 @@ func (s *databaseSession) CompactMessages(ctx context.Context, compactor func(co
 		createMessageExpr,
 		summary.MessageID,
 		summary.Role,
+		summary.Name,
 		summary.Content,
+		summary.ReasoningContent,
 		summary.ToolCalls,
 		summary.ToolCallID,
 		summary.PromptTokens,

@@ -99,12 +99,12 @@ func main() {
 	fmt.Println()
 
 	// ── 3. LlmAgent ──────────────────────────────────────────────────────────
-	agent := llmagent.New(llmagent.LlmAgentConfig{
+	agent := llmagent.New(llmagent.Config{
 		Name:        "qa-agent",
 		Description: "A Chat agent that searches the web via Exa",
 		Model:       llm,
 		Tools:       tools,
-		SystemPrompt: "You are a helpful research assistant. " +
+		Instruction: "You are a helpful research assistant. " +
 			"When answering questions, use the available Exa search tools " +
 			"to find up-to-date information. Always cite the sources you used.",
 	})

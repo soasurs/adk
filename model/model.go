@@ -148,6 +148,9 @@ type TokenUsage struct {
 type Message struct {
 	// Role is the participant role (system, user, assistant, tool).
 	Role Role
+	// Name optionally identifies the producer of this message (e.g. an agent name).
+	// It is used for attribution and display; it is not forwarded to the LLM.
+	Name string
 	// Content is the text content of the message.
 	// For multi-modal messages use Parts instead; Parts takes precedence when non-empty.
 	Content string
