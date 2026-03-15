@@ -133,24 +133,21 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 	}
 	result := make([]goopenai.ChatCompletionToolUnionParam, 0, len(tools))
 	for _, t := range tools {
-		schema, err := t.InputSchema()
-		if err != nil {
-			return nil, fmt.Errorf("tool %q: get schema: %w", t.Name(), err)
-		}
+		def := t.Definition()
 
 		// Marshal schema to JSON, then decode into shared.FunctionParameters (map[string]any).
-		schemaJSON, err := json.Marshal(schema)
+		schemaJSON, err := json.Marshal(def.InputSchema)
 		if err != nil {
-			return nil, fmt.Errorf("tool %q: marshal schema: %w", t.Name(), err)
+			return nil, fmt.Errorf("tool %q: marshal schema: %w", def.Name, err)
 		}
 		var parameters shared.FunctionParameters
 		if err := json.Unmarshal(schemaJSON, &parameters); err != nil {
-			return nil, fmt.Errorf("tool %q: unmarshal schema: %w", t.Name(), err)
+			return nil, fmt.Errorf("tool %q: unmarshal schema: %w", def.Name, err)
 		}
 
 		fnDef := shared.FunctionDefinitionParam{
-			Name:        t.Name(),
-			Description: param.NewOpt(t.Description()),
+			Name:        def.Name,
+			Description: param.NewOpt(def.Description),
 			Parameters:  parameters,
 		}
 		fnTool := goopenai.ChatCompletionFunctionToolParam{

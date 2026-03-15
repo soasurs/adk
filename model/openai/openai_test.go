@@ -10,6 +10,7 @@ import (
 
 	"soasurs.dev/soasurs/adk/model"
 	"soasurs.dev/soasurs/adk/tool"
+	"soasurs.dev/soasurs/adk/tool/builtin"
 )
 
 // newClientFromEnv creates a ChatCompletion from environment variables.
@@ -114,12 +115,12 @@ func TestConvertTools_Empty(t *testing.T) {
 }
 
 func TestConvertTools_EchoTool(t *testing.T) {
-	echo := tool.NewEchoTool()
+	echo := builtin.NewEchoTool()
 	result, err := convertTools([]tool.Tool{echo})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	require.NotNil(t, result[0].OfFunction)
-	assert.Equal(t, echo.Name(), result[0].OfFunction.Function.Name)
+	assert.Equal(t, echo.Definition().Name, result[0].OfFunction.Function.Name)
 	assert.True(t, result[0].OfFunction.Function.Description.Valid())
 	assert.NotEmpty(t, result[0].OfFunction.Function.Parameters)
 }
@@ -165,7 +166,7 @@ func TestChatCompletion_Generate_WithSystemPrompt(t *testing.T) {
 func TestChatCompletion_Generate_WithTool(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	echo := tool.NewEchoTool()
+	echo := builtin.NewEchoTool()
 	tools := []tool.Tool{echo}
 
 	messages := []model.Message{

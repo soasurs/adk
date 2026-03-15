@@ -11,6 +11,7 @@ import (
 	"soasurs.dev/soasurs/adk/model"
 	"soasurs.dev/soasurs/adk/model/openai"
 	"soasurs.dev/soasurs/adk/tool"
+	"soasurs.dev/soasurs/adk/tool/builtin"
 )
 
 // newLLMFromEnv creates a model.LLM from environment variables.
@@ -121,7 +122,7 @@ func TestLlmAgent_WithSystemPrompt(t *testing.T) {
 func TestLlmAgent_WithEchoTool(t *testing.T) {
 	llm := newLLMFromEnv(t)
 
-	echoTool := tool.NewEchoTool()
+	echoTool := builtin.NewEchoTool()
 
 	a := New(LlmAgentConfig{
 		Name:        "test-agent",

@@ -32,7 +32,7 @@ type LlmAgent struct {
 func New(config LlmAgentConfig) agent.Agent {
 	tools := make(map[string]tool.Tool, len(config.Tools))
 	for _, t := range config.Tools {
-		tools[t.Name()] = t
+		tools[t.Definition().Name] = t
 	}
 	return &LlmAgent{
 		config: &config,
