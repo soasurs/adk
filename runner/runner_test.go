@@ -385,10 +385,86 @@ func (s *errSession) GetMessages(_ context.Context, _, _ int64) ([]*message.Mess
 func (s *errSession) ListMessages(_ context.Context) ([]*message.Message, error) {
 	return nil, errors.New("errSession")
 }
-func (s *errSession) ListCompactedMessages(_ context.Context) ([]*message.Message, error) {
-	return nil, errors.New("errSession")
-}
 func (s *errSession) DeleteMessage(_ context.Context, _ int64) error { return errors.New("errSession") }
-func (s *errSession) CompactMessages(_ context.Context, _ func(context.Context, []*message.Message) (*message.Message, error)) error {
+func (s *errSession) CompactMessages(_ context.Context, _ int64, _ *message.Message) error {
 	return errors.New("errSession")
+}
+
+// TestRunner_Run_WithCompaction verifies that compaction of memory session works
+// correctly: after CompactMessages, subsequent runner.Run calls receive only
+// the kept messages plus the summary, not the archived messages.
+func TestRunner_Run_WithCompaction(t *testing.T) {
+	// Create an agent that always responds with "ok" and includes usage data.
+	agentWithUsage := &mockAgent{
+		name:        "agent-with-usage",
+		description: "yields messages with usage",
+		runFunc: func(_ context.Context, msgs []model.Message) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				yield(&model.Event{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "ok",
+						Usage: &model.TokenUsage{
+							PromptTokens:     100,
+							CompletionTokens: 10,
+							TotalTokens:      110,
+						},
+					},
+					Partial: false,
+				}, nil)
+			}
+		},
+	}
+
+	const sessionID = int64(42)
+	svc := memorysession.NewMemorySessionService()
+	_, err := svc.CreateSession(context.Background(), sessionID)
+	require.NoError(t, err)
+
+	r, err := New(agentWithUsage, svc)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Run 4 turns to build up history.
+	for i := 0; i < 4; i++ {
+		_, err := collectRun(t, r, sessionID, "turn")
+		require.NoError(t, err)
+	}
+
+	// Check message count before compaction.
+	sess, err := svc.GetSession(ctx, sessionID)
+	require.NoError(t, err)
+	msgsBefore, err := sess.ListMessages(ctx)
+	require.NoError(t, err)
+	// 4 turns × (user + assistant) = 8 messages.
+	assert.Equal(t, 8, len(msgsBefore), "expected 8 messages before compaction")
+
+	// Compact: archive first 2 rounds (4 messages), keep last 2 rounds (4 messages).
+	// Find the splitMessageID: the 5th message (first message of the 3rd round).
+	splitMessageID := msgsBefore[4].MessageID
+	summaryMsg := &message.Message{
+		MessageID: 99999,
+		Role:      "system",
+		Content:   "summary of rounds 1-2",
+		CreatedAt: msgsBefore[0].CreatedAt,
+		UpdatedAt: msgsBefore[0].UpdatedAt,
+	}
+
+	err = sess.CompactMessages(ctx, splitMessageID, summaryMsg)
+	require.NoError(t, err)
+
+	// Check message count after compaction.
+	msgsAfter, err := sess.ListMessages(ctx)
+	require.NoError(t, err)
+	// kept (4) + summary (1) = 5 messages.
+	assert.Equal(t, 5, len(msgsAfter), "expected 5 messages after compaction")
+
+	// Run one more turn — agent should receive only the kept + summary messages.
+	_, err = collectRun(t, r, sessionID, "after compaction")
+	require.NoError(t, err)
+
+	// Agent's captured messages should be: 5 (kept + summary) + 1 (new user) = 6.
+	assert.Equal(t, 6, len(agentWithUsage.capturedMessages),
+		"agent should receive kept messages + summary + new user input")
 }

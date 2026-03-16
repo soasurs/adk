@@ -25,7 +25,9 @@ import (
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/model/openai"
 	"github.com/soasurs/adk/runner"
+	"github.com/soasurs/adk/session/compaction"
 	"github.com/soasurs/adk/session/memory"
+	"github.com/soasurs/adk/session/message"
 	"github.com/soasurs/adk/tool"
 	"github.com/soasurs/adk/tool/mcp"
 )
@@ -34,6 +36,7 @@ const (
 	exaMCPEndpoint = "https://mcp.exa.ai/mcp"
 	defaultModel   = "gpt-4o-mini"
 	sessionID      = 1001
+	sepWidth       = 52
 )
 
 // apiKeyTransport injects an API key header into every HTTP request.
@@ -48,6 +51,18 @@ func (t *apiKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.Header.Set(t.header, t.value)
 	return t.base.RoundTrip(clone)
 }
+
+// truncate shortens s to at most n runes, appending "…" if cut.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
+}
+
+// sep prints a horizontal separator line.
+func sep() { fmt.Println(strings.Repeat("─", sepWidth)) }
 
 func main() {
 	ctx := context.Background()
@@ -80,10 +95,12 @@ func main() {
 	}
 
 	toolSet := mcp.NewToolSet(transport)
+	fmt.Print("connecting to Exa MCP... ")
 	if err := toolSet.Connect(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "error: connect to Exa MCP: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\nerror: connect to Exa MCP: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("ok")
 	defer toolSet.Close()
 
 	tools, err := toolSet.Tools(ctx)
@@ -91,12 +108,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: list Exa MCP tools: %v\n", err)
 		os.Exit(1)
 	}
-
-	fmt.Printf("Loaded %d tool(s) from Exa MCP:\n", len(tools))
-	for _, t := range tools {
-		fmt.Printf("  • %s — %s\n", t.Definition().Name, t.Definition().Description)
-	}
-	fmt.Println()
 
 	// ── 3. LlmAgent ──────────────────────────────────────────────────────────
 	agent := llmagent.New(llmagent.Config{
@@ -123,11 +134,62 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── 5. Chat loop ───────────────────────────────────────────────────────────
-	fmt.Printf("Chat Agent ready (model: %s). Type your question, or \"exit\" to quit.\n\n", modelName)
+	// ── 5. Compaction ─────────────────────────────────────────────────────────
+	// Trigger compaction when prompt tokens exceed the threshold; keep the most
+	// recent conversation rounds verbatim and summarise older rounds via the LLM.
+	compactCfg := compaction.Config{
+		MaxTokens:        7000,
+		KeepRecentRounds: 1,
+	}
+	compactor, err := compaction.NewSlidingWindowCompactor(compactCfg,
+		func(ctx context.Context, msgs []*message.Message) (string, error) {
+			var sb strings.Builder
+			for _, m := range msgs {
+				sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, m.Content))
+			}
+			req := &model.LLMRequest{
+				Model: modelName,
+				Messages: []model.Message{
+					{
+						Role:    model.RoleUser,
+						Content: "Summarize the following conversation concisely:\n\n" + sb.String(),
+					},
+				},
+			}
+			for resp, err := range llm.GenerateContent(ctx, req, nil, false) {
+				if err != nil {
+					return "", fmt.Errorf("summarize: %w", err)
+				}
+				if !resp.Partial {
+					return resp.Message.Content, nil
+				}
+			}
+			return "", fmt.Errorf("summarize: no response")
+		},
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: create compactor: %v\n", err)
+		os.Exit(1)
+	}
+
+	// ── Header ────────────────────────────────────────────────────────────────
+	toolNames := make([]string, len(tools))
+	for i, t := range tools {
+		toolNames[i] = t.Definition().Name
+	}
+	sep()
+	fmt.Printf(" model   : %s\n", modelName)
+	fmt.Printf(" context : max %d tokens · keep last %d rounds\n",
+		compactCfg.MaxTokens, compactCfg.KeepRecentRounds)
+	fmt.Printf(" tools   : %s\n", strings.Join(toolNames, ", "))
+	sep()
+	fmt.Println(`Type a message, or "exit" to quit.`)
+	fmt.Println()
+
+	// ── 6. Chat loop ───────────────────────────────────────────────────────────
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("You: ")
+		fmt.Print("You › ")
 		if !scanner.Scan() {
 			break
 		}
@@ -140,33 +202,130 @@ func main() {
 			break
 		}
 
-		fmt.Print("Agent: ")
+		fmt.Println()
+
+		// onAgentLine: we have printed "Agent › " and are mid-line (no trailing newline yet).
+		// hadPartials: partial streaming events have already printed the content for this
+		//              LLM call, so the subsequent complete event should not print it again.
+		onAgentLine := false
+		hadPartials := false
+
 		for event, err := range r.Run(ctx, sessionID, input) {
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
+				if onAgentLine {
+					fmt.Println()
+					onAgentLine = false
+				}
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				break
 			}
+
 			if event.Partial {
-				// Stream partial content to stdout in real time.
+				if !onAgentLine {
+					fmt.Print("Agent › ")
+					onAgentLine = true
+				}
 				fmt.Print(event.Message.Content)
+				hadPartials = true
 				continue
 			}
+
 			// Complete event.
 			switch event.Message.Role {
 			case model.RoleAssistant:
 				if len(event.Message.ToolCalls) > 0 {
-					// Show which tools the agent is calling.
-					for _, tc := range event.Message.ToolCalls {
-						fmt.Printf("\n  [calling tool: %s]\n  Agent: ", tc.Name)
+					// Tool-call decision: end the current agent line and show each call.
+					if onAgentLine {
+						fmt.Println()
+						onAgentLine = false
 					}
-				} else if event.Message.Content != "" {
-					// Non-streaming: print the complete answer.
-					fmt.Println(event.Message.Content)
+					for _, tc := range event.Message.ToolCalls {
+						fmt.Printf("  → %s  %s\n", tc.Name, truncate(tc.Arguments, 60))
+					}
+					// Reset for the next LLM call that follows tool results.
+					hadPartials = false
+				} else if !hadPartials && event.Message.Content != "" {
+					// Non-streaming path: content was not yet printed via partials.
+					if !onAgentLine {
+						fmt.Print("Agent › ")
+						onAgentLine = true
+					}
+					fmt.Print(event.Message.Content)
 				}
+
 			case model.RoleTool:
-				// Tool results are processed silently; the agent will summarise them.
+				// Show a brief summary of the tool result, then reset for the next round.
+				fmt.Printf("  ← %d chars\n", len(event.Message.Content))
+				onAgentLine = false
+				hadPartials = false
 			}
 		}
+
+		if onAgentLine {
+			fmt.Println()
+		}
+		fmt.Println()
+
+		// ── Token stats ───────────────────────────────────────────────────────
+		if sess, err := sessionSvc.GetSession(ctx, sessionID); err == nil {
+			if msgs, err := sess.ListMessages(ctx); err == nil {
+				// Find the most recent prompt-token count for display.
+				var promptTokens, completionTokens int64
+				for i := len(msgs) - 1; i >= 0; i-- {
+					if msgs[i].PromptTokens > 0 || msgs[i].CompletionTokens > 0 {
+						promptTokens = msgs[i].PromptTokens
+						completionTokens = msgs[i].CompletionTokens
+						break
+					}
+				}
+				if promptTokens > 0 || completionTokens > 0 {
+					fmt.Printf("  tokens: prompt=%d  completion=%d  (threshold=%d)\n\n",
+						promptTokens, completionTokens, compactCfg.MaxTokens)
+				}
+
+				// ── Compaction check ──────────────────────────────────────────
+				if compaction.ShouldCompact(msgs, compactCfg) {
+					fmt.Print("compacting context... ")
+					splitID, summaryMsg, err := compactor(ctx, msgs)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warn: compaction failed: %v\n", err)
+					} else if summaryMsg != nil {
+						// Count archived vs kept messages.
+						splitIdx := len(msgs)
+						if splitID > 0 {
+							for i, m := range msgs {
+								if m.MessageID == splitID {
+									splitIdx = i
+									break
+								}
+							}
+						}
+						archivedCount := splitIdx
+						keptCount := len(msgs) - splitIdx
+
+						beforeCount := len(msgs)
+						if err := sess.CompactMessages(ctx, splitID, summaryMsg); err != nil {
+							fmt.Fprintf(os.Stderr, "warn: CompactMessages failed: %v\n", err)
+						} else {
+							// Verify compaction worked by re-reading messages.
+							afterMsgs, _ := sess.ListMessages(ctx)
+							afterCount := len(afterMsgs)
+
+							fmt.Println("done")
+							fmt.Printf("  prompt tokens : %d (threshold: %d)\n",
+								promptTokens, compactCfg.MaxTokens)
+							fmt.Printf("  messages      : %d → %d (archived %d, kept %d + summary)\n",
+								beforeCount, afterCount, archivedCount, keptCount)
+							fmt.Printf("  summary       : %s\n",
+								truncate(summaryMsg.Content, 100))
+							fmt.Println()
+						}
+					}
+				}
+			}
+		}
+
+		sep()
 		fmt.Println()
 	}
 

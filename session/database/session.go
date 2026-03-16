@@ -21,6 +21,9 @@ const (
 	listCompactedMessagesExpr = "SELECT * FROM messages WHERE compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC"
 	// compactActiveMessagesExpr sets compacted_at on all currently active messages.
 	compactActiveMessagesExpr = "UPDATE messages SET compacted_at = $1 WHERE deleted_at = 0 AND compacted_at = 0"
+	// compactMessagesBeforeExpr archives only messages whose message_id is less than
+	// the given split point, leaving messages at or after it active.
+	compactMessagesBeforeExpr = "UPDATE messages SET compacted_at = $1 WHERE deleted_at = 0 AND compacted_at = 0 AND message_id < $2"
 )
 
 type databaseSession struct {
@@ -94,19 +97,7 @@ func (s *databaseSession) ListCompactedMessages(ctx context.Context) ([]*message
 	return messages, nil
 }
 
-func (s *databaseSession) CompactMessages(ctx context.Context, compactor func(context.Context, []*message.Message) (*message.Message, error)) error {
-	// Fetch all currently active messages to pass to the compactor.
-	active := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &active, listMessagesExpr)
-	if err != nil {
-		return err
-	}
-
-	summary, err := compactor(ctx, active)
-	if err != nil {
-		return err
-	}
-
+func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error {
 	now := time.Now()
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
@@ -115,27 +106,33 @@ func (s *databaseSession) CompactMessages(ctx context.Context, compactor func(co
 	}
 	defer tx.Rollback()
 
-	// Archive active messages by setting compacted_at.
-	_, err = tx.ExecContext(ctx, compactActiveMessagesExpr, now.UnixMilli())
+	// Archive messages before the split point. When splitMessageID is 0, archive all.
+	if splitMessageID > 0 {
+		_, err = tx.ExecContext(ctx, compactMessagesBeforeExpr, now.UnixMilli(), splitMessageID)
+	} else {
+		_, err = tx.ExecContext(ctx, compactActiveMessagesExpr, now.UnixMilli())
+	}
 	if err != nil {
 		return err
 	}
 
-	// Insert the summary as a new active message.
+	// Insert the summary as a new active message. The listMessagesExpr ordering
+	// guarantees that system-role messages are returned before conversation messages,
+	// so created_at does not need to precede the kept messages.
 	_, err = tx.ExecContext(
 		ctx,
 		createMessageExpr,
-		summary.MessageID,
-		summary.Role,
-		summary.Name,
-		summary.Content,
-		summary.ReasoningContent,
-		summary.ToolCalls,
-		summary.ToolCallID,
-		summary.PromptTokens,
-		summary.CompletionTokens,
-		summary.TotalTokens,
-		summary.CreatedAt,
+		summaryMsg.MessageID,
+		summaryMsg.Role,
+		summaryMsg.Name,
+		summaryMsg.Content,
+		summaryMsg.ReasoningContent,
+		summaryMsg.ToolCalls,
+		summaryMsg.ToolCallID,
+		summaryMsg.PromptTokens,
+		summaryMsg.CompletionTokens,
+		summaryMsg.TotalTokens,
+		summaryMsg.CreatedAt,
 	)
 	if err != nil {
 		return err

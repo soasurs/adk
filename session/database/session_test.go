@@ -182,26 +182,47 @@ func TestDatabaseSession_CompactMessages(t *testing.T) {
 	require.NoError(t, session.CreateMessage(ctx, msg4))
 
 	summaryMsg := newTestMessage(100, "summary")
+	summaryMsg.Role = "system"
 
-	err = session.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-		assert.Len(t, msgs, 4)
-		return summaryMsg, nil
-	})
+	// Archive msg1 and msg2; keep msg3 and msg4 as structured messages.
+	err = session.CompactMessages(ctx, 3, summaryMsg)
 	assert.NoError(t, err)
 
-	// Active history: only the summary.
-	msgs, err := session.GetMessages(ctx, 10, 0)
+	// Active history: kept messages + summary (ordered by created_at ASC).
+	msgs, err := session.ListMessages(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, msgs, 3)
+	assert.Equal(t, int64(3), msgs[0].MessageID)
+	assert.Equal(t, int64(4), msgs[1].MessageID)
+	assert.Equal(t, int64(100), msgs[2].MessageID)
+
+}
+
+func TestDatabaseSession_CompactMessages_ArchiveAll(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	snowflaker, err := snowflake.New()
+	require.NoError(t, err)
+	sessionID := snowflaker.Generate().Int64()
+
+	ctx := context.Background()
+	session, err := NewDatabaseSession(ctx, db, sessionID)
+	require.NoError(t, err)
+
+	require.NoError(t, session.CreateMessage(ctx, newTestMessage(1, "hello")))
+	require.NoError(t, session.CreateMessage(ctx, newTestMessage(2, "hi")))
+
+	summaryMsg := newTestMessage(100, "summary")
+
+	// splitMessageID=0 archives all.
+	err = session.CompactMessages(ctx, 0, summaryMsg)
+	assert.NoError(t, err)
+
+	msgs, err := session.ListMessages(ctx)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, int64(100), msgs[0].MessageID)
-
-	// Compacted messages are accessible.
-	compacted, err := session.ListCompactedMessages(ctx)
-	assert.NoError(t, err)
-	assert.Len(t, compacted, 4)
-	for _, m := range compacted {
-		assert.Greater(t, m.CompactedAt, int64(0))
-	}
 }
 
 func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
@@ -218,10 +239,8 @@ func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
 
 	summaryMsg := newTestMessage(100, "summary")
 
-	err = session.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-		assert.Len(t, msgs, 0)
-		return summaryMsg, nil
-	})
+	// Compacting an empty session (splitMessageID=0) just inserts the summary.
+	err = session.CompactMessages(ctx, 0, summaryMsg)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetMessages(ctx, 10, 0)
@@ -229,40 +248,6 @@ func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, int64(100), msgs[0].MessageID)
 
-	// No original messages to compact.
-	compacted, err := session.ListCompactedMessages(ctx)
-	assert.NoError(t, err)
-	assert.Empty(t, compacted)
-}
-
-func TestDatabaseSession_CompactMessages_CallbackError(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
-
-	ctx := context.Background()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
-	require.NoError(t, err)
-
-	msg := newTestMessage(1, "hello")
-	require.NoError(t, session.CreateMessage(ctx, msg))
-
-	err = session.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-		return nil, assert.AnError
-	})
-	assert.Error(t, err)
-
-	msgs, err := session.GetMessages(ctx, 10, 0)
-	assert.NoError(t, err)
-	assert.Len(t, msgs, 1)
-
-	// Failed compaction must not archive any messages.
-	compacted, err := session.ListCompactedMessages(ctx)
-	assert.NoError(t, err)
-	assert.Empty(t, compacted)
 }
 
 func TestDatabaseSession_ListMessages(t *testing.T) {
@@ -286,25 +271,6 @@ func TestDatabaseSession_ListMessages(t *testing.T) {
 	assert.Len(t, msgs, 5)
 }
 
-func TestDatabaseSession_ListCompactedMessages_BeforeCompaction(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
-
-	ctx := context.Background()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
-	require.NoError(t, err)
-
-	require.NoError(t, session.CreateMessage(ctx, newTestMessage(1, "hello")))
-
-	compacted, err := session.ListCompactedMessages(ctx)
-	assert.NoError(t, err)
-	assert.Empty(t, compacted)
-}
-
 func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -320,20 +286,14 @@ func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {
 	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(1, "a")))
 	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(2, "b")))
 
-	// First compaction.
-	err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-		return newTestMessage(10, "summary1"), nil
-	})
+	// First compaction: archive all, insert summary1.
+	err = sess.CompactMessages(ctx, 0, newTestMessage(10, "summary1"))
 	require.NoError(t, err)
 
 	require.NoError(t, sess.CreateMessage(ctx, newTestMessage(3, "c")))
 
-	// Second compaction.
-	err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-		// Should receive summary1 + c.
-		assert.Len(t, msgs, 2)
-		return newTestMessage(20, "summary2"), nil
-	})
+	// Second compaction: archive summary1+c, insert summary2.
+	err = sess.CompactMessages(ctx, 0, newTestMessage(20, "summary2"))
 	require.NoError(t, err)
 
 	// Active: only summary2.
@@ -341,11 +301,6 @@ func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, active, 1)
 	assert.Equal(t, int64(20), active[0].MessageID)
-
-	// Compacted: a, b (round 1) + summary1, c (round 2) = 4 messages.
-	compacted, err := sess.ListCompactedMessages(ctx)
-	assert.NoError(t, err)
-	assert.Len(t, compacted, 4)
 }
 
 func TestDatabaseSession_GetSessionID(t *testing.T) {

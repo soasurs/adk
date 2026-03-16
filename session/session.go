@@ -15,9 +15,11 @@ type Session interface {
 	// ListMessages returns all active (non-compacted, non-deleted) messages sorted by
 	// created_at ASC. Use this instead of GetMessages when the full history is needed.
 	ListMessages(ctx context.Context) ([]*message.Message, error)
-	// ListCompactedMessages returns all messages that were archived by a prior
-	// CompactMessages call, sorted by created_at ASC.
-	ListCompactedMessages(ctx context.Context) ([]*message.Message, error)
 	DeleteMessage(ctx context.Context, messageID int64) error
-	CompactMessages(ctx context.Context, compactor func(context.Context, []*message.Message) (*message.Message, error)) error
+	// CompactMessages archives all active messages that precede splitMessageID and
+	// inserts summaryMsg as the new first active message. If splitMessageID is 0,
+	// all currently active messages are archived. The caller is responsible for
+	// constructing both the split point and the summary message (e.g. via the
+	// compaction package).
+	CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error
 }

@@ -76,6 +76,12 @@ func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequ
 			Messages: messages,
 			Tools:    tools,
 		}
+		if stream {
+			// Request usage data in streaming mode; it is delivered in the final chunk.
+			params.StreamOptions = goopenai.ChatCompletionStreamOptionsParam{
+				IncludeUsage: param.NewOpt(true),
+			}
+		}
 
 		var reqOpts []option.RequestOption
 		if cfg != nil {
@@ -122,9 +128,17 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 		var contentBuf strings.Builder
 		toolCallAcc := make(map[int64]*model.ToolCall) // index → accumulated tool call
 		var finishReasonStr string
+		var streamUsage *goopenai.CompletionUsage
 
 		for s.Next() {
 			chunk := s.Current()
+
+			// The last usage-bearing chunk may have no choices; capture usage first.
+			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+				u := chunk.Usage
+				streamUsage = &u
+			}
+
 			if len(chunk.Choices) == 0 {
 				continue
 			}
@@ -185,10 +199,19 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			}
 		}
 
+		var usage *model.TokenUsage
+		if streamUsage != nil {
+			usage = &model.TokenUsage{
+				PromptTokens:     streamUsage.PromptTokens,
+				CompletionTokens: streamUsage.CompletionTokens,
+				TotalTokens:      streamUsage.TotalTokens,
+			}
+		}
 		yield(&model.LLMResponse{
 			Message:      msg,
 			FinishReason: convertFinishReason(finishReasonStr),
 			TurnComplete: true,
+			Usage:        usage,
 		}, nil)
 	}
 }
