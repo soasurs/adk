@@ -1,4 +1,4 @@
-package parallel
+package parallelagent
 
 import (
 	"context"

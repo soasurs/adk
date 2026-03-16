@@ -1,4 +1,4 @@
-package sequential_test
+package sequentialagent
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/soasurs/adk/agent"
 	"github.com/soasurs/adk/agent/llmagent"
-	"github.com/soasurs/adk/agent/sequential"
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/model/openai"
 )
@@ -88,7 +87,7 @@ func TestSequentialAgent_Name(t *testing.T) {
 		Description: "First agent",
 		Model:       &mockLLM{name: "m1"},
 	})
-	sa := sequential.New(sequential.Config{Name: "my-pipeline", Description: "a test pipeline", Agents: []agent.Agent{agent1}})
+	sa := New(Config{Name: "my-pipeline", Description: "a test pipeline", Agents: []agent.Agent{agent1}})
 	assert.Equal(t, "my-pipeline", sa.Name())
 	assert.Equal(t, "a test pipeline", sa.Description())
 }
@@ -96,7 +95,7 @@ func TestSequentialAgent_Name(t *testing.T) {
 // TestSequentialAgent_PanicOnEmpty verifies that New panics with no agents.
 func TestSequentialAgent_PanicOnEmpty(t *testing.T) {
 	assert.Panics(t, func() {
-		sequential.New(sequential.Config{Name: "empty", Description: "no agents"})
+		New(Config{Name: "empty", Description: "no agents"})
 	})
 }
 
@@ -113,7 +112,7 @@ func TestSequentialAgent_SingleAgent(t *testing.T) {
 		},
 	}
 	a := llmagent.New(llmagent.Config{Name: "a", Description: "d", Model: llm})
-	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
+	sa := New(Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
 
 	var msgs []model.Message
 	for event, err := range sa.Run(context.Background(), []model.Message{
@@ -159,7 +158,7 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
+	sa := New(Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
 	for event, err := range sa.Run(context.Background(), []model.Message{
@@ -214,7 +213,7 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: capturingLLM})
-	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
+	sa := New(Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
 	for event, err := range sa.Run(context.Background(), []model.Message{
@@ -274,7 +273,7 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
+	sa := New(Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
 
 	var msgs []model.Message
 	for event, err := range sa.Run(context.Background(), []model.Message{
@@ -310,7 +309,7 @@ func TestSequentialAgent_ErrorPropagation(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := sequential.New(sequential.Config{Name: "pipeline", Description: "error propagation test", Agents: []agent.Agent{a1, a2}})
+	sa := New(Config{Name: "pipeline", Description: "error propagation test", Agents: []agent.Agent{a1, a2}})
 
 	var gotErr error
 	for _, err := range sa.Run(context.Background(), []model.Message{
@@ -363,7 +362,7 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 		Instruction: "You are a translator. Translate the most recent assistant message into Chinese. Reply with only the translation.",
 	})
 
-	pipeline := sequential.New(sequential.Config{
+	pipeline := New(Config{
 		Name:        "summarise-then-translate",
 		Description: "Summarises text and then translates the summary into Chinese.",
 		Agents:      []agent.Agent{summariser, translator},

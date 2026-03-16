@@ -1,4 +1,4 @@
-package mcp_test
+package mcp
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/soasurs/adk/tool"
-	"github.com/soasurs/adk/tool/mcp"
 )
 
 const exaMCPEndpoint = "https://mcp.exa.ai/mcp"
@@ -53,7 +52,7 @@ func TestToolSet_Exa(t *testing.T) {
 		transport.HTTPClient = newExaHTTPClient(apiKey)
 	}
 
-	ts := mcp.NewToolSet(transport)
+	ts := NewToolSet(transport)
 	require.NoError(t, ts.Connect(ctx))
 	defer ts.Close()
 
