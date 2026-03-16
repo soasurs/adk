@@ -2,6 +2,7 @@ package sequentialagent
 
 import (
 	"context"
+	"fmt"
 	"iter"
 
 	"github.com/soasurs/adk/agent"
@@ -33,11 +34,11 @@ type SequentialAgent struct {
 
 // New creates a SequentialAgent from the given Config.
 // At least one agent must be provided.
-func New(cfg Config) agent.Agent {
+func New(cfg Config) (agent.Agent, error) {
 	if len(cfg.Agents) == 0 {
-		panic("sequential: at least one agent is required")
+		return nil, fmt.Errorf("sequential: at least one agent is required")
 	}
-	return &SequentialAgent{config: cfg}
+	return &SequentialAgent{config: cfg}, nil
 }
 
 func (s *SequentialAgent) Name() string        { return s.config.Name }

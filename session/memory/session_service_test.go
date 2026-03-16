@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,7 +8,7 @@ import (
 
 func TestMemorySessionService_CreateSession(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -19,7 +18,7 @@ func TestMemorySessionService_CreateSession(t *testing.T) {
 
 func TestMemorySessionService_CreateSession_Multiple(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s1, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -34,7 +33,7 @@ func TestMemorySessionService_CreateSession_Multiple(t *testing.T) {
 
 func TestMemorySessionService_GetSession(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -47,7 +46,7 @@ func TestMemorySessionService_GetSession(t *testing.T) {
 
 func TestMemorySessionService_GetSession_NotFound(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s, err := service.GetSession(ctx, 999)
 	assert.NoError(t, err)
@@ -56,7 +55,7 @@ func TestMemorySessionService_GetSession_NotFound(t *testing.T) {
 
 func TestMemorySessionService_DeleteSession(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -71,7 +70,7 @@ func TestMemorySessionService_DeleteSession(t *testing.T) {
 
 func TestMemorySessionService_DeleteSession_NotFound(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := service.DeleteSession(ctx, 999)
 	assert.NoError(t, err)
@@ -79,7 +78,7 @@ func TestMemorySessionService_DeleteSession_NotFound(t *testing.T) {
 
 func TestMemorySessionService_FullWorkflow(t *testing.T) {
 	service := NewMemorySessionService()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s1, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)

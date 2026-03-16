@@ -32,10 +32,10 @@ type taskRequest struct {
 // When invoked, the tool runs the agent with a single user message containing
 // the task, collects its final assistant text response, and returns it as the
 // tool result string.
-func New(a agent.Agent) tool.Tool {
+func New(a agent.Agent) (tool.Tool, error) {
 	schema, err := jsonschema.ForType(reflect.TypeFor[taskRequest](), &jsonschema.ForOptions{})
 	if err != nil {
-		panic(fmt.Sprintf("agentool: build input schema for %q: %v", a.Name(), err))
+		return nil, fmt.Errorf("agentool: build input schema for %q: %w", a.Name(), err)
 	}
 	return &agentTool{
 		a: a,
@@ -44,7 +44,7 @@ func New(a agent.Agent) tool.Tool {
 			Description: a.Description(),
 			InputSchema: schema,
 		},
-	}
+	}, nil
 }
 
 // Definition returns the tool metadata used by the LLM to understand and call

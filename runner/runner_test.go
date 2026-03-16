@@ -70,7 +70,7 @@ func errorAgent(err error) *mockAgent {
 func collectRun(t *testing.T, r *Runner, sessionID int64, input string) ([]model.Message, error) {
 	t.Helper()
 	var msgs []model.Message
-	for event, err := range r.Run(context.Background(), sessionID, input) {
+	for event, err := range r.Run(t.Context(), sessionID, input) {
 		if err != nil {
 			return msgs, err
 		}
@@ -91,7 +91,7 @@ func newRunnerWithSession(t *testing.T, a *mockAgent) (*Runner, int64) {
 	t.Helper()
 	const sessionID = int64(1)
 	svc := memorysession.NewMemorySessionService()
-	_, err := svc.CreateSession(context.Background(), sessionID)
+	_, err := svc.CreateSession(t.Context(), sessionID)
 	require.NoError(t, err)
 
 	r, err := New(a, svc)
@@ -191,11 +191,11 @@ func TestRunner_Run_MessagesPersistedToSession(t *testing.T) {
 	require.NoError(t, err)
 
 	// Retrieve raw session to inspect stored messages.
-	sess, err := r.session.GetSession(context.Background(), sessionID)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	stored, err := sess.GetMessages(context.Background(), 100, 0)
+	stored, err := sess.GetMessages(t.Context(), 100, 0)
 	require.NoError(t, err)
 	// Expect: user + assistant.
 	require.Len(t, stored, 2)
@@ -255,7 +255,7 @@ func TestRunner_Run_EarlyBreak(t *testing.T) {
 	r, sessionID := newRunnerWithSession(t, a)
 
 	var collected []model.Message
-	for event, err := range r.Run(context.Background(), sessionID, "go") {
+	for event, err := range r.Run(t.Context(), sessionID, "go") {
 		require.NoError(t, err)
 		if !event.Partial {
 			collected = append(collected, event.Message)
@@ -278,9 +278,9 @@ func TestRunner_Run_NoAgentMessages(t *testing.T) {
 	assert.Empty(t, msgs)
 
 	// User message must still be persisted.
-	sess, err := r.session.GetSession(context.Background(), sessionID)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
-	stored, err := sess.GetMessages(context.Background(), 100, 0)
+	stored, err := sess.GetMessages(t.Context(), 100, 0)
 	require.NoError(t, err)
 	require.Len(t, stored, 1)
 	assert.Equal(t, "silent", stored[0].Content)
@@ -316,7 +316,7 @@ func TestRunner_Run_PartialEventsForwarded(t *testing.T) {
 	r, sessionID := newRunnerWithSession(t, a)
 
 	var events []*model.Event
-	for event, err := range r.Run(context.Background(), sessionID, "hi") {
+	for event, err := range r.Run(t.Context(), sessionID, "hi") {
 		require.NoError(t, err)
 		events = append(events, event)
 	}
@@ -342,9 +342,9 @@ func TestRunner_Run_PartialEventsNotPersisted(t *testing.T) {
 	_, err := collectRun(t, r, sessionID, "stream test")
 	require.NoError(t, err)
 
-	sess, err := r.session.GetSession(context.Background(), sessionID)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
-	stored, err := sess.GetMessages(context.Background(), 100, 0)
+	stored, err := sess.GetMessages(t.Context(), 100, 0)
 	require.NoError(t, err)
 
 	// Only user + complete assistant must be stored — the 2 partial chunks must NOT be.
@@ -418,13 +418,13 @@ func TestRunner_Run_WithCompaction(t *testing.T) {
 
 	const sessionID = int64(42)
 	svc := memorysession.NewMemorySessionService()
-	_, err := svc.CreateSession(context.Background(), sessionID)
+	_, err := svc.CreateSession(t.Context(), sessionID)
 	require.NoError(t, err)
 
 	r, err := New(agentWithUsage, svc)
 	require.NoError(t, err)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Run 4 turns to build up history.
 	for i := 0; i < 4; i++ {

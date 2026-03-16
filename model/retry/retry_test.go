@@ -140,7 +140,7 @@ func TestSeq2_SuccessOnFirstAttempt(t *testing.T) {
 		return okSeq("pong")
 	}
 	var got string
-	for v, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for v, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestSeq2_RetriesOnRetryableError(t *testing.T) {
 	fn := makeAttemptFunc(3) // fails for calls 1–2, succeeds on call 3
 
 	var got string
-	for v, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for v, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -176,7 +176,7 @@ func TestSeq2_ExhaustsAttemptsAndPropagatesError(t *testing.T) {
 		return errSeq(retryableErr)
 	}
 	var gotErr error
-	for _, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for _, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		gotErr = err
 	}
 	if calls != 3 {
@@ -194,7 +194,7 @@ func TestSeq2_DoesNotRetryNonRetryableError(t *testing.T) {
 		return errSeq(nonRetryableErr)
 	}
 	var gotErr error
-	for _, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for _, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		gotErr = err
 	}
 	if calls != 1 {
@@ -212,7 +212,7 @@ func TestSeq2_DoesNotRetryContextCanceled(t *testing.T) {
 		return errSeq(context.Canceled)
 	}
 	var gotErr error
-	for _, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for _, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		gotErr = err
 	}
 	if calls != 1 {
@@ -233,7 +233,7 @@ func TestSeq2_StreamingRetryBeforePartial(t *testing.T) {
 		return okSeq("streamed")
 	}
 	var got string
-	for v, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, isPartialString) {
+	for v, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, isPartialString) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -256,7 +256,7 @@ func TestSeq2_StreamingNoRetryAfterPartial(t *testing.T) {
 	}
 	var partials int
 	var gotErr error
-	for v, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, isPartialString) {
+	for v, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, isPartialString) {
 		if err != nil {
 			gotErr = err
 			break
@@ -283,7 +283,7 @@ func TestSeq2_MaxAttemptsOne_CallsFnDirectly(t *testing.T) {
 		return okSeq("direct")
 	}
 	cfg := Config{MaxAttempts: 1}
-	for _, err := range Seq2(context.Background(), cfg, fn, nil) {
+	for _, err := range Seq2(t.Context(), cfg, fn, nil) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -306,7 +306,7 @@ func TestSeq2_ContextCancelledDuringBackoff(t *testing.T) {
 		Multiplier:   2.0,
 		Jitter:       false,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		cancel()
@@ -334,7 +334,7 @@ func TestSeq2_StatusCodeInterface_429(t *testing.T) {
 		return okSeq("ok")
 	}
 	var got string
-	for v, err := range Seq2(context.Background(), zeroDelayConfig(3), fn, nil) {
+	for v, err := range Seq2(t.Context(), zeroDelayConfig(3), fn, nil) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -206,7 +206,8 @@ func TestConvertTools_Empty(t *testing.T) {
 }
 
 func TestConvertTools_EchoTool(t *testing.T) {
-	echo := builtin.NewEchoTool()
+	echo, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 	result, err := convertTools([]tool.Tool{echo})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -223,7 +224,7 @@ func TestConvertTools_EchoTool(t *testing.T) {
 func TestChatCompletion_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
@@ -240,7 +241,7 @@ func TestChatCompletion_Generate_Text(t *testing.T) {
 func TestChatCompletion_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
@@ -257,7 +258,8 @@ func TestChatCompletion_Generate_WithSystemPrompt(t *testing.T) {
 func TestChatCompletion_Generate_WithTool(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	echo := builtin.NewEchoTool()
+	echo, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 	tools := []tool.Tool{echo}
 
 	messages := []model.Message{
@@ -267,7 +269,7 @@ func TestChatCompletion_Generate_WithTool(t *testing.T) {
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
-		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
@@ -288,7 +290,7 @@ func TestChatCompletion_Generate_WithTool(t *testing.T) {
 
 		for _, tc := range resp.Message.ToolCalls {
 			t.Logf("[turn %d] tool_call: %s args=%s", i+1, tc.Name, tc.Arguments)
-			result, err := echo.Run(context.Background(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
 			require.NoError(t, err)
 			t.Logf("[turn %d] tool_result: %s", i+1, result)
 			messages = append(messages, model.Message{
@@ -311,7 +313,7 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 		Temperature: 0.2,
 	}
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
@@ -330,7 +332,7 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
 	llm := newReasoningClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
@@ -353,7 +355,7 @@ func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
 func TestChatCompletion_Generate_EnableThinkingFalse(t *testing.T) {
 	llm := newReasoningClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13?"},

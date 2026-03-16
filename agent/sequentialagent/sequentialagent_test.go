@@ -87,16 +87,16 @@ func TestSequentialAgent_Name(t *testing.T) {
 		Description: "First agent",
 		Model:       &mockLLM{name: "m1"},
 	})
-	sa := New(Config{Name: "my-pipeline", Description: "a test pipeline", Agents: []agent.Agent{agent1}})
+	sa, err := New(Config{Name: "my-pipeline", Description: "a test pipeline", Agents: []agent.Agent{agent1}})
+	assert.Nil(t, err)
 	assert.Equal(t, "my-pipeline", sa.Name())
 	assert.Equal(t, "a test pipeline", sa.Description())
 }
 
-// TestSequentialAgent_PanicOnEmpty verifies that New panics with no agents.
+// TestSequentialAgent_ErrorOnEmpty verifies that New returns an error with no agents.
 func TestSequentialAgent_PanicOnEmpty(t *testing.T) {
-	assert.Panics(t, func() {
-		New(Config{Name: "empty", Description: "no agents"})
-	})
+	_, err := New(Config{Name: "empty", Description: "no agents"})
+	assert.Error(t, err)
 }
 
 // TestSequentialAgent_SingleAgent verifies that wrapping a single agent in a
@@ -112,10 +112,11 @@ func TestSequentialAgent_SingleAgent(t *testing.T) {
 		},
 	}
 	a := llmagent.New(llmagent.Config{Name: "a", Description: "d", Model: llm})
-	sa := New(Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
+	sa, err := New(Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Hi"},
 	}) {
 		require.NoError(t, err)
@@ -158,10 +159,11 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := New(Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
+	sa, err := New(Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "ping"},
 	}) {
 		require.NoError(t, err)
@@ -213,10 +215,11 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: capturingLLM})
-	sa := New(Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
+	sa, err := New(Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "start"},
 	}) {
 		require.NoError(t, err)
@@ -273,10 +276,11 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := New(Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
+	sa, err := New(Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range sa.Run(context.Background(), []model.Message{
+	for event, err := range sa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
@@ -309,10 +313,11 @@ func TestSequentialAgent_ErrorPropagation(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	sa := New(Config{Name: "pipeline", Description: "error propagation test", Agents: []agent.Agent{a1, a2}})
+	sa, err := New(Config{Name: "pipeline", Description: "error propagation test", Agents: []agent.Agent{a1, a2}})
+	assert.Nil(t, err)
 
 	var gotErr error
-	for _, err := range sa.Run(context.Background(), []model.Message{
+	for _, err := range sa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		if err != nil {
@@ -362,11 +367,12 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 		Instruction: "You are a translator. Translate the most recent assistant message into Chinese. Reply with only the translation.",
 	})
 
-	pipeline := New(Config{
+	pipeline, err := New(Config{
 		Name:        "summarise-then-translate",
 		Description: "Summarises text and then translates the summary into Chinese.",
 		Agents:      []agent.Agent{summariser, translator},
 	})
+	assert.Nil(t, err)
 
 	input := []model.Message{
 		{Role: model.RoleUser, Content: "Go is an open-source programming language designed for simplicity, reliability, and efficiency, created at Google."},
@@ -377,7 +383,7 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 	t.Log("=== output ===")
 
 	// Use a timeout context to prevent indefinite hangs on slow API responses.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	var msgs []model.Message

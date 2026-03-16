@@ -136,7 +136,7 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([
 	}
 	t.Log("  --- output ---")
 	var collected []model.Message
-	for event, err := range agent.Run(context.Background(), messages) {
+	for event, err := range agent.Run(t.Context(), messages) {
 		if err != nil {
 			return collected, err
 		}
@@ -203,7 +203,8 @@ func TestLlmAgent_WithInstruction(t *testing.T) {
 func TestLlmAgent_WithEchoTool(t *testing.T) {
 	llm := newLLMFromEnv(t)
 
-	echoTool := builtin.NewEchoTool()
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 
 	a := New(Config{
 		Name:        "test-agent",
@@ -291,7 +292,7 @@ func TestLlmAgent_Streaming_Integration(t *testing.T) {
 	var partialEvents []*model.Event
 	var completeEvents []*model.Event
 
-	for event, err := range a.Run(context.Background(), []model.Message{
+	for event, err := range a.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Count from 1 to 5, one number per line."},
 	}) {
 		require.NoError(t, err)
@@ -361,7 +362,8 @@ func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
 // TestLlmAgent_Reasoning_PassThrough_WithToolCall verifies that ReasoningContent
 // on an intermediate assistant tool-call message is also correctly passed through.
 func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
-	echoTool := builtin.NewEchoTool()
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 
 	mock := &mockLLM{
 		name: "mock-reasoning-tool",
@@ -475,7 +477,7 @@ func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
 	}).(*LlmAgent)
 
 	var events []*model.Event
-	for event, err := range a.Run(context.Background(), []model.Message{
+	for event, err := range a.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Say hello"},
 	}) {
 		require.NoError(t, err)
@@ -503,7 +505,8 @@ func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
 // loop: partial events are forwarded for each LLM call, tool results are
 // always emitted as complete events, and the sequence order is correct.
 func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
-	echoTool := builtin.NewEchoTool()
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 
 	llm := &streamingMockLLM{
 		name: "streaming-tool-mock",
@@ -540,7 +543,7 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 	}).(*LlmAgent)
 
 	var events []*model.Event
-	for event, err := range a.Run(context.Background(), []model.Message{
+	for event, err := range a.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Echo streaming"},
 	}) {
 		require.NoError(t, err)

@@ -90,14 +90,14 @@ type ParallelAgent struct {
 // New creates a ParallelAgent from the given Config.
 // Config.Agents must contain at least one agent.
 // If Config.MergeFunc is nil, DefaultMergeFunc is used.
-func New(cfg Config) agent.Agent {
+func New(cfg Config) (agent.Agent, error) {
 	if len(cfg.Agents) == 0 {
-		panic("parallel: at least one agent is required")
+		return nil, fmt.Errorf("parallel: at least one agent is required")
 	}
 	if cfg.MergeFunc == nil {
 		cfg.MergeFunc = DefaultMergeFunc
 	}
-	return &ParallelAgent{config: cfg}
+	return &ParallelAgent{config: cfg}, nil
 }
 
 func (p *ParallelAgent) Name() string        { return p.config.Name }

@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +14,7 @@ func TestDatabaseSessionService_CreateSession(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -28,7 +27,7 @@ func TestDatabaseSessionService_CreateSession_Multiple(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s1, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -46,7 +45,7 @@ func TestDatabaseSessionService_GetSession(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -62,7 +61,7 @@ func TestDatabaseSessionService_GetSession_NotFound(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s, err := service.GetSession(ctx, 999)
 	assert.NoError(t, err)
@@ -74,7 +73,7 @@ func TestDatabaseSessionService_DeleteSession(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -92,7 +91,7 @@ func TestDatabaseSessionService_DeleteSession_NotFound(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := service.DeleteSession(ctx, 999)
 	assert.NoError(t, err)
@@ -103,7 +102,7 @@ func TestDatabaseSessionService_FullWorkflow(t *testing.T) {
 	defer db.Close()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s1, err := service.CreateSession(ctx, 1)
 	assert.NoError(t, err)
@@ -141,7 +140,7 @@ func TestDatabaseSessionService_WithSnowflakeID(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	service := NewDatabaseSessionService(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	s, err := service.CreateSession(ctx, sessionID)
 	assert.NoError(t, err)

@@ -108,16 +108,16 @@ func logMessage(t *testing.T, idx int, m model.Message) {
 // TestParallelAgent_Name verifies that Name and Description are forwarded.
 func TestParallelAgent_Name(t *testing.T) {
 	a1 := llmagent.New(llmagent.Config{Name: "a1", Description: "first", Model: &mockLLM{name: "m1"}})
-	pa := New(Config{Name: "my-fanout", Description: "a test fanout", Agents: []agent.Agent{a1}})
+	pa, err := New(Config{Name: "my-fanout", Description: "a test fanout", Agents: []agent.Agent{a1}})
+	assert.Nil(t, err)
 	assert.Equal(t, "my-fanout", pa.Name())
 	assert.Equal(t, "a test fanout", pa.Description())
 }
 
-// TestParallelAgent_PanicOnEmpty verifies that New panics with no agents.
+// TestParallelAgent_ErrorOnEmpty verifies that New returns an error with no agents.
 func TestParallelAgent_PanicOnEmpty(t *testing.T) {
-	assert.Panics(t, func() {
-		New(Config{Name: "empty", Description: "no agents"})
-	})
+	_, err := New(Config{Name: "empty", Description: "no agents"})
+	assert.Error(t, err)
 }
 
 // TestParallelAgent_SingleAgent verifies that wrapping a single agent yields
@@ -134,10 +134,11 @@ func TestParallelAgent_SingleAgent(t *testing.T) {
 		},
 	}
 	a := llmagent.New(llmagent.Config{Name: "solo", Description: "d", Model: llm})
-	pa := New(Config{Name: "fanout", Description: "single-agent fanout", Agents: []agent.Agent{a}})
+	pa, err := New(Config{Name: "fanout", Description: "single-agent fanout", Agents: []agent.Agent{a}})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Hi"},
 	}) {
 		require.NoError(t, err)
@@ -175,14 +176,15 @@ func TestParallelAgent_TwoAgents_Merged(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "two-agent fanout",
 		Agents:      []agent.Agent{a1, a2},
 	})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
@@ -219,11 +221,12 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "parallelism test",
 		Agents:      []agent.Agent{a1, a2},
 	})
+	assert.Nil(t, err)
 
 	// Run the parallel agent in a background goroutine.
 	var collectedMsgs []model.Message
@@ -231,7 +234,7 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for event, err := range pa.Run(context.Background(), []model.Message{
+		for event, err := range pa.Run(t.Context(), []model.Message{
 			{Role: model.RoleUser, Content: "go"},
 		}) {
 			if err != nil {
@@ -291,14 +294,14 @@ func TestParallelAgent_EarlyStop(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "early-stop test",
 		Agents:      []agent.Agent{a1, a2},
 	})
-
+	assert.Nil(t, err)
 	var msgs []model.Message
-	for event, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
@@ -329,14 +332,15 @@ func TestParallelAgent_ErrorPropagation(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "error propagation test",
 		Agents:      []agent.Agent{a1, a2},
 	})
+	assert.Nil(t, err)
 
 	var gotErr error
-	for _, err := range pa.Run(context.Background(), []model.Message{
+	for _, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		if err != nil {
@@ -394,15 +398,16 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 		return model.Message{Role: model.RoleAssistant, Content: joined}
 	}
 
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "custom merge test",
 		Agents:      []agent.Agent{a1, a2},
 		MergeFunc:   customMerge,
 	})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
@@ -442,14 +447,15 @@ func TestParallelAgent_DefaultMergeFunc_OmitsEmptyAgents(t *testing.T) {
 
 	a1 := llmagent.New(llmagent.Config{Name: "agent-1", Description: "first", Model: llm1})
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
-	pa := New(Config{
+	pa, err := New(Config{
 		Name:        "fanout",
 		Description: "omit empty agents test",
 		Agents:      []agent.Agent{a1, a2},
 	})
+	assert.Nil(t, err)
 
 	var msgs []model.Message
-	for event, err := range pa.Run(context.Background(), []model.Message{
+	for event, err := range pa.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "go"},
 	}) {
 		require.NoError(t, err)
@@ -493,11 +499,12 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 		Instruction: "You are a Spanish translator. Translate the user's text into Spanish. Reply with only the translation.",
 	})
 
-	fanout := New(Config{
+	fanout, err := New(Config{
 		Name:        "multi-translator",
 		Description: "Translates text into multiple languages in parallel.",
 		Agents:      []agent.Agent{frenchAgent, spanishAgent},
 	})
+	assert.Nil(t, err)
 
 	input := []model.Message{
 		{Role: model.RoleUser, Content: "Hello, world!"},
@@ -507,7 +514,7 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 	logMessage(t, 0, input[0])
 	t.Log("=== output ===")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	var msgs []model.Message

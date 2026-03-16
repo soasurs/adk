@@ -143,7 +143,10 @@ func convertMessages(msgs []model.Message) ([]goanthropic.MessageParam, []goanth
 			i++
 
 		case model.RoleAssistant:
-			blocks := convertAssistantBlocks(m)
+			blocks, err := convertAssistantBlocks(m)
+			if err != nil {
+				return nil, nil, fmt.Errorf("assistant message: %w", err)
+			}
 			messages = append(messages, goanthropic.NewAssistantMessage(blocks...))
 			i++
 
@@ -211,7 +214,7 @@ func convertUserBlocks(m model.Message) ([]goanthropic.ContentBlockParamUnion, e
 }
 
 // convertAssistantBlocks converts a RoleAssistant model.Message to Anthropic ContentBlockParamUnion slice.
-func convertAssistantBlocks(m model.Message) []goanthropic.ContentBlockParamUnion {
+func convertAssistantBlocks(m model.Message) ([]goanthropic.ContentBlockParamUnion, error) {
 	var blocks []goanthropic.ContentBlockParamUnion
 	if m.Content != "" {
 		blocks = append(blocks, goanthropic.ContentBlockParamUnion{
@@ -220,7 +223,9 @@ func convertAssistantBlocks(m model.Message) []goanthropic.ContentBlockParamUnio
 	}
 	for _, tc := range m.ToolCalls {
 		var input any
-		_ = json.Unmarshal([]byte(tc.Arguments), &input)
+		if err := json.Unmarshal([]byte(tc.Arguments), &input); err != nil {
+			return nil, fmt.Errorf("tool call %q: parse arguments: %w", tc.Name, err)
+		}
 		toolUseBlock := &goanthropic.ToolUseBlockParam{
 			ID:    tc.ID,
 			Name:  tc.Name,
@@ -234,7 +239,7 @@ func convertAssistantBlocks(m model.Message) []goanthropic.ContentBlockParamUnio
 			{OfText: &goanthropic.TextBlockParam{Text: ""}},
 		}
 	}
-	return blocks
+	return blocks, nil
 }
 
 // convertTools maps tool.Tool slice to Anthropic ToolUnionParam slice.

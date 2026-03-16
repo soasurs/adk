@@ -19,10 +19,10 @@ type echoRequest struct {
 	Request string `json:"echo" jsonschema:"request message, e.g. Hello World!"`
 }
 
-func NewEchoTool() tool.Tool {
+func NewEchoTool() (tool.Tool, error) {
 	schema, err := jsonschema.ForType(reflect.TypeFor[echoRequest](), &jsonschema.ForOptions{})
 	if err != nil {
-		panic(fmt.Sprintf("echo: build input schema: %v", err))
+		return nil, fmt.Errorf("echo: build input schema: %w", err)
 	}
 	return &echo{
 		def: tool.Definition{
@@ -30,7 +30,7 @@ func NewEchoTool() tool.Tool {
 			Description: "A tool to echo request message.",
 			InputSchema: schema,
 		},
-	}
+	}, nil
 }
 
 func (e *echo) Definition() tool.Definition {

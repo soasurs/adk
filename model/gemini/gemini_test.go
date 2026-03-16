@@ -46,7 +46,7 @@ func newClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		modelName = "gemini-2.0-flash"
 	}
-	llm, err := New(context.Background(), apiKey, modelName)
+	llm, err := New(t.Context(), apiKey, modelName)
 	require.NoError(t, err)
 	return llm
 }
@@ -69,7 +69,7 @@ func newVertexAIClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		modelName = "gemini-2.0-flash"
 	}
-	llm, err := NewVertexAI(context.Background(), project, location, modelName)
+	llm, err := NewVertexAI(t.Context(), project, location, modelName)
 	require.NoError(t, err)
 	return llm
 }
@@ -86,7 +86,7 @@ func newThinkingClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		t.Skip("GEMINI_THINKING_MODEL not set")
 	}
-	llm, err := New(context.Background(), apiKey, modelName)
+	llm, err := New(t.Context(), apiKey, modelName)
 	require.NoError(t, err)
 	return llm
 }
@@ -199,7 +199,7 @@ func TestConvertMessages_Tool(t *testing.T) {
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
-				{ID: "call_1", Name: "Echo"},
+				{ID: "call_1", Name: "Echo", Arguments: "{}"},
 			},
 		},
 		{Role: model.RoleTool, Content: "pong", ToolCallID: "call_1"},
@@ -221,8 +221,8 @@ func TestConvertMessages_ConsecutiveToolsBatched(t *testing.T) {
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
-				{ID: "c1", Name: "Echo"},
-				{ID: "c2", Name: "Echo"},
+				{ID: "c1", Name: "Echo", Arguments: "{}"},
+				{ID: "c2", Name: "Echo", Arguments: "{}"},
 			},
 		},
 		{Role: model.RoleTool, Content: "r1", ToolCallID: "c1"},
@@ -312,7 +312,8 @@ func TestConvertTools_Empty(t *testing.T) {
 }
 
 func TestConvertTools_EchoTool(t *testing.T) {
-	echo := builtin.NewEchoTool()
+	echo, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 	result, err := convertTools([]tool.Tool{echo})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -330,7 +331,7 @@ func TestConvertTools_EchoTool(t *testing.T) {
 func TestGenerateContent_Generate_Text(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
@@ -349,7 +350,7 @@ func TestGenerateContent_Generate_Text(t *testing.T) {
 func TestGenerateContent_Generate_WithSystemPrompt(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
@@ -366,7 +367,8 @@ func TestGenerateContent_Generate_WithSystemPrompt(t *testing.T) {
 func TestGenerateContent_Generate_WithTool(t *testing.T) {
 	llm := newClientFromEnv(t)
 
-	echo := builtin.NewEchoTool()
+	echo, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 	tools := []tool.Tool{echo}
 
 	messages := []model.Message{
@@ -376,7 +378,7 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
-		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
@@ -397,7 +399,7 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 
 		for _, tc := range resp.Message.ToolCalls {
 			t.Logf("[turn %d] tool_call: %s args=%s", i+1, tc.Name, tc.Arguments)
-			result, err := echo.Run(context.Background(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
 			require.NoError(t, err)
 			t.Logf("[turn %d] tool_result: %s", i+1, result)
 			messages = append(messages, model.Message{
@@ -420,7 +422,7 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 		Temperature: 0.2,
 	}
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Say hi"},
@@ -438,7 +440,7 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 func TestGenerateContent_Generate_Thinking(t *testing.T) {
 	llm := newThinkingClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
@@ -461,7 +463,7 @@ func TestGenerateContent_Generate_Thinking(t *testing.T) {
 func TestVertexAI_Generate_Text(t *testing.T) {
 	llm := newVertexAIClientFromEnv(t)
 
-	resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
@@ -480,7 +482,8 @@ func TestVertexAI_Generate_Text(t *testing.T) {
 func TestVertexAI_Generate_WithTool(t *testing.T) {
 	llm := newVertexAIClientFromEnv(t)
 
-	echo := builtin.NewEchoTool()
+	echo, err := builtin.NewEchoTool()
+	require.NoError(t, err)
 	tools := []tool.Tool{echo}
 
 	messages := []model.Message{
@@ -489,7 +492,7 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 
 	var finalResp *model.LLMResponse
 	for i := 0; i < 10; i++ {
-		resp, err := callGenerate(context.Background(), llm, &model.LLMRequest{
+		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
 			Messages: messages,
 			Tools:    tools,
@@ -506,7 +509,7 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 
 		require.Equal(t, model.FinishReasonToolCalls, resp.FinishReason)
 		for _, tc := range resp.Message.ToolCalls {
-			result, err := echo.Run(context.Background(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
 			require.NoError(t, err)
 			messages = append(messages, model.Message{
 				Role:       model.RoleTool,

@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -43,7 +42,7 @@ func newExaHTTPClient(apiKey string) *http.Client {
 func TestToolSet_Exa(t *testing.T) {
 	apiKey := os.Getenv("EXA_API_KEY")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	transport := &sdkmcp.StreamableClientTransport{
 		Endpoint: exaMCPEndpoint,

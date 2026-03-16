@@ -193,7 +193,7 @@ func TestNewSlidingWindowCompactor_SplitsRounds(t *testing.T) {
 	compactor, err := NewSlidingWindowCompactor(Config{KeepRecentRounds: 1}, summarizer)
 	require.NoError(t, err)
 
-	splitID, summaryMsg, err := compactor(context.Background(), msgs)
+	splitID, summaryMsg, err := compactor(t.Context(), msgs)
 	require.NoError(t, err)
 
 	// Archived: msg 1 and 2.
@@ -227,7 +227,7 @@ func TestNewSlidingWindowCompactor_KeepRoundsExceedsAvailable(t *testing.T) {
 	compactor, err := NewSlidingWindowCompactor(Config{KeepRecentRounds: 10}, summarizer)
 	require.NoError(t, err)
 
-	splitID, summaryMsg, err := compactor(context.Background(), msgs)
+	splitID, summaryMsg, err := compactor(t.Context(), msgs)
 	require.NoError(t, err)
 
 	// Nothing to archive: summarizer must not be called, result is nil.
@@ -252,7 +252,7 @@ func TestNewSlidingWindowCompactor_KeepRoundsZero(t *testing.T) {
 	compactor, err := NewSlidingWindowCompactor(Config{KeepRecentRounds: 0}, summarizer)
 	require.NoError(t, err)
 
-	splitID, summaryMsg, err := compactor(context.Background(), msgs)
+	splitID, summaryMsg, err := compactor(t.Context(), msgs)
 	require.NoError(t, err)
 
 	assert.Len(t, archived, 2)
@@ -275,7 +275,7 @@ func TestNewSlidingWindowCompactor_SummarizerError(t *testing.T) {
 	compactor, err := NewSlidingWindowCompactor(Config{KeepRecentRounds: 1}, summarizer)
 	require.NoError(t, err)
 
-	_, _, err = compactor(context.Background(), msgs)
+	_, _, err = compactor(t.Context(), msgs)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "llm unavailable")
 }
@@ -288,7 +288,7 @@ func TestNewSlidingWindowCompactor_EmptyMessages(t *testing.T) {
 	compactor, err := NewSlidingWindowCompactor(Config{KeepRecentRounds: 5}, summarizer)
 	require.NoError(t, err)
 
-	splitID, summaryMsg, err := compactor(context.Background(), []*message.Message{})
+	splitID, summaryMsg, err := compactor(t.Context(), []*message.Message{})
 	require.NoError(t, err)
 
 	// Empty input: nothing to archive.

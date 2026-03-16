@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -26,7 +25,7 @@ func TestMemorySession_CreateMessage(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := newTestMessage(1, "hello")
 	err = session.CreateMessage(ctx, msg)
@@ -44,7 +43,7 @@ func TestMemorySession_DeleteMessage(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg1 := newTestMessage(1, "hello")
 	msg2 := newTestMessage(2, "hi")
@@ -72,7 +71,7 @@ func TestMemorySession_DeleteMessage_NotFound(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := newTestMessage(1, "hello")
 	session.CreateMessage(ctx, msg)
@@ -91,7 +90,7 @@ func TestMemorySession_GetMessages(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for i := int64(1); i <= 10; i++ {
 		msg := newTestMessage(i, "msg")
@@ -131,7 +130,7 @@ func TestMemorySession_CompactMessages(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg1 := newTestMessage(1, "hello")
 	msg2 := newTestMessage(2, "hi")
@@ -164,7 +163,7 @@ func TestMemorySession_CompactMessages_ArchiveAll(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	session.CreateMessage(ctx, newTestMessage(1, "hello"))
 	session.CreateMessage(ctx, newTestMessage(2, "hi"))
@@ -187,7 +186,7 @@ func TestMemorySession_CompactMessages_Empty(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	session := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	summaryMsg := newTestMessage(100, "summary")
 
@@ -208,7 +207,7 @@ func TestMemorySession_ListMessages(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	sess := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for i := int64(1); i <= 5; i++ {
 		sess.CreateMessage(ctx, newTestMessage(i, "msg"))
@@ -225,7 +224,7 @@ func TestMemorySession_CompactMessages_MultipleRounds(t *testing.T) {
 	sessionID := snowflaker.Generate().Int64()
 
 	sess := NewMemorySession(sessionID)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	sess.CreateMessage(ctx, newTestMessage(1, "a"))
 	sess.CreateMessage(ctx, newTestMessage(2, "b"))

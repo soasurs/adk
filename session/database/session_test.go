@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -68,7 +67,7 @@ func TestDatabaseSession_CreateMessage(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -91,7 +90,7 @@ func TestDatabaseSession_DeleteMessage(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -123,7 +122,7 @@ func TestDatabaseSession_GetMessages(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -167,7 +166,7 @@ func TestDatabaseSession_CompactMessages(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -206,7 +205,7 @@ func TestDatabaseSession_CompactMessages_ArchiveAll(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -233,7 +232,7 @@ func TestDatabaseSession_CompactMessages_Empty(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -258,7 +257,7 @@ func TestDatabaseSession_ListMessages(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -279,7 +278,7 @@ func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 
@@ -311,7 +310,7 @@ func TestDatabaseSession_GetSessionID(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := snowflaker.Generate().Int64()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	session, err := NewDatabaseSession(ctx, db, sessionID)
 	require.NoError(t, err)
 

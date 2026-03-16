@@ -275,7 +275,10 @@ func convertMessages(msgs []model.Message) ([]*genai.Content, *genai.Content, er
 			i++
 
 		case model.RoleAssistant:
-			parts := convertAssistantParts(m)
+			parts, err := convertAssistantParts(m)
+			if err != nil {
+				return nil, nil, fmt.Errorf("assistant message: %w", err)
+			}
 			contents = append(contents, &genai.Content{Role: "model", Parts: parts})
 			i++
 
@@ -335,14 +338,16 @@ func convertUserParts(m model.Message) ([]*genai.Part, error) {
 }
 
 // convertAssistantParts converts a RoleAssistant model.Message to a Gemini Part slice.
-func convertAssistantParts(m model.Message) []*genai.Part {
+func convertAssistantParts(m model.Message) ([]*genai.Part, error) {
 	var parts []*genai.Part
 	if m.Content != "" {
 		parts = append(parts, &genai.Part{Text: m.Content})
 	}
 	for _, tc := range m.ToolCalls {
 		var args map[string]any
-		_ = json.Unmarshal([]byte(tc.Arguments), &args)
+		if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+			return nil, fmt.Errorf("tool call %q: parse arguments: %w", tc.Name, err)
+		}
 		parts = append(parts, &genai.Part{
 			FunctionCall: &genai.FunctionCall{
 				ID:   tc.ID,
@@ -356,7 +361,7 @@ func convertAssistantParts(m model.Message) []*genai.Part {
 	if len(parts) == 0 {
 		parts = []*genai.Part{{Text: ""}}
 	}
-	return parts
+	return parts, nil
 }
 
 // convertTools maps a tool.Tool slice to a single Gemini Tool holding all

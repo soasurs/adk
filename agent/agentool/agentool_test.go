@@ -99,16 +99,18 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 			},
 		},
 	}
+	agentTool, err := agentool.New(subAgent)
+	require.NoError(t, err)
 	orchestrator := llmagent.New(llmagent.Config{
 		Name:        "orchestrator",
 		Description: "Routes tasks to specialist agents.",
 		Model:       orchLLM,
-		Tools:       []tool.Tool{agentool.New(subAgent)},
+		Tools:       []tool.Tool{agentTool},
 	})
 
 	// --- run --------------------------------------------------------------
 	var msgs []model.Message
-	for event, err := range orchestrator.Run(context.Background(), []model.Message{
+	for event, err := range orchestrator.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "What is 2+2?"},
 	}) {
 		require.NoError(t, err)
@@ -179,12 +181,14 @@ func TestAgentTool_Integration_OrchestratorDelegation(t *testing.T) {
 	})
 
 	// Orchestrator: routes translation tasks to the translator agent.
+	agentTool, err := agentool.New(translatorAgent)
+	require.NoError(t, err)
 	orchestrator := llmagent.New(llmagent.Config{
 		Name:        "orchestrator",
 		Description: "Routes tasks to specialist agents.",
 		Model:       llm,
 		Instruction: "You are an orchestrator. When asked to translate text, always use the translator tool.",
-		Tools:       []tool.Tool{agentool.New(translatorAgent)},
+		Tools:       []tool.Tool{agentTool},
 	})
 
 	t.Log("=== input ===")
@@ -192,7 +196,7 @@ func TestAgentTool_Integration_OrchestratorDelegation(t *testing.T) {
 	t.Log("=== output ===")
 
 	var msgs []model.Message
-	for event, err := range orchestrator.Run(context.Background(), []model.Message{
+	for event, err := range orchestrator.Run(t.Context(), []model.Message{
 		{Role: model.RoleUser, Content: "Please translate 'hello' to Chinese."},
 	}) {
 		require.NoError(t, err)
