@@ -6,6 +6,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/soasurs/adk/agent"
 	"github.com/soasurs/adk/model"
@@ -22,6 +23,12 @@ type Config struct {
 	Instruction string
 	// GenerateConfig controls optional LLM generation parameters.
 	GenerateConfig *model.GenerateConfig
+	// ToolTimeout bounds every individual tool Run call. When non-zero, each
+	// tool invocation gets a fresh context derived from the call context with
+	// this deadline. The shorter of ToolTimeout and any deadline already
+	// present in the incoming context wins. Zero means no per-agent timeout
+	// (tools may still be bounded by the call context or tool.WithTimeout).
+	ToolTimeout time.Duration
 	// Stream enables streaming responses. When true, the agent yields partial
 	// Events (Event.Partial=true) with incremental text as the LLM generates,
 	// followed by complete Events (Event.Partial=false) for each full message.
@@ -167,6 +174,12 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 
 // runToolCall executes a single tool call and returns the resulting tool message.
 func (a *LlmAgent) runToolCall(ctx context.Context, tc model.ToolCall) model.Message {
+	if a.config.ToolTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, a.config.ToolTimeout)
+		defer cancel()
+	}
+
 	t, ok := a.tools[tc.Name]
 	if !ok {
 		return model.Message{

@@ -855,3 +855,125 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 
 	t.Logf("elapsed=%v (2×delay=%v)", elapsed, 2*delay)
 }
+
+// ---------------------------------------------------------------------------
+// ToolTimeout tests
+// ---------------------------------------------------------------------------
+
+// blockingTool is a test double that blocks until its context is cancelled,
+// respecting the context deadline. It is used to verify ToolTimeout behaviour.
+type blockingTool struct {
+	name string
+}
+
+func (b *blockingTool) Definition() tool.Definition {
+	return tool.Definition{Name: b.name, Description: "a blocking tool for testing"}
+}
+
+func (b *blockingTool) Run(ctx context.Context, _ string, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// TestLlmAgent_ToolTimeout_ExceedsDeadline verifies that when ToolTimeout is set
+// and a tool exceeds it, the error is captured and returned as the tool result
+// content (execution continues rather than stopping the agent).
+func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
+	bt := &blockingTool{name: "blocker"}
+
+	mock := &mockLLM{
+		name: "mock-timeout",
+		responses: []*model.LLMResponse{
+			// First call: LLM requests the blocking tool.
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-1", Name: "blocker", Arguments: `{}`},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			// Second call: final stop after tool result is returned.
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	a := New(Config{
+		Name:        "timeout-agent",
+		Model:       mock,
+		Tools:       []tool.Tool{bt},
+		ToolTimeout: 30 * time.Millisecond,
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "run the blocker"},
+	})
+
+	require.NoError(t, err)
+
+	// Find the tool result message.
+	var toolMsg *model.Message
+	for i := range msgs {
+		if msgs[i].Role == model.RoleTool {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg, "expected a tool result message")
+	assert.Equal(t, "tc-1", toolMsg.ToolCallID)
+	// The error text must mention the timeout.
+	assert.Contains(t, toolMsg.Content, "error:", "tool message should contain the error")
+	assert.Contains(t, toolMsg.Content, "deadline exceeded")
+}
+
+// TestLlmAgent_ToolTimeout_CompletesWithinDeadline verifies that when a tool
+// finishes before the ToolTimeout the normal result is returned unchanged.
+func TestLlmAgent_ToolTimeout_CompletesWithinDeadline(t *testing.T) {
+	var callCount atomic.Int64
+	fast := &slowTool{name: "fast", delay: 10 * time.Millisecond, result: "fast-result", callLog: &callCount}
+
+	mock := &mockLLM{
+		name: "mock-fast",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "fast", Arguments: `{}`}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	a := New(Config{
+		Name:        "fast-timeout-agent",
+		Model:       mock,
+		Tools:       []tool.Tool{fast},
+		ToolTimeout: 500 * time.Millisecond,
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "run fast"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), callCount.Load())
+
+	var toolMsg *model.Message
+	for i := range msgs {
+		if msgs[i].Role == model.RoleTool {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, toolMsg)
+	assert.Equal(t, "fast-result", toolMsg.Content)
+}
