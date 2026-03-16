@@ -2,9 +2,12 @@
 
 [简体中文](README_zh-CN.md)
 
-A lightweight, idiomatic Go library for building production-ready AI agents.
+A lightweight, idiomatic Go library for building AI agents.
 ADK decouples agent logic from LLM providers, session storage, and tool
 integrations so you can compose exactly the pieces you need.
+
+> **Early Development Notice:** This project is under active development and is
+> not yet recommended for production use. APIs may change without notice.
 
 > **Module path:** `github.com/soasurs/adk`  
 > **Go version:** 1.26+
