@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	goanthropic "github.com/anthropics/anthropic-sdk-go"
@@ -389,4 +390,40 @@ func TestMessages_Generate_Thinking(t *testing.T) {
 	assert.NotEmpty(t, resp.Message.ReasoningContent, "expected thinking model to populate ReasoningContent")
 	t.Logf("reasoning: %s", resp.Message.ReasoningContent)
 	t.Logf("answer:    %s", resp.Message.Content)
+}
+
+// TestMessages_Stream_Thinking verifies that streaming mode yields partial
+// thinking deltas before the complete response with full ReasoningContent.
+// Required env vars: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL
+func TestMessages_Stream_Thinking(t *testing.T) {
+	llm := newThinkingClientFromEnv(t)
+
+	var partialReasoningBuf strings.Builder
+	var finalResp *model.LLMResponse
+
+	for resp, err := range llm.GenerateContent(t.Context(), &model.LLMRequest{
+		Model: llm.Name(),
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "What is 9 * 8? Think step by step."},
+		},
+	}, &model.GenerateConfig{EnableThinking: boolPtr(true)}, true) {
+		require.NoError(t, err)
+		if resp.Partial {
+			if resp.Message.ReasoningContent != "" {
+				partialReasoningBuf.WriteString(resp.Message.ReasoningContent)
+				t.Logf("partial reasoning: %s", resp.Message.ReasoningContent)
+			}
+		} else {
+			finalResp = resp
+		}
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, model.RoleAssistant, finalResp.Message.Role)
+	assert.NotEmpty(t, finalResp.Message.Content)
+	assert.NotEmpty(t, finalResp.Message.ReasoningContent, "expected final response to include full ReasoningContent")
+	assert.GreaterOrEqual(t, len(finalResp.Message.ReasoningContent), partialReasoningBuf.Len(),
+		"final ReasoningContent should be at least as long as accumulated partials")
+	t.Logf("\nfinal reasoning: %s", finalResp.Message.ReasoningContent)
+	t.Logf("final answer:    %s", finalResp.Message.Content)
 }

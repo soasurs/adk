@@ -55,9 +55,12 @@ func (m *Model) Name() string {
 }
 
 // GenerateContent sends the request to the Anthropic Messages API.
+// When stream is false, exactly one complete *model.LLMResponse is yielded.
+// When stream is true, partial text/thinking chunks are yielded (Partial=true)
+// followed by the assembled complete response (Partial=false, TurnComplete=true).
 // Transient errors are automatically retried according to the retry.Config
 // provided at construction time.
-func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		messages, system, err := convertMessages(req.Messages)
 		if err != nil {
@@ -92,6 +95,9 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg 
 
 		for resp, err := range retry.Seq2(ctx, m.retryCfg,
 			func() iter.Seq2[*model.LLMResponse, error] {
+				if stream {
+					return m.callAPIStreaming(ctx, params)
+				}
 				return m.callAPI(ctx, params)
 			},
 			func(r *model.LLMResponse) bool { return r != nil && r.Partial },
@@ -116,6 +122,106 @@ func (m *Model) callAPI(ctx context.Context, params goanthropic.MessageNewParams
 		llmResp := convertResponse(resp)
 		llmResp.TurnComplete = true
 		yield(llmResp, nil)
+	}
+}
+
+// callAPIStreaming performs a single (non-retried) streaming call to the
+// Anthropic Messages API and yields partial events followed by a complete
+// response. It is called by GenerateContent when stream=true.
+func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.MessageNewParams) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		stream := m.client.Messages.NewStreaming(ctx, params)
+
+		var contentBuf strings.Builder
+		var reasoningBuf strings.Builder
+		toolCallAcc := make(map[int64]*model.ToolCall) // index → accumulated tool call
+		var finishReason goanthropic.StopReason
+
+		for stream.Next() {
+			event := stream.Current()
+
+			switch e := event.AsAny().(type) {
+			case goanthropic.ContentBlockStartEvent:
+				// Capture tool_use block start.
+				if toolUse := e.ContentBlock.AsToolUse(); toolUse.ID != "" {
+					idx := e.Index
+					if _, ok := toolCallAcc[idx]; !ok {
+						toolCallAcc[idx] = &model.ToolCall{ID: toolUse.ID, Name: toolUse.Name}
+					}
+				}
+
+			case goanthropic.ContentBlockDeltaEvent:
+				// Yield text delta.
+				if text := e.Delta.AsTextDelta(); text.Text != "" {
+					contentBuf.WriteString(text.Text)
+					if !yield(&model.LLMResponse{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: text.Text,
+						},
+						Partial: true,
+					}, nil) {
+						return
+					}
+				}
+				// Yield thinking delta.
+				if thinking := e.Delta.AsThinkingDelta(); thinking.Thinking != "" {
+					reasoningBuf.WriteString(thinking.Thinking)
+					if !yield(&model.LLMResponse{
+						Message: model.Message{
+							Role:             model.RoleAssistant,
+							ReasoningContent: thinking.Thinking,
+						},
+						Partial: true,
+					}, nil) {
+						return
+					}
+				}
+				// Accumulate tool call input JSON delta.
+				if inputJSON := e.Delta.AsInputJSONDelta(); inputJSON.PartialJSON != "" {
+					idx := e.Index
+					if tc, ok := toolCallAcc[idx]; ok {
+						tc.Arguments += inputJSON.PartialJSON
+					}
+				}
+
+			case goanthropic.MessageDeltaEvent:
+				if e.Delta.StopReason != "" {
+					finishReason = e.Delta.StopReason
+				}
+			}
+		}
+
+		if err := stream.Err(); err != nil {
+			yield(nil, fmt.Errorf("anthropic: stream: %w", err))
+			return
+		}
+
+		// Build final complete response.
+		msg := model.Message{
+			Role:             model.RoleAssistant,
+			Content:          contentBuf.String(),
+			ReasoningContent: reasoningBuf.String(),
+		}
+		if len(toolCallAcc) > 0 {
+			msg.ToolCalls = make([]model.ToolCall, len(toolCallAcc))
+			for idx, tc := range toolCallAcc {
+				if int(idx) < len(msg.ToolCalls) {
+					msg.ToolCalls[idx] = *tc
+				}
+			}
+		}
+
+		f := convertStopReason(finishReason)
+		if len(msg.ToolCalls) > 0 {
+			f = model.FinishReasonToolCalls
+		}
+
+		yield(&model.LLMResponse{
+			Message:      msg,
+			FinishReason: f,
+			TurnComplete: true,
+		}, nil)
 	}
 }
 

@@ -126,6 +126,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 		s := c.client.Chat.Completions.NewStreaming(ctx, params, reqOpts...)
 
 		var contentBuf strings.Builder
+		var reasoningBuf strings.Builder
 		toolCallAcc := make(map[int64]*model.ToolCall) // index → accumulated tool call
 		var finishReasonStr string
 		var streamUsage *goopenai.CompletionUsage
@@ -145,7 +146,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			choice := chunk.Choices[0]
 			delta := choice.Delta
 
-			// Yield delta text as a partial event.
+			// Yield delta text and reasoning_content as partial events.
 			if delta.Content != "" {
 				contentBuf.WriteString(delta.Content)
 				if !yield(&model.LLMResponse{
@@ -156,6 +157,27 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 					Partial: true,
 				}, nil) {
 					return
+				}
+			}
+
+			// Extract reasoning_content delta from raw JSON when present.
+			// This field is not part of the standard OpenAI SDK struct but is returned
+			// by reasoning-capable providers (e.g. DeepSeek-R1, compatible endpoints).
+			if raw := delta.RawJSON(); raw != "" {
+				var envelope struct {
+					ReasoningContent string `json:"reasoning_content"`
+				}
+				if err := json.Unmarshal([]byte(raw), &envelope); err == nil && envelope.ReasoningContent != "" {
+					reasoningBuf.WriteString(envelope.ReasoningContent)
+					if !yield(&model.LLMResponse{
+						Message: model.Message{
+							Role:             model.RoleAssistant,
+							ReasoningContent: envelope.ReasoningContent,
+						},
+						Partial: true,
+					}, nil) {
+						return
+					}
 				}
 			}
 
@@ -187,8 +209,9 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 
 		// Build the final complete response.
 		msg := model.Message{
-			Role:    model.RoleAssistant,
-			Content: contentBuf.String(),
+			Role:             model.RoleAssistant,
+			Content:          contentBuf.String(),
+			ReasoningContent: reasoningBuf.String(),
 		}
 		if len(toolCallAcc) > 0 {
 			msg.ToolCalls = make([]model.ToolCall, len(toolCallAcc))
