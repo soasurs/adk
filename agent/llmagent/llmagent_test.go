@@ -579,6 +579,188 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Compaction summary merging tests
+// ---------------------------------------------------------------------------
+
+// captureLLM is a test double that records the last LLMRequest it receives and
+// returns a fixed stop response. This lets tests inspect the exact message
+// slice that the agent assembles before calling the model.
+type captureLLM struct {
+	name        string
+	lastRequest *model.LLMRequest
+}
+
+func (c *captureLLM) Name() string { return c.name }
+
+func (c *captureLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	c.lastRequest = req
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(&model.LLMResponse{
+			Message:      model.Message{Role: model.RoleAssistant, Content: "ok"},
+			FinishReason: model.FinishReasonStop,
+		}, nil)
+	}
+}
+
+// TestLlmAgent_CompactionSummary_MergedWithInstruction verifies that when the
+// session history contains a system message (compaction summary), its content
+// is merged with the agent instruction into a single leading system message,
+// and the summary is removed from the middle of the conversation.
+func TestLlmAgent_CompactionSummary_MergedWithInstruction(t *testing.T) {
+	llm := &captureLLM{name: "capture"}
+
+	a := New(Config{
+		Name:        "agent",
+		Model:       llm,
+		Instruction: "You are a helpful assistant.",
+	}).(*LlmAgent)
+
+	input := []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleSystem, Content: "Summary: the user asked about Go."},
+		{Role: model.RoleUser, Content: "tell me more"},
+	}
+
+	_, err := collectMessages(t, a, input)
+	require.NoError(t, err)
+	require.NotNil(t, llm.lastRequest)
+
+	msgs := llm.lastRequest.Messages
+
+	// First message must be the merged system message.
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, model.RoleSystem, msgs[0].Role)
+	assert.Contains(t, msgs[0].Content, "You are a helpful assistant.")
+	assert.Contains(t, msgs[0].Content, "Summary: the user asked about Go.")
+
+	// No other system messages should appear in the list.
+	for i, m := range msgs[1:] {
+		assert.NotEqual(t, model.RoleSystem, m.Role,
+			"unexpected system message at index %d: %q", i+1, m.Content)
+	}
+
+	// Conversation messages must be present and in order.
+	require.Len(t, msgs, 4) // 1 system + user + assistant + user
+	assert.Equal(t, model.RoleUser, msgs[1].Role)
+	assert.Equal(t, "hello", msgs[1].Content)
+	assert.Equal(t, model.RoleAssistant, msgs[2].Role)
+	assert.Equal(t, model.RoleUser, msgs[3].Role)
+	assert.Equal(t, "tell me more", msgs[3].Content)
+}
+
+// TestLlmAgent_CompactionSummary_OnlyLastSystemTaken verifies that when there
+// are multiple system messages in the session (stale + latest compaction), only
+// the last one is merged and all earlier ones are dropped.
+func TestLlmAgent_CompactionSummary_OnlyLastSystemTaken(t *testing.T) {
+	llm := &captureLLM{name: "capture"}
+
+	a := New(Config{
+		Name:        "agent",
+		Model:       llm,
+		Instruction: "You are concise.",
+	}).(*LlmAgent)
+
+	input := []model.Message{
+		{Role: model.RoleSystem, Content: "Old summary: session began with weather questions."},
+		{Role: model.RoleUser, Content: "What about sports?"},
+		{Role: model.RoleAssistant, Content: "Sports are great."},
+		{Role: model.RoleSystem, Content: "Latest summary: topics covered weather and sports."},
+		{Role: model.RoleUser, Content: "What else?"},
+	}
+
+	_, err := collectMessages(t, a, input)
+	require.NoError(t, err)
+	require.NotNil(t, llm.lastRequest)
+
+	msgs := llm.lastRequest.Messages
+
+	// Only one system message at position 0.
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, model.RoleSystem, msgs[0].Role)
+	assert.Contains(t, msgs[0].Content, "You are concise.")
+	assert.Contains(t, msgs[0].Content, "Latest summary: topics covered weather and sports.")
+	assert.NotContains(t, msgs[0].Content, "Old summary")
+
+	for i, m := range msgs[1:] {
+		assert.NotEqual(t, model.RoleSystem, m.Role,
+			"unexpected system message at index %d", i+1)
+	}
+}
+
+// TestLlmAgent_CompactionSummary_NoInstruction verifies that when the agent has
+// no Instruction but the session contains a compaction summary, the summary
+// alone becomes the leading system message.
+func TestLlmAgent_CompactionSummary_NoInstruction(t *testing.T) {
+	llm := &captureLLM{name: "capture"}
+
+	a := New(Config{
+		Name:  "agent",
+		Model: llm,
+		// Instruction intentionally empty.
+	}).(*LlmAgent)
+
+	input := []model.Message{
+		{Role: model.RoleUser, Content: "recap?"},
+		{Role: model.RoleAssistant, Content: "sure"},
+		{Role: model.RoleSystem, Content: "Summary: prior conversation about cooking."},
+		{Role: model.RoleUser, Content: "continue"},
+	}
+
+	_, err := collectMessages(t, a, input)
+	require.NoError(t, err)
+	require.NotNil(t, llm.lastRequest)
+
+	msgs := llm.lastRequest.Messages
+
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, model.RoleSystem, msgs[0].Role)
+	assert.Equal(t, "Summary: prior conversation about cooking.", msgs[0].Content)
+
+	// Remaining messages should be non-system conversation messages.
+	for i, m := range msgs[1:] {
+		assert.NotEqual(t, model.RoleSystem, m.Role,
+			"unexpected system message at index %d", i+1)
+	}
+}
+
+// TestLlmAgent_CompactionSummary_NoSystemInSession verifies that when there is
+// no compaction summary in the session, the behaviour is identical to before:
+// the agent instruction is prepended as the sole system message.
+func TestLlmAgent_CompactionSummary_NoSystemInSession(t *testing.T) {
+	llm := &captureLLM{name: "capture"}
+
+	a := New(Config{
+		Name:        "agent",
+		Model:       llm,
+		Instruction: "You are precise.",
+	}).(*LlmAgent)
+
+	input := []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleUser, Content: "bye"},
+	}
+
+	_, err := collectMessages(t, a, input)
+	require.NoError(t, err)
+	require.NotNil(t, llm.lastRequest)
+
+	msgs := llm.lastRequest.Messages
+
+	// System message is just the instruction, unchanged.
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, model.RoleSystem, msgs[0].Role)
+	assert.Equal(t, "You are precise.", msgs[0].Content)
+
+	// All subsequent messages are the original conversation messages.
+	require.Len(t, msgs, 4) // 1 system + 3 conversation
+	assert.Equal(t, model.RoleUser, msgs[1].Role)
+	assert.Equal(t, model.RoleAssistant, msgs[2].Role)
+	assert.Equal(t, model.RoleUser, msgs[3].Role)
+}
+
+// ---------------------------------------------------------------------------
 // Parallel tool execution tests
 // ---------------------------------------------------------------------------
 

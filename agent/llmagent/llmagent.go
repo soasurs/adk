@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"sync"
 
 	"github.com/soasurs/adk/agent"
@@ -59,15 +60,44 @@ func (a *LlmAgent) Description() string {
 // yielded as complete events. Iteration ends when the LLM stops calling tools.
 func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
-		// Prepend system prompt when configured.
-		history := make([]model.Message, 0, len(messages)+1)
+		// Find the last system message in the session history, which is the most
+		// recent compaction summary. Earlier system messages, if any, have already
+		// been subsumed by a subsequent compaction and should be dropped.
+		lastSummaryIdx := -1
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == model.RoleSystem {
+				lastSummaryIdx = i
+				break
+			}
+		}
+
+		// Build the leading system message by merging the agent instruction with
+		// the compaction summary (if present).
+		systemParts := make([]string, 0, 2)
 		if a.config.Instruction != "" {
+			systemParts = append(systemParts, a.config.Instruction)
+		}
+		if lastSummaryIdx >= 0 {
+			systemParts = append(systemParts, messages[lastSummaryIdx].Content)
+		}
+
+		history := make([]model.Message, 0, len(messages)+1)
+		if len(systemParts) > 0 {
 			history = append(history, model.Message{
 				Role:    model.RoleSystem,
-				Content: a.config.Instruction,
+				Content: strings.Join(systemParts, "\n\n"),
 			})
 		}
-		history = append(history, messages...)
+
+		// Append all non-system messages, preserving conversation order.
+		// All session-sourced system messages are dropped here: the last one has
+		// been merged above, and earlier ones are stale compaction artifacts.
+		for _, m := range messages {
+			if m.Role == model.RoleSystem {
+				continue
+			}
+			history = append(history, m)
+		}
 
 		req := &model.LLMRequest{
 			Model:    a.config.Model.Name(),
