@@ -68,17 +68,19 @@ go get github.com/soasurs/adk
 |---|---|
 | `agent` | `Agent` 接口定义 |
 | `agent/llmagent` | 带 tool-call 循环的 LLM 智能体实现 |
-| `agent/sequential` | 顺序智能体组合（流水线） |
-| `agent/parallel` | 并行智能体组合（扇出） |
+| `agent/sequentialagent` | 顺序智能体组合（流水线） |
+| `agent/parallelagent` | 并行智能体组合（扇出） |
 | `agent/agentool` | 将智能体包装为工具以供委托 |
 | `model` | 提供商无关的 LLM 接口与消息类型 |
 | `model/openai` | OpenAI 适配器 |
 | `model/gemini` | Google Gemini 适配器（Gemini API 和 Vertex AI） |
 | `model/anthropic` | Anthropic Claude 适配器 |
+| `model/retry` | 指数退避重试封装 |
 | `session` | `Session` 和 `SessionService` 接口定义 |
 | `session/memory` | 内存会话后端 |
 | `session/database` | SQLite 会话后端 |
 | `session/message` | 持久化消息类型 |
+| `session/compaction` | 滑动窗口消息压缩工具 |
 | `tool` | `Tool` 接口与 `Definition` 定义 |
 | `tool/builtin` | 内置工具（echo 等） |
 | `tool/mcp` | MCP 服务器桥接 |
@@ -96,10 +98,7 @@ go get github.com/soasurs/adk
 ```go
 import "github.com/soasurs/adk/model/openai"
 
-llm := openai.New(openai.Config{
-    APIKey: os.Getenv("OPENAI_API_KEY"),
-    Model:  "gpt-4o-mini",
-})
+llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
 ```
 
 **Google Gemini：**
@@ -133,6 +132,7 @@ agent := llmagent.New(llmagent.Config{
     Description:  "一个有用的助手",
     Model:        llm,
     Instruction:  "你是一个有用的助手。",
+    Stream:       true, // 启用实时流式输出
 })
 ```
 
@@ -192,11 +192,13 @@ for event, err := range r.Run(ctx, sessionID, "你好！") {
 ```go
 type LLM interface {
     Name() string
-    Generate(ctx context.Context, req *LLMRequest, cfg *GenerateConfig) (*LLMResponse, error)
+    GenerateContent(ctx context.Context, req *LLMRequest, cfg *GenerateConfig, stream bool) iter.Seq2[*LLMResponse, error]
 }
 ```
 
-`GenerateConfig` 以提供商无关的方式控制温度、top-p、推理力度和服务等级。
+`GenerateContent` 返回一个 Go 迭代器。当 `stream` 为 `false` 时，恰好 yield 一个完整的 `*LLMResponse`；当 `stream` 为 `true` 时，先 yield 若干部分响应（流式分片），最后 yield 一个完整响应。
+
+`GenerateConfig` 以提供商无关的方式控制温度、推理力度、思维预算和服务等级。
 
 ### `model.Message`
 
@@ -242,17 +244,27 @@ type Tool interface {
 `Session` 保存一段对话的消息历史。两种存储后端均支持**软压缩**：旧消息被归档（标记 `CompactedAt` 时间戳）而非物理删除。
 
 ```go
-// 使用自定义摘要函数归档消息
-err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-    summary := summarise(msgs) // 你的摘要逻辑
-    return &message.Message{Role: "system", Content: summary}, nil
-})
+import "github.com/soasurs/adk/session/compaction"
+
+// 构建滑动窗口压缩器
+cfg := compaction.Config{MaxTokens: 8000, KeepRecentRounds: 3}
+compactor, _ := compaction.NewSlidingWindowCompactor(cfg,
+    func(ctx context.Context, msgs []*message.Message) (string, error) {
+        return summarise(msgs), nil // 你的摘要逻辑
+    },
+)
+
+// 检查是否需要压缩，然后执行
+msgs, _ := sess.ListMessages(ctx)
+if compaction.ShouldCompact(msgs, cfg) {
+    splitID, summaryMsg, _ := compactor(ctx, msgs)
+    if splitID > 0 {
+        _ = sess.CompactMessages(ctx, splitID, summaryMsg)
+    }
+}
 
 // 活跃消息（压缩后剩余的）
 active, _ := sess.ListMessages(ctx)
-
-// 已归档消息
-archived, _ := sess.ListCompactedMessages(ctx)
 ```
 
 ---
@@ -289,9 +301,9 @@ agent := llmagent.New(llmagent.Config{
 将多个智能体链式组合成流水线，每个智能体都能看到之前所有智能体的输出：
 
 ```go
-import "github.com/soasurs/adk/agent/sequential"
+import "github.com/soasurs/adk/agent/sequentialagent"
 
-pipeline := sequential.New(sequential.Config{
+pipeline, err := sequentialagent.New(sequentialagent.Config{
     Name:        "research-pipeline",
     Description: "研究、起草和审阅",
     Agents: []agent.Agent{
@@ -307,9 +319,9 @@ pipeline := sequential.New(sequential.Config{
 并发执行多个智能体并合并它们的输出：
 
 ```go
-import "github.com/soasurs/adk/agent/parallel"
+import "github.com/soasurs/adk/agent/parallelagent"
 
-ensemble := parallel.New(parallel.Config{
+ensemble, err := parallelagent.New(parallelagent.Config{
     Name:        "multi-model-ensemble",
     Description: "从多个模型获取答案",
     Agents: []agent.Agent{
@@ -318,7 +330,7 @@ ensemble := parallel.New(parallel.Config{
         geminiAgent,
     },
     // 可选：自定义合并函数
-    MergeFunc: func(results []parallel.AgentOutput) model.Message {
+    MergeFunc: func(results []parallelagent.AgentOutput) model.Message {
         // 合并所有智能体的输出
     },
 })

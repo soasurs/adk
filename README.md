@@ -73,17 +73,19 @@ results; it has no memory of previous turns.
 |---|---|
 | `agent` | `Agent` interface |
 | `agent/llmagent` | LLM-backed agent with tool-call loop |
-| `agent/sequential` | Sequential agent composition (pipeline) |
-| `agent/parallel` | Parallel agent composition (fan-out) |
+| `agent/sequentialagent` | Sequential agent composition (pipeline) |
+| `agent/parallelagent` | Parallel agent composition (fan-out) |
 | `agent/agentool` | Wrap agents as tools for delegation |
 | `model` | Provider-agnostic LLM interface and message types |
 | `model/openai` | OpenAI adapter |
 | `model/gemini` | Google Gemini adapter (Gemini API & Vertex AI) |
 | `model/anthropic` | Anthropic Claude adapter |
+| `model/retry` | Retry wrapper with exponential backoff |
 | `session` | `Session` and `SessionService` interfaces |
 | `session/memory` | In-memory session backend |
 | `session/database` | SQLite session backend |
 | `session/message` | Persisted message type |
+| `session/compaction` | Sliding-window message compaction utilities |
 | `tool` | `Tool` interface and `Definition` |
 | `tool/builtin` | Built-in tools (echo, …) |
 | `tool/mcp` | MCP server bridge |
@@ -101,10 +103,7 @@ results; it has no memory of previous turns.
 ```go
 import "github.com/soasurs/adk/model/openai"
 
-llm := openai.New(openai.Config{
-    APIKey: os.Getenv("OPENAI_API_KEY"),
-    Model:  "gpt-4o-mini",
-})
+llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
 ```
 
 **Google Gemini:**
@@ -138,6 +137,7 @@ agent := llmagent.New(llmagent.Config{
     Description:  "A helpful assistant",
     Model:        llm,
     Instruction:  "You are a helpful assistant.",
+    Stream:       true, // enable real-time streaming
 })
 ```
 
@@ -199,12 +199,17 @@ The central interface every LLM adapter must implement:
 ```go
 type LLM interface {
     Name() string
-    Generate(ctx context.Context, req *LLMRequest, cfg *GenerateConfig) (*LLMResponse, error)
+    GenerateContent(ctx context.Context, req *LLMRequest, cfg *GenerateConfig, stream bool) iter.Seq2[*LLMResponse, error]
 }
 ```
 
-`GenerateConfig` lets you tune temperature, top-p, reasoning effort, and
-service tier in a provider-agnostic way.
+`GenerateContent` returns a Go iterator. When `stream` is `false`, exactly one
+complete `*LLMResponse` is yielded. When `stream` is `true`, zero or more
+partial responses (streaming chunks) are yielded first, followed by a single
+complete response.
+
+`GenerateConfig` lets you tune temperature, reasoning effort, thinking budget,
+and service tier in a provider-agnostic way.
 
 ### `model.Message`
 
@@ -255,17 +260,27 @@ both support **soft compaction**: old messages are archived (marked with a
 `CompactedAt` timestamp) rather than deleted.
 
 ```go
-// Archive messages using a custom summariser
-err = sess.CompactMessages(ctx, func(ctx context.Context, msgs []*message.Message) (*message.Message, error) {
-    summary := summarise(msgs) // your logic
-    return &message.Message{Role: "system", Content: summary}, nil
-})
+import "github.com/soasurs/adk/session/compaction"
+
+// Build a sliding-window compactor
+cfg := compaction.Config{MaxTokens: 8000, KeepRecentRounds: 3}
+compactor, _ := compaction.NewSlidingWindowCompactor(cfg,
+    func(ctx context.Context, msgs []*message.Message) (string, error) {
+        return summarise(msgs), nil // your summarisation logic
+    },
+)
+
+// Check whether compaction is needed, then run it
+msgs, _ := sess.ListMessages(ctx)
+if compaction.ShouldCompact(msgs, cfg) {
+    splitID, summaryMsg, _ := compactor(ctx, msgs)
+    if splitID > 0 {
+        _ = sess.CompactMessages(ctx, splitID, summaryMsg)
+    }
+}
 
 // Active messages (post-compaction)
 active, _ := sess.ListMessages(ctx)
-
-// Archived messages
-archived, _ := sess.ListCompactedMessages(ctx)
 ```
 
 ---
@@ -303,9 +318,9 @@ Chain multiple agents into a pipeline where each agent sees the output of all
 previous agents:
 
 ```go
-import "github.com/soasurs/adk/agent/sequential"
+import "github.com/soasurs/adk/agent/sequentialagent"
 
-pipeline := sequential.New(sequential.Config{
+pipeline, err := sequentialagent.New(sequentialagent.Config{
     Name:        "research-pipeline",
     Description: "Research, draft, and review",
     Agents: []agent.Agent{
@@ -321,9 +336,9 @@ pipeline := sequential.New(sequential.Config{
 Run multiple agents concurrently and merge their outputs:
 
 ```go
-import "github.com/soasurs/adk/agent/parallel"
+import "github.com/soasurs/adk/agent/parallelagent"
 
-ensemble := parallel.New(parallel.Config{
+ensemble, err := parallelagent.New(parallelagent.Config{
     Name:        "multi-model-ensemble",
     Description: "Get answers from multiple models",
     Agents: []agent.Agent{
@@ -332,7 +347,7 @@ ensemble := parallel.New(parallel.Config{
         geminiAgent,
     },
     // Optional: custom merge function
-    MergeFunc: func(results []parallel.AgentOutput) model.Message {
+    MergeFunc: func(results []parallelagent.AgentOutput) model.Message {
         // Combine outputs from all agents
     },
 })
