@@ -185,6 +185,7 @@ func setupTestDBWithPrefix(t *testing.T, prefix string) *sqlx.DB {
 
 	_, err = db.Exec(`CREATE TABLE ` + prefix + `messages (
 		message_id        INTEGER PRIMARY KEY,
+		session_id        INTEGER NOT NULL,
 		role              TEXT    NOT NULL DEFAULT '',
 		name              TEXT    NOT NULL DEFAULT '',
 		content           TEXT    NOT NULL DEFAULT '',
@@ -246,6 +247,7 @@ func TestDatabaseSessionService_WithSessionsTable(t *testing.T) {
 
 	_, err = db.Exec(`CREATE TABLE messages (
 		message_id        INTEGER PRIMARY KEY,
+		session_id        INTEGER NOT NULL,
 		role              TEXT    NOT NULL DEFAULT '',
 		name              TEXT    NOT NULL DEFAULT '',
 		content           TEXT    NOT NULL DEFAULT '',

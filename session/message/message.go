@@ -49,6 +49,7 @@ func (tl *ToolCalls) Scan(src any) error {
 // Message represents a persisted conversation message.
 type Message struct {
 	MessageID int64  `json:"message_id" db:"message_id"`
+	SessionID int64  `json:"session_id" db:"session_id"`
 	Role      string `json:"role" db:"role"`
 	// Name optionally identifies the producer of this message (e.g. an agent name).
 	Name    string `json:"name" db:"name"`

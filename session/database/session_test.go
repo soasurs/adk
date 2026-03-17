@@ -30,6 +30,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 	_, err = db.Exec(`
 		CREATE TABLE messages (
 			message_id        INTEGER PRIMARY KEY,
+			session_id        INTEGER NOT NULL,
 			role              TEXT    NOT NULL DEFAULT '',
 			name              TEXT    NOT NULL DEFAULT '',
 			content           TEXT    NOT NULL DEFAULT '',
@@ -268,6 +269,32 @@ func TestDatabaseSession_ListMessages(t *testing.T) {
 	msgs, err := session.ListMessages(ctx)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 5)
+}
+
+func TestDatabaseSession_IsolatesMessagesBySession(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	s1, err := NewDatabaseSession(ctx, db, 1)
+	require.NoError(t, err)
+	s2, err := NewDatabaseSession(ctx, db, 2)
+	require.NoError(t, err)
+
+	require.NoError(t, s1.CreateMessage(ctx, newTestMessage(1, "session one")))
+	require.NoError(t, s2.CreateMessage(ctx, newTestMessage(2, "session two")))
+
+	msgs1, err := s1.ListMessages(ctx)
+	require.NoError(t, err)
+	require.Len(t, msgs1, 1)
+	assert.Equal(t, int64(1), msgs1[0].SessionID)
+	assert.Equal(t, "session one", msgs1[0].Content)
+
+	msgs2, err := s2.ListMessages(ctx)
+	require.NoError(t, err)
+	require.Len(t, msgs2, 1)
+	assert.Equal(t, int64(2), msgs2[0].SessionID)
+	assert.Equal(t, "session two", msgs2[0].Content)
 }
 
 func TestDatabaseSession_CompactMessages_MultipleRounds(t *testing.T) {

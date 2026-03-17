@@ -37,16 +37,16 @@ func buildQueries(sessionsTable, messagesTable string) *queries {
 		getSession:    "SELECT * FROM " + sessionsTable + " WHERE session_id = $1 AND deleted_at = $2 LIMIT 1",
 		deleteSession: "UPDATE " + sessionsTable + " SET deleted_at = $1 WHERE session_id = $2 AND deleted_at = $3",
 		// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0.
-		createMessage:         "INSERT INTO " + messagesTable + " (message_id, role, name, content, reasoning_content, tool_calls, tool_call_id, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0, 0)",
-		deleteMessage:         "DELETE FROM " + messagesTable + " WHERE message_id = $1 AND deleted_at = 0",
-		getMessages:           "SELECT * FROM " + messagesTable + " WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $1 OFFSET $2",
-		listMessages:          "SELECT * FROM " + messagesTable + " WHERE deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC",
-		listCompactedMessages: "SELECT * FROM " + messagesTable + " WHERE compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC",
+		createMessage:         "INSERT INTO " + messagesTable + " (message_id, session_id, role, name, content, reasoning_content, tool_calls, tool_call_id, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, 0)",
+		deleteMessage:         "DELETE FROM " + messagesTable + " WHERE session_id = $1 AND message_id = $2 AND deleted_at = 0",
+		getMessages:           "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
+		listMessages:          "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC",
+		listCompactedMessages: "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC",
 		// compactActiveMessages sets compacted_at on all currently active messages.
-		compactActiveMessages: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE deleted_at = 0 AND compacted_at = 0",
+		compactActiveMessages: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE session_id = $2 AND deleted_at = 0 AND compacted_at = 0",
 		// compactMessagesBefore archives only messages whose message_id is less than
 		// the given split point, leaving messages at or after it active.
-		compactMessagesBefore: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE deleted_at = 0 AND compacted_at = 0 AND message_id < $2",
+		compactMessagesBefore: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE session_id = $2 AND deleted_at = 0 AND compacted_at = 0 AND message_id < $3",
 	}
 }
 
@@ -81,10 +81,12 @@ func (s *databaseSession) GetSessionID() int64 {
 	return s.SessionID
 }
 func (s *databaseSession) CreateMessage(ctx context.Context, message *message.Message) error {
+	message.SessionID = s.SessionID
 	_, err := s.db.ExecContext(
 		ctx,
 		s.q.createMessage,
 		message.MessageID,
+		message.SessionID,
 		message.Role,
 		message.Name,
 		message.Content,
@@ -100,13 +102,13 @@ func (s *databaseSession) CreateMessage(ctx context.Context, message *message.Me
 }
 
 func (s *databaseSession) DeleteMessage(ctx context.Context, messageID int64) error {
-	_, err := s.db.ExecContext(ctx, s.q.deleteMessage, messageID, 0)
+	_, err := s.db.ExecContext(ctx, s.q.deleteMessage, s.SessionID, messageID)
 	return err
 }
 
 func (s *databaseSession) GetMessages(ctx context.Context, limit, offset int64) ([]*message.Message, error) {
 	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.getMessages, limit, offset)
+	err := s.db.SelectContext(ctx, &messages, s.q.getMessages, s.SessionID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +117,7 @@ func (s *databaseSession) GetMessages(ctx context.Context, limit, offset int64) 
 
 func (s *databaseSession) ListMessages(ctx context.Context) ([]*message.Message, error) {
 	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.listMessages)
+	err := s.db.SelectContext(ctx, &messages, s.q.listMessages, s.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +126,7 @@ func (s *databaseSession) ListMessages(ctx context.Context) ([]*message.Message,
 
 func (s *databaseSession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
 	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.listCompactedMessages)
+	err := s.db.SelectContext(ctx, &messages, s.q.listCompactedMessages, s.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,9 +144,9 @@ func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID in
 
 	// Archive messages before the split point. When splitMessageID is 0, archive all.
 	if splitMessageID > 0 {
-		_, err = tx.ExecContext(ctx, s.q.compactMessagesBefore, now.UnixMilli(), splitMessageID)
+		_, err = tx.ExecContext(ctx, s.q.compactMessagesBefore, now.UnixMilli(), s.SessionID, splitMessageID)
 	} else {
-		_, err = tx.ExecContext(ctx, s.q.compactActiveMessages, now.UnixMilli())
+		_, err = tx.ExecContext(ctx, s.q.compactActiveMessages, now.UnixMilli(), s.SessionID)
 	}
 	if err != nil {
 		return err
@@ -157,6 +159,7 @@ func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID in
 		ctx,
 		s.q.createMessage,
 		summaryMsg.MessageID,
+		s.SessionID,
 		summaryMsg.Role,
 		summaryMsg.Name,
 		summaryMsg.Content,
