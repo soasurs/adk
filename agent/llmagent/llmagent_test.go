@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,6 +148,85 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([
 		collected = append(collected, event.Message)
 	}
 	return collected, nil
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (no network required)
+// ---------------------------------------------------------------------------
+
+// TestLlmAgent_MaxIterations verifies that Run yields an error once the
+// MaxIterations limit is reached instead of looping forever.
+func TestLlmAgent_MaxIterations(t *testing.T) {
+	// Each call returns a tool-call response so the loop never stops on its own.
+	toolCallResp := func() *model.LLMResponse {
+		return &model.LLMResponse{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "c1", Name: "echo", Arguments: `{"message":"hi"}`},
+				},
+			},
+			FinishReason: model.FinishReasonToolCalls,
+		}
+	}
+
+	const limit = 3
+	llm := &mockLLM{
+		name: "mock",
+		responses: []*model.LLMResponse{
+			toolCallResp(),
+			toolCallResp(),
+			toolCallResp(),
+			toolCallResp(), // would be reached without a limit
+		},
+	}
+
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
+
+	a := New(Config{
+		Name:          "test-agent",
+		Model:         llm,
+		Tools:         []tool.Tool{echoTool},
+		MaxIterations: limit,
+	}).(*LlmAgent)
+
+	_, runErr := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "loop forever"},
+	})
+
+	require.Error(t, runErr)
+	assert.Contains(t, runErr.Error(), "max iterations exceeded")
+	assert.Contains(t, runErr.Error(), fmt.Sprintf("(%d)", limit))
+	// The mock should have been called exactly `limit` times.
+	assert.Equal(t, limit, llm.callIdx)
+}
+
+// TestLlmAgent_MaxIterationsZeroMeansNoLimit verifies that MaxIterations=0
+// does not impose any cap — the loop runs until the LLM stops requesting tools.
+func TestLlmAgent_MaxIterationsZeroMeansNoLimit(t *testing.T) {
+	stopResp := &model.LLMResponse{
+		Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+		FinishReason: model.FinishReasonStop,
+	}
+	llm := &mockLLM{
+		name:      "mock",
+		responses: []*model.LLMResponse{stopResp},
+	}
+
+	a := New(Config{
+		Name:          "test-agent",
+		Model:         llm,
+		MaxIterations: 0, // no limit
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "done", msgs[0].Content)
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +659,297 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 
 	assert.False(t, events[5].Partial)
 	assert.Equal(t, "The result: streaming", events[5].Message.Content)
+}
+
+// TestLlmAgent_Hooks_LLMCallLifecycle verifies that before/after LLM hooks are
+// invoked around each GenerateContent call with the correct metadata.
+func TestLlmAgent_Hooks_LLMCallLifecycle(t *testing.T) {
+	llm := &captureLLM{name: "capture"}
+	var order []string
+
+	a := New(Config{
+		Name:  "hooked-agent",
+		Model: llm,
+		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
+			order = append(order, fmt.Sprintf("before-llm-%d", call.Iteration))
+			require.Equal(t, "hooked-agent", call.AgentName)
+			require.Equal(t, 1, call.Iteration)
+			require.NotNil(t, call.Request)
+			return nil, nil
+		},
+		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+			order = append(order, fmt.Sprintf("after-llm-%d", call.Iteration))
+			require.NotNil(t, result.Response)
+			assert.Equal(t, model.FinishReasonStop, result.Response.FinishReason)
+			assert.Zero(t, result.PartialResponses)
+			assert.False(t, result.StoppedEarly)
+			assert.NoError(t, result.Err)
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "hello"}})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, []string{"before-llm-1", "after-llm-1"}, order)
+	require.NotNil(t, llm.lastRequest)
+	assert.Equal(t, "hello", llm.lastRequest.Messages[0].Content)
+	assert.Equal(t, model.RoleUser, llm.lastRequest.Messages[0].Role)
+	assert.Equal(t, "ok", msgs[0].Content)
+}
+
+// hookAwareTool is a test double that records the context values visible to Run.
+type hookAwareTool struct {
+	name       string
+	result     string
+	ctxChecker func(ctx context.Context)
+	callCount  *atomic.Int64
+}
+
+func (h *hookAwareTool) Definition() tool.Definition {
+	return tool.Definition{Name: h.name, Description: "hook-aware tool"}
+}
+
+func (h *hookAwareTool) Run(ctx context.Context, _ string, _ string) (string, error) {
+	h.callCount.Add(1)
+	if h.ctxChecker != nil {
+		h.ctxChecker(ctx)
+	}
+	return h.result, nil
+}
+
+// TestLlmAgent_Hooks_ToolCallLifecycle verifies that tool hooks run around
+// tool invocation and receive the expected metadata.
+func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
+	var callCount atomic.Int64
+	hookTool := &hookAwareTool{
+		name:      "hook-tool",
+		result:    "tool-result",
+		callCount: &callCount,
+	}
+
+	mock := &mockLLM{
+		name: "mock-hook-tool",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	var mu sync.Mutex
+	var order []string
+
+	a := New(Config{
+		Name:  "hooked-tool-agent",
+		Model: mock,
+		Tools: []tool.Tool{hookTool},
+		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
+			mu.Lock()
+			order = append(order, fmt.Sprintf("before-llm-%d", call.Iteration))
+			mu.Unlock()
+			return nil, nil
+		},
+		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+			mu.Lock()
+			order = append(order, fmt.Sprintf("after-llm-%d", call.Iteration))
+			mu.Unlock()
+			if call.Iteration == 1 {
+				require.NotNil(t, result.Response)
+				assert.Equal(t, model.FinishReasonToolCalls, result.Response.FinishReason)
+			}
+			return nil
+		},
+		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+			mu.Lock()
+			order = append(order, fmt.Sprintf("before-tool-%d-%d", call.Iteration, call.ToolIndex))
+			mu.Unlock()
+			require.Equal(t, "hooked-tool-agent", call.AgentName)
+			require.Equal(t, 1, call.Iteration)
+			require.Equal(t, 0, call.ToolIndex)
+			require.Equal(t, "hook-tool", call.Definition.Name)
+			return nil, nil
+		},
+		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+			mu.Lock()
+			order = append(order, fmt.Sprintf("after-tool-%d-%d", call.Iteration, call.ToolIndex))
+			mu.Unlock()
+			assert.Equal(t, "tool-result", result.Result)
+			assert.NoError(t, result.Err)
+			assert.Equal(t, "tool-result", result.Message.Content)
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run hook tool"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), callCount.Load())
+	assert.Equal(t, []string{
+		"before-llm-1",
+		"after-llm-1",
+		"before-tool-1-0",
+		"after-tool-1-0",
+		"before-llm-2",
+		"after-llm-2",
+	}, order)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, model.RoleTool, msgs[1].Role)
+	assert.Equal(t, "tool-result", msgs[1].Content)
+}
+
+// TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun verifies that hook failures
+// are propagated and stop execution before the tool is invoked.
+func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
+	var callCount atomic.Int64
+	hookTool := &hookAwareTool{
+		name:      "hook-tool",
+		result:    "tool-result",
+		callCount: &callCount,
+	}
+
+	mock := &mockLLM{
+		name: "mock-hook-error",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	hookErr := fmt.Errorf("tool hook blocked call")
+	a := New(Config{
+		Name:  "hook-error-agent",
+		Model: mock,
+		Tools: []tool.Tool{hookTool},
+		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+			return nil, hookErr
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run blocked tool"}})
+
+	require.ErrorIs(t, err, hookErr)
+	assert.Equal(t, int64(0), callCount.Load())
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
+	assert.Equal(t, 1, mock.callIdx)
+}
+
+// TestLlmAgent_Hooks_BeforeLLMCall_Skip verifies that returning a non-nil
+// *model.LLMResponse from BeforeLLMCall skips the actual LLM call and uses
+// the returned response as the result instead.
+func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
+	// A mock that would fail if invoked, ensuring the real LLM is never called.
+	neverCalled := &mockLLM{name: "never-called"}
+
+	fakeResp := &model.LLMResponse{
+		Message:      model.Message{Role: model.RoleAssistant, Content: "cached response"},
+		FinishReason: model.FinishReasonStop,
+	}
+
+	var afterCalled bool
+	a := New(Config{
+		Name:  "skip-llm-agent",
+		Model: neverCalled,
+		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
+			return fakeResp, nil
+		},
+		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+			afterCalled = true
+			require.NotNil(t, result.Response)
+			assert.Equal(t, "cached response", result.Response.Message.Content)
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "hello"}})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "cached response", msgs[0].Content)
+	assert.Equal(t, 0, neverCalled.callIdx, "real LLM must not have been called")
+	assert.True(t, afterCalled, "AfterLLMCall must still be invoked after skip")
+}
+
+// TestLlmAgent_Hooks_BeforeToolCall_Skip verifies that returning a non-nil
+// *ToolCallResult from BeforeToolCall skips the actual tool execution and uses
+// the returned result instead.
+func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
+	var callCount atomic.Int64
+	realTool := &hookAwareTool{
+		name:      "real-tool",
+		result:    "real-result",
+		callCount: &callCount,
+	}
+
+	mock := &mockLLM{
+		name: "mock-skip-tool",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "real-tool", Arguments: `{}`}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	fakeToolMsg := model.Message{
+		Role:       model.RoleTool,
+		ToolCallID: "tc-1",
+		Content:    "injected-result",
+	}
+	var afterCalled bool
+
+	a := New(Config{
+		Name:  "skip-tool-agent",
+		Model: mock,
+		Tools: []tool.Tool{realTool},
+		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+			return &ToolCallResult{
+				Message: fakeToolMsg,
+				Result:  "injected-result",
+			}, nil
+		},
+		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+			afterCalled = true
+			assert.Equal(t, "injected-result", result.Result)
+			assert.Equal(t, "injected-result", result.Message.Content)
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run tool"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), callCount.Load(), "real tool must not have been called")
+	assert.True(t, afterCalled, "AfterToolCall must still be invoked after skip")
+	require.Len(t, msgs, 3)
+	assert.Equal(t, model.RoleTool, msgs[1].Role)
+	assert.Equal(t, "injected-result", msgs[1].Content)
 }
 
 // ---------------------------------------------------------------------------
