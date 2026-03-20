@@ -161,10 +161,11 @@ func IsRetryable(err error) bool {
 	// Fallback: inspect the error string for known retryable patterns.
 	// This handles SDK errors that embed the HTTP status in their message and
 	// network-level errors that do not expose a StatusCode method.
+	// Note: bare numeric status codes (500, 502, etc.) are intentionally omitted
+	// to avoid false-positive matches on port numbers or business error codes.
 	msg := strings.ToLower(err.Error())
 	for _, pattern := range []string{
 		"429", "rate limit", "rate_limit", "too many requests",
-		"500", "502", "503", "504",
 		"internal server error", "bad gateway",
 		"service unavailable", "gateway timeout",
 		"connection refused", "connection reset",

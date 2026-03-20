@@ -33,6 +33,13 @@ type Summarizer func(ctx context.Context, msgs []*message.Message) (string, erro
 // most recent assistant message's PromptTokens, which is the actual input-token
 // count reported by the LLM for the last call and therefore the best available
 // proxy for how large the context has grown.
+//
+// Known limitation: this is an approximation. If several tool-result messages
+// have been appended since the last LLM call (PromptTokens == 0 on those), the
+// function walks backwards to find a message with usage data. In sessions where
+// usage data is sparse or absent the function conservatively returns false.
+// True per-message token counting would require provider-specific tokenisers and
+// is out of scope for this package.
 func ShouldCompact(msgs []*message.Message, cfg Config) bool {
 	if cfg.MaxTokens <= 0 {
 		return false

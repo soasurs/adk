@@ -214,11 +214,15 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			ReasoningContent: reasoningBuf.String(),
 		}
 		if len(toolCallAcc) > 0 {
-			msg.ToolCalls = make([]model.ToolCall, len(toolCallAcc))
-			for idx, tc := range toolCallAcc {
-				if int(idx) < len(msg.ToolCalls) {
-					msg.ToolCalls[idx] = *tc
+			var maxIdx int64
+			for idx := range toolCallAcc {
+				if idx > maxIdx {
+					maxIdx = idx
 				}
+			}
+			msg.ToolCalls = make([]model.ToolCall, maxIdx+1)
+			for idx, tc := range toolCallAcc {
+				msg.ToolCalls[idx] = *tc
 			}
 		}
 

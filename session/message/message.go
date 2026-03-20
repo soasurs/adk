@@ -8,6 +8,36 @@ import (
 	"github.com/soasurs/adk/model"
 )
 
+// Parts is a slice of ContentPart that serializes to/from JSON for database storage.
+type Parts []model.ContentPart
+
+// Value implements driver.Valuer so Parts can be written to the database as a JSON string.
+func (p Parts) Value() (driver.Value, error) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// Scan implements sql.Scanner so Parts can be read from the database from a JSON string.
+func (p *Parts) Scan(src any) error {
+	if src == nil {
+		*p = Parts{}
+		return nil
+	}
+	var s string
+	switch v := src.(type) {
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("message: unsupported Parts source type: %T", src)
+	}
+	return json.Unmarshal([]byte(s), p)
+}
+
 // ToolCall represents a persisted tool call within an assistant message.
 type ToolCall struct {
 	// ID is the unique identifier of this tool call, matching model.ToolCall.ID.
@@ -54,6 +84,8 @@ type Message struct {
 	// Name optionally identifies the producer of this message (e.g. an agent name).
 	Name    string `json:"name" db:"name"`
 	Content string `json:"content" db:"content"`
+	// Parts holds multi-modal content parts (text, images, etc.) serialized as JSON.
+	Parts Parts `json:"parts" db:"parts"`
 	// ReasoningContent stores the model's chain-of-thought output when provided.
 	ReasoningContent string    `json:"reasoning_content" db:"reasoning_content"`
 	ToolCalls        ToolCalls `json:"tool_calls" db:"tool_calls"`
@@ -87,6 +119,7 @@ func (m *Message) ToModel() model.Message {
 		Role:             model.Role(m.Role),
 		Name:             m.Name,
 		Content:          m.Content,
+		Parts:            []model.ContentPart(m.Parts),
 		ReasoningContent: m.ReasoningContent,
 		ToolCalls:        toolCalls,
 		ToolCallID:       m.ToolCallID,
@@ -116,6 +149,7 @@ func FromModel(m model.Message) *Message {
 		Role:             string(m.Role),
 		Name:             m.Name,
 		Content:          m.Content,
+		Parts:            Parts(m.Parts),
 		ReasoningContent: m.ReasoningContent,
 		ToolCalls:        toolCalls,
 		ToolCallID:       m.ToolCallID,

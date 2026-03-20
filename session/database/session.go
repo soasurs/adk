@@ -36,9 +36,9 @@ func buildQueries(sessionsTable, messagesTable string) *queries {
 		createSession: "INSERT INTO " + sessionsTable + " (session_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4)",
 		getSession:    "SELECT * FROM " + sessionsTable + " WHERE session_id = $1 AND deleted_at = $2 LIMIT 1",
 		deleteSession: "UPDATE " + sessionsTable + " SET deleted_at = $1 WHERE session_id = $2 AND deleted_at = $3",
-		// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0.
-		createMessage:         "INSERT INTO " + messagesTable + " (message_id, session_id, role, name, content, reasoning_content, tool_calls, tool_call_id, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, 0)",
-		deleteMessage:         "DELETE FROM " + messagesTable + " WHERE session_id = $1 AND message_id = $2 AND deleted_at = 0",
+		// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0 and deleted_at = 0.
+		createMessage:         "INSERT INTO " + messagesTable + " (message_id, session_id, role, name, content, reasoning_content, tool_calls, tool_call_id, parts, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, 0)",
+		deleteMessage:         "UPDATE " + messagesTable + " SET deleted_at = $1 WHERE session_id = $2 AND message_id = $3 AND deleted_at = 0",
 		getMessages:           "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
 		listMessages:          "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC",
 		listCompactedMessages: "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC",
@@ -93,16 +93,18 @@ func (s *databaseSession) CreateMessage(ctx context.Context, message *message.Me
 		message.ReasoningContent,
 		message.ToolCalls,
 		message.ToolCallID,
+		message.Parts,
 		message.PromptTokens,
 		message.CompletionTokens,
 		message.TotalTokens,
 		message.CreatedAt,
+		message.UpdatedAt,
 	)
 	return err
 }
 
 func (s *databaseSession) DeleteMessage(ctx context.Context, messageID int64) error {
-	_, err := s.db.ExecContext(ctx, s.q.deleteMessage, s.SessionID, messageID)
+	_, err := s.db.ExecContext(ctx, s.q.deleteMessage, time.Now().UnixMilli(), s.SessionID, messageID)
 	return err
 }
 
@@ -166,10 +168,12 @@ func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID in
 		summaryMsg.ReasoningContent,
 		summaryMsg.ToolCalls,
 		summaryMsg.ToolCallID,
+		summaryMsg.Parts,
 		summaryMsg.PromptTokens,
 		summaryMsg.CompletionTokens,
 		summaryMsg.TotalTokens,
 		summaryMsg.CreatedAt,
+		summaryMsg.UpdatedAt,
 	)
 	if err != nil {
 		return err

@@ -210,7 +210,7 @@ func main() {
 		onAgentLine := false
 		hadPartials := false
 
-		for event, err := range r.Run(ctx, sessionID, input) {
+		for event, err := range r.Run(ctx, sessionID, model.Message{Content: input}) {
 			if err != nil {
 				if onAgentLine {
 					fmt.Println()

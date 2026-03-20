@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/soasurs/adk/internal/snowflake"
+	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/session/message"
 )
 
@@ -37,6 +38,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 			reasoning_content TEXT    NOT NULL DEFAULT '',
 			tool_calls        TEXT    NOT NULL DEFAULT '[]',
 			tool_call_id      TEXT    NOT NULL DEFAULT '',
+			parts             TEXT    NOT NULL DEFAULT '[]',
 			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
 			completion_tokens INTEGER NOT NULL DEFAULT 0,
 			total_tokens      INTEGER NOT NULL DEFAULT 0,
@@ -343,3 +345,62 @@ func TestDatabaseSession_GetSessionID(t *testing.T) {
 
 	assert.Equal(t, sessionID, session.GetSessionID())
 }
+
+// TestDatabaseSession_Parts_RoundTrip verifies that ContentParts are written to the
+// database and read back intact, preserving all fields.
+func TestDatabaseSession_Parts_RoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	snowflaker, err := snowflake.New()
+	require.NoError(t, err)
+	sessionID := snowflaker.Generate().Int64()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, sessionID)
+	require.NoError(t, err)
+
+	parts := message.Parts{
+		{Type: model.ContentPartTypeText, Text: "what is in this image?"},
+		{
+			Type:        model.ContentPartTypeImageURL,
+			ImageURL:    "https://example.com/photo.jpg",
+			ImageDetail: model.ImageDetailHigh,
+		},
+		{
+			Type:        model.ContentPartTypeImageBase64,
+			ImageBase64: "iVBORw0KGgo=",
+			MIMEType:    "image/png",
+		},
+	}
+	msg := &message.Message{
+		MessageID: 1,
+		Role:      string(model.RoleUser),
+		Parts:     parts,
+		CreatedAt: time.Now().UnixMilli(),
+		UpdatedAt: time.Now().UnixMilli(),
+	}
+
+	require.NoError(t, sess.CreateMessage(ctx, msg))
+
+	stored, err := sess.GetMessages(ctx, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+
+	got := stored[0].Parts
+	require.Len(t, got, 3)
+	assert.Equal(t, model.ContentPartTypeText, got[0].Type)
+	assert.Equal(t, "what is in this image?", got[0].Text)
+	assert.Equal(t, model.ContentPartTypeImageURL, got[1].Type)
+	assert.Equal(t, "https://example.com/photo.jpg", got[1].ImageURL)
+	assert.Equal(t, model.ImageDetailHigh, got[1].ImageDetail)
+	assert.Equal(t, model.ContentPartTypeImageBase64, got[2].Type)
+	assert.Equal(t, "iVBORw0KGgo=", got[2].ImageBase64)
+	assert.Equal(t, "image/png", got[2].MIMEType)
+
+	// Verify round-trip through ToModel.
+	modelMsg := stored[0].ToModel()
+	require.Len(t, modelMsg.Parts, 3)
+	assert.Equal(t, "what is in this image?", modelMsg.Parts[0].Text)
+}
+

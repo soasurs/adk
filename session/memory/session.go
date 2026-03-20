@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/soasurs/adk/session"
@@ -9,8 +10,9 @@ import (
 )
 
 type memorySession struct {
+	mu        sync.RWMutex
 	sessionID int64
-	messages  []*message.Message // all messages: active (compacted_at=0) + compacted (compacted_at>0)
+	messages  []*message.Message // all messages: active (compacted_at=0, deleted_at=0) + archived
 }
 
 func NewMemorySession(sessionID int64) session.Session {
@@ -25,14 +27,19 @@ func (s *memorySession) GetSessionID() int64 {
 }
 
 func (s *memorySession) CreateMessage(ctx context.Context, msg *message.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.messages = append(s.messages, msg)
 	return nil
 }
 
 func (s *memorySession) DeleteMessage(ctx context.Context, messageID int64) error {
-	for i := 0; i < len(s.messages); i++ {
-		if s.messages[i].MessageID == messageID && s.messages[i].CompactedAt == 0 {
-			s.messages = append(s.messages[:i], s.messages[i+1:]...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UnixMilli()
+	for _, m := range s.messages {
+		if m.MessageID == messageID && m.CompactedAt == 0 && m.DeletedAt == 0 {
+			m.DeletedAt = now
 			break
 		}
 	}
@@ -40,6 +47,8 @@ func (s *memorySession) DeleteMessage(ctx context.Context, messageID int64) erro
 }
 
 func (s *memorySession) GetMessages(ctx context.Context, limit, offset int64) ([]*message.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	active := s.activeMessages()
 	if offset >= int64(len(active)) {
 		return []*message.Message{}, nil
@@ -52,13 +61,17 @@ func (s *memorySession) GetMessages(ctx context.Context, limit, offset int64) ([
 }
 
 func (s *memorySession) ListMessages(ctx context.Context) ([]*message.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.activeMessages(), nil
 }
 
 func (s *memorySession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]*message.Message, 0)
 	for _, m := range s.messages {
-		if m.CompactedAt > 0 {
+		if m.CompactedAt > 0 && m.DeletedAt == 0 {
 			out = append(out, m)
 		}
 	}
@@ -66,6 +79,8 @@ func (s *memorySession) ListCompactedMessages(ctx context.Context) ([]*message.M
 }
 
 func (s *memorySession) CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
 
 	// Determine the index of the first active message to keep.
@@ -90,11 +105,12 @@ func (s *memorySession) CompactMessages(ctx context.Context, splitMessageID int6
 	return nil
 }
 
-// activeMessages returns all messages with CompactedAt == 0, preserving insertion order.
+// activeMessages returns all messages with CompactedAt == 0 and DeletedAt == 0,
+// preserving insertion order. Must be called with s.mu held (read or write).
 func (s *memorySession) activeMessages() []*message.Message {
 	out := make([]*message.Message, 0, len(s.messages))
 	for _, m := range s.messages {
-		if m.CompactedAt == 0 {
+		if m.CompactedAt == 0 && m.DeletedAt == 0 {
 			out = append(out, m)
 		}
 	}

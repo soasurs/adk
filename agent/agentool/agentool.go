@@ -32,6 +32,13 @@ type taskRequest struct {
 // When invoked, the tool runs the agent with a single user message containing
 // the task, collects its final assistant text response, and returns it as the
 // tool result string.
+//
+// Design note: the sub-agent receives only the delegated task as its input; it
+// does not inherit the parent agent's conversation history. This is an
+// intentional stateless task-delegation pattern. If the sub-agent requires
+// broader context it must be captured in its Instruction or supplied via other
+// means. Propagating arbitrary parent history would require a breaking change
+// to the tool.Tool interface.
 func New(a agent.Agent) (tool.Tool, error) {
 	schema, err := jsonschema.ForType(reflect.TypeFor[taskRequest](), &jsonschema.ForOptions{})
 	if err != nil {

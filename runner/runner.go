@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"time"
 
@@ -42,11 +43,18 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 // streaming fragments are forwarded to the caller for real-time display but
 // are not persisted. The caller iterates the returned sequence and decides
 // whether to continue the conversation by calling Run again.
-func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) iter.Seq2[*model.Event, error] {
+//
+// userInput must contain the user's message content (via Content or Parts).
+// Its Role is always set to RoleUser by the runner.
+func (r *Runner) Run(ctx context.Context, sessionID int64, userInput model.Message) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		sess, err := r.session.GetSession(ctx, sessionID)
 		if err != nil {
 			yield(nil, err)
+			return
+		}
+		if sess == nil {
+			yield(nil, fmt.Errorf("runner: session %d not found", sessionID))
 			return
 		}
 
@@ -63,10 +71,8 @@ func (r *Runner) Run(ctx context.Context, sessionID int64, userInput string) ite
 		}
 
 		// Append and persist the incoming user message.
-		userMsg := model.Message{
-			Role:    model.RoleUser,
-			Content: userInput,
-		}
+		userMsg := userInput
+		userMsg.Role = model.RoleUser
 		if err := r.persistMessage(ctx, sess, userMsg); err != nil {
 			yield(nil, err)
 			return
