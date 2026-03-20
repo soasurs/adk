@@ -27,7 +27,6 @@ import (
 	"github.com/soasurs/adk/runner"
 	"github.com/soasurs/adk/session/compaction"
 	"github.com/soasurs/adk/session/memory"
-	"github.com/soasurs/adk/session/message"
 	"github.com/soasurs/adk/tool"
 	"github.com/soasurs/adk/tool/mcp"
 )
@@ -134,42 +133,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── 5. Compaction ─────────────────────────────────────────────────────────
-	// Trigger compaction when prompt tokens exceed the threshold; keep the most
-	// recent conversation rounds verbatim and summarise older rounds via the LLM.
+	// ── 5. Compaction (Manual) ────────────────────────────────────────────────
+	// Compaction is now the responsibility of the user. The SDK provides only
+	// Session.CompactMessages to persist the archival state.
+	//
+	// Users can implement their own compaction strategy by:
+	// 1. Monitoring session growth (e.g., when PromptTokens exceed a threshold)
+	// 2. Deciding which messages to archive (e.g., keep last N rounds)
+	// 3. Generating a summary (e.g., via LLM)
+	// 4. Calling session.CompactMessages(ctx, splitMessageID, summaryMsg)
+	//
+	// Example compaction strategies:
+	// - Token-based: Archive when sum of tokens exceeds MaxTokens
+	// - Rounds-based: Keep only the last N conversation rounds
+	// - Time-based: Archive messages older than T hours
+	// - Hybrid: Combine multiple heuristics
 	compactCfg := compaction.Config{
 		MaxTokens:        7000,
 		KeepRecentRounds: 1,
-	}
-	compactor, err := compaction.NewSlidingWindowCompactor(compactCfg,
-		func(ctx context.Context, msgs []*message.Message) (string, error) {
-			var sb strings.Builder
-			for _, m := range msgs {
-				sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, m.Content))
-			}
-			req := &model.LLMRequest{
-				Model: modelName,
-				Messages: []model.Message{
-					{
-						Role:    model.RoleUser,
-						Content: "Summarize the following conversation concisely:\n\n" + sb.String(),
-					},
-				},
-			}
-			for resp, err := range llm.GenerateContent(ctx, req, nil, false) {
-				if err != nil {
-					return "", fmt.Errorf("summarize: %w", err)
-				}
-				if !resp.Partial {
-					return resp.Message.Content, nil
-				}
-			}
-			return "", fmt.Errorf("summarize: no response")
-		},
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: create compactor: %v\n", err)
-		os.Exit(1)
 	}
 
 	// ── Header ────────────────────────────────────────────────────────────────
@@ -283,45 +264,13 @@ func main() {
 						promptTokens, completionTokens, compactCfg.MaxTokens)
 				}
 
-				// ── Compaction check ──────────────────────────────────────────
-				if compaction.ShouldCompact(msgs, compactCfg) {
-					fmt.Print("compacting context... ")
-					splitID, summaryMsg, err := compactor(ctx, msgs)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warn: compaction failed: %v\n", err)
-					} else if summaryMsg != nil {
-						// Count archived vs kept messages.
-						splitIdx := len(msgs)
-						if splitID > 0 {
-							for i, m := range msgs {
-								if m.MessageID == splitID {
-									splitIdx = i
-									break
-								}
-							}
-						}
-						archivedCount := splitIdx
-						keptCount := len(msgs) - splitIdx
-
-						beforeCount := len(msgs)
-						if err := sess.CompactMessages(ctx, splitID, summaryMsg); err != nil {
-							fmt.Fprintf(os.Stderr, "warn: CompactMessages failed: %v\n", err)
-						} else {
-							// Verify compaction worked by re-reading messages.
-							afterMsgs, _ := sess.ListMessages(ctx)
-							afterCount := len(afterMsgs)
-
-							fmt.Println("done")
-							fmt.Printf("  prompt tokens : %d (threshold: %d)\n",
-								promptTokens, compactCfg.MaxTokens)
-							fmt.Printf("  messages      : %d → %d (archived %d, kept %d + summary)\n",
-								beforeCount, afterCount, archivedCount, keptCount)
-							fmt.Printf("  summary       : %s\n",
-								truncate(summaryMsg.Content, 100))
-							fmt.Println()
-						}
-					}
-				}
+				// ── Compaction (Manual) ────────────────────────────────────────
+				// Users can implement custom compaction logic here.
+				// Example: check if promptTokens > compactCfg.MaxTokens:
+				//   1. Identify which messages to archive
+				//   2. Generate a summary via LLM
+				//   3. Call sess.CompactMessages(ctx, splitMessageID, summaryMsg)
+				_ = msgs // Use msgs to implement custom compaction logic
 			}
 		}
 

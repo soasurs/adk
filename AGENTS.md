@@ -89,6 +89,170 @@ Key design decisions every agent must understand:
 - **Parallel tool execution** — `LlmAgent` dispatches all tool calls from a single LLM response concurrently with `sync.WaitGroup`; results are written to pre-allocated index slots to avoid mutex contention.
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives in sub-packages (`model/openai`, etc.).
 
+## Context Management and Manual Compaction
+
+The SDK does not perform automatic compaction. Instead, it provides `Session.CompactMessages()` for users to manage context growth manually.
+
+### About Compaction
+
+Long conversations accumulate messages, which increases the input token count for each LLM call. When the session grows too large, you must decide:
+
+1. **When to compact** — based on token count, message count, time, or other heuristics
+2. **What to archive** — which older messages to remove from active history
+3. **How to summarize** — whether and how to create a summary of archived messages
+
+### How to Implement Compaction
+
+Compaction involves four steps:
+
+1. **Monitor growth**: Track session size (e.g., via `PromptTokens` on LLM responses or message count)
+2. **Decide what to keep**: Choose which messages remain in active history (e.g., the last N rounds of conversation)
+3. **Summarize archived**: Generate a summary of the messages being archived (optional, but recommended for context preservation)
+4. **Call CompactMessages**: Persist the archival using `session.CompactMessages(ctx, splitMessageID, summaryMsg)`
+
+### Example: Token-Based Compaction Strategy
+
+```go
+import (
+    "context"
+    "fmt"
+    "strings"
+    "time"
+
+    snowflaker "github.com/soasurs/adk/internal/snowflake"
+    "github.com/soasurs/adk/model"
+    "github.com/soasurs/adk/session"
+    "github.com/soasurs/adk/session/message"
+)
+
+// TokenBasedCompactor monitors session growth and archives old messages
+// when they exceed a token threshold.
+type TokenBasedCompactor struct {
+    maxTokens int64
+    llm       model.LLM // for generating summaries
+    modelName string
+}
+
+// MaybeCompact checks if compaction is needed and compacts if threshold is exceeded.
+func (c *TokenBasedCompactor) MaybeCompact(
+    ctx context.Context,
+    sess session.Session,
+    msgs []*message.Message,
+) error {
+    // 1. Check if we exceed the threshold
+    var latestPromptTokens int64
+    for i := len(msgs) - 1; i >= 0; i-- {
+        if msgs[i].PromptTokens > 0 {
+            latestPromptTokens = msgs[i].PromptTokens
+            break
+        }
+    }
+
+    if latestPromptTokens == 0 || latestPromptTokens <= c.maxTokens {
+        return nil // No compaction needed
+    }
+
+    // 2. Decide what to keep: keep only the last 2 user messages
+    // (adjust this strategy based on your needs)
+    var splitIdx int = 0
+    userCount := 0
+    for i := len(msgs) - 1; i >= 0; i-- {
+        if msgs[i].Role == model.RoleUser {
+            userCount++
+            if userCount >= 2 {
+                splitIdx = i
+                break
+            }
+        }
+    }
+
+    if splitIdx == 0 {
+        return nil // Nothing to archive
+    }
+
+    toArchive := msgs[:splitIdx]
+    toKeep := msgs[splitIdx:]
+
+    // 3. Generate summary
+    summaryContent, err := c.summarize(ctx, toArchive)
+    if err != nil {
+        return fmt.Errorf("summarize: %w", err)
+    }
+
+    // 4. Create summary message and call CompactMessages
+    now := time.Now().UnixMilli()
+    sf, err := snowflaker.New()
+    if err != nil {
+        return fmt.Errorf("snowflake: %w", err)
+    }
+
+    summaryMsg := &message.Message{
+        MessageID:     sf.Generate().Int64(),
+        Role:          model.RoleSystem,
+        Content:       summaryContent,
+        CreatedAt:     now,
+        UpdatedAt:     now,
+    }
+
+    splitMessageID := int64(0)
+    if len(toKeep) > 0 {
+        splitMessageID = toKeep[0].MessageID
+    }
+
+    return sess.CompactMessages(ctx, splitMessageID, summaryMsg)
+}
+
+// summarize calls the LLM to create a brief summary of archived messages.
+func (c *TokenBasedCompactor) summarize(
+    ctx context.Context,
+    msgs []*message.Message,
+) (string, error) {
+    var sb strings.Builder
+    for _, m := range msgs {
+        sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.Role, m.Content))
+    }
+
+    req := &model.LLMRequest{
+        Model: c.modelName,
+        Messages: []model.Message{
+            {
+                Role:    model.RoleUser,
+                Content: "Summarize the following conversation concisely:\n\n" + sb.String(),
+            },
+        },
+    }
+
+    for resp := range c.llm.GenerateContent(ctx, req, nil, false) {
+        if !resp.Partial {
+            return resp.Message.Content, nil
+        }
+    }
+
+    return "", fmt.Errorf("no summary response")
+}
+```
+
+### CompactMessages API
+
+```go
+// Session.CompactMessages marks messages as archived and inserts a summary.
+// If splitMessageID > 0, all messages with MessageID < splitMessageID are marked CompactedAt.
+// If splitMessageID == 0, all messages are marked CompactedAt.
+// summaryMsg (usually with Role="system") is inserted into the session.
+// ListMessages will exclude archived messages and include the summary.
+CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *Message) error
+```
+
+### Other Compaction Strategies
+
+Choose a strategy based on your workload:
+
+- **Rounds-based**: Keep the last N conversation rounds, archive older ones
+- **Time-based**: Archive messages older than T hours
+- **Hybrid**: Combine multiple signals (tokens + rounds + time)
+
+No matter which strategy you choose, the final step is always `session.CompactMessages(ctx, splitMessageID, summaryMsg)`.
+
 ## Coding Style Guidelines
 
 ### Formatting and file layout
