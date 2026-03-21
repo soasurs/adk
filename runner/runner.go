@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"iter"
 	"time"
 
@@ -54,7 +53,7 @@ func (r *Runner) Run(ctx context.Context, sessionID int64, userInput model.Messa
 			return
 		}
 		if sess == nil {
-			yield(nil, fmt.Errorf("runner: session %d not found", sessionID))
+			yield(nil, &SessionNotFoundError{SessionID: sessionID})
 			return
 		}
 

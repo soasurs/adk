@@ -70,6 +70,8 @@ func NewVertexAI(ctx context.Context, project, location, modelName string, retry
 	}
 	if len(retryCfg) > 0 {
 		gc.retryCfg = retryCfg[0]
+	} else {
+		gc.retryCfg = retry.DefaultConfig()
 	}
 	return gc, nil
 }

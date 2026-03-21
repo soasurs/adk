@@ -44,6 +44,9 @@ func (s *ToolSet) Connect(ctx context.Context) error {
 
 // Tools discovers all tools exposed by the MCP server and wraps them as tool.Tool instances.
 func (s *ToolSet) Tools(ctx context.Context) ([]tool.Tool, error) {
+	if s.session == nil {
+		return nil, fmt.Errorf("mcp list tools: %w", ErrNotConnected)
+	}
 	var tools []tool.Tool
 	for t, err := range s.session.Tools(ctx, nil) {
 		if err != nil {
@@ -76,7 +79,12 @@ func (s *ToolSet) Close() error {
 	if s.session == nil {
 		return nil
 	}
-	return s.session.Close()
+	err := s.session.Close()
+	s.session = nil
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // toolWrapper wraps a single MCP tool as a tool.Tool.
@@ -90,6 +98,9 @@ func (t *toolWrapper) Definition() tool.Definition {
 }
 
 func (t *toolWrapper) Run(ctx context.Context, _ string, arguments string) (string, error) {
+	if t.session == nil {
+		return "", fmt.Errorf("mcp call tool %q: %w", t.def.Name, ErrNotConnected)
+	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return "", fmt.Errorf("mcp tool arguments unmarshal: %w", err)

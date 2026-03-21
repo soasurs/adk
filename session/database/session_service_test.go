@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -293,6 +294,9 @@ func TestDatabaseSessionService_InvalidTableName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewDatabaseSessionService(db, tc.opts...)
 			assert.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidTableName)
+			var invalidNameErr *InvalidTableNameError
+			require.True(t, errors.As(err, &invalidNameErr))
 		})
 	}
 }

@@ -2,6 +2,7 @@ package parallelagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -92,7 +93,7 @@ type ParallelAgent struct {
 // If Config.MergeFunc is nil, DefaultMergeFunc is used.
 func New(cfg Config) (agent.Agent, error) {
 	if len(cfg.Agents) == 0 {
-		return nil, fmt.Errorf("parallel: at least one agent is required")
+		return nil, ErrNoAgents
 	}
 	if cfg.MergeFunc == nil {
 		cfg.MergeFunc = DefaultMergeFunc
@@ -157,14 +158,30 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 
 		wg.Wait()
 
-		// Check for errors in definition order; stop at the first one.
+		// Prefer the first non-cancellation error. If all failures are caused by
+		// sibling cancellation, fall back to the first error in definition order.
 		outputs := make([]AgentOutput, 0, len(results))
+		var firstErr error
+		var firstNonCanceledErr error
 		for _, r := range results {
 			if r.err != nil {
-				yield(nil, r.err)
-				return
+				if firstErr == nil {
+					firstErr = r.err
+				}
+				if firstNonCanceledErr == nil && !errors.Is(r.err, context.Canceled) {
+					firstNonCanceledErr = r.err
+				}
+				continue
 			}
 			outputs = append(outputs, r.output)
+		}
+		if firstNonCanceledErr != nil {
+			yield(nil, firstNonCanceledErr)
+			return
+		}
+		if firstErr != nil {
+			yield(nil, firstErr)
+			return
 		}
 
 		// Merge all outputs into a single message and yield it as a complete event.

@@ -480,6 +480,10 @@ func TestRunner_Run_SessionNotFound(t *testing.T) {
 
 	msgs, runErr := collectRun(t, r, 999, model.Message{Content: "hello"})
 	assert.Error(t, runErr)
+	assert.ErrorIs(t, runErr, ErrSessionNotFound)
+	var notFoundErr *SessionNotFoundError
+	require.True(t, errors.As(runErr, &notFoundErr))
+	assert.Equal(t, int64(999), notFoundErr.SessionID)
 	assert.Contains(t, runErr.Error(), "not found")
 	assert.Empty(t, msgs)
 }
@@ -543,4 +547,3 @@ func TestRunner_Run_MultimodalInput(t *testing.T) {
 	require.NotNil(t, multimodalMsg, "multimodal user message not found in history")
 	assert.Equal(t, "describe this", multimodalMsg.Parts[0].Text)
 }
-

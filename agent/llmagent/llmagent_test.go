@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -196,6 +197,10 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 	})
 
 	require.Error(t, runErr)
+	assert.ErrorIs(t, runErr, ErrMaxIterationsExceeded)
+	var maxErr *MaxIterationsError
+	require.True(t, errors.As(runErr, &maxErr))
+	assert.Equal(t, limit, maxErr.MaxIterations)
 	assert.Contains(t, runErr.Error(), "max iterations exceeded")
 	assert.Contains(t, runErr.Error(), fmt.Sprintf("(%d)", limit))
 	// The mock should have been called exactly `limit` times.
@@ -851,6 +856,49 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
 	assert.Equal(t, 1, mock.callIdx)
+}
+
+// TestLlmAgent_MissingTool_UsesTypedError verifies that a missing tool is
+// surfaced to hooks as a typed error that callers can match with errors.Is/As.
+func TestLlmAgent_MissingTool_UsesTypedError(t *testing.T) {
+	mock := &mockLLM{
+		name: "mock-missing-tool",
+		responses: []*model.LLMResponse{
+			{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "missing-tool", Arguments: `{}`}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+
+	var capturedErr error
+	a := New(Config{
+		Name:  "missing-tool-agent",
+		Model: mock,
+		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+			capturedErr = result.Err
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run missing tool"}})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	require.Error(t, capturedErr)
+	assert.ErrorIs(t, capturedErr, ErrToolNotFound)
+	var toolErr *ToolNotFoundError
+	require.True(t, errors.As(capturedErr, &toolErr))
+	assert.Equal(t, "missing-tool", toolErr.Name)
+	assert.Equal(t, model.RoleTool, msgs[1].Role)
+	assert.Equal(t, `llmagent: tool "missing-tool" not found`, msgs[1].Content)
 }
 
 // TestLlmAgent_Hooks_BeforeLLMCall_Skip verifies that returning a non-nil

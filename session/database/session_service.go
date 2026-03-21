@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"regexp"
 	"time"
 
@@ -19,7 +18,7 @@ var validTableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func validateTableName(name string) error {
 	if !validTableName.MatchString(name) {
-		return fmt.Errorf("database: invalid table name %q: must match [A-Za-z_][A-Za-z0-9_]*", name)
+		return &InvalidTableNameError{Name: name}
 	}
 	return nil
 }

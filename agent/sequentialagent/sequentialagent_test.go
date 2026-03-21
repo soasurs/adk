@@ -96,7 +96,7 @@ func TestSequentialAgent_Name(t *testing.T) {
 // TestSequentialAgent_ErrorOnEmpty verifies that New returns an error with no agents.
 func TestSequentialAgent_PanicOnEmpty(t *testing.T) {
 	_, err := New(Config{Name: "empty", Description: "no agents"})
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoAgents)
 }
 
 // TestSequentialAgent_SingleAgent verifies that wrapping a single agent in a

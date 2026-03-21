@@ -134,7 +134,7 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 		for {
 			iteration++
 			if a.config.MaxIterations > 0 && iteration > a.config.MaxIterations {
-				yield(nil, fmt.Errorf("llmagent: max iterations exceeded (%d)", a.config.MaxIterations))
+				yield(nil, &MaxIterationsError{MaxIterations: a.config.MaxIterations})
 				return
 			}
 			call := &LLMCall{
@@ -291,7 +291,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 	}
 
 	if !ok {
-		toolErr := fmt.Errorf("tool %q not found", tc.Name)
+		toolErr := &ToolNotFoundError{Name: tc.Name}
 		msg := model.Message{
 			Role:       model.RoleTool,
 			ToolCallID: tc.ID,

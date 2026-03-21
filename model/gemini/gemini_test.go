@@ -11,6 +11,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/model/retry"
 	"github.com/soasurs/adk/tool"
 	"github.com/soasurs/adk/tool/builtin"
 )
@@ -98,6 +99,15 @@ func newThinkingClientFromEnv(t *testing.T) model.LLM {
 func TestGenerateContent_Name(t *testing.T) {
 	g := &GenerateContent{modelName: "gemini-2.0-flash"}
 	assert.Equal(t, "gemini-2.0-flash", g.Name())
+}
+
+func TestNewVertexAI_DefaultRetryConfig(t *testing.T) {
+	llm, err := NewVertexAI(t.Context(), "test-project", "us-central1", "gemini-2.0-flash")
+	if err != nil {
+		t.Skipf("NewVertexAI requires local ADC setup in this environment: %v", err)
+	}
+	require.NotNil(t, llm)
+	assert.Equal(t, retry.DefaultConfig(), llm.retryCfg)
 }
 
 func TestConvertFinishReason(t *testing.T) {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -41,6 +42,9 @@ func newExaHTTPClient(apiKey string) *http.Client {
 
 func TestToolSet_Exa(t *testing.T) {
 	apiKey := os.Getenv("EXA_API_KEY")
+	if apiKey == "" {
+		t.Skip("EXA_API_KEY not set")
+	}
 
 	ctx := t.Context()
 
@@ -95,4 +99,28 @@ func TestToolSet_Exa(t *testing.T) {
 		assert.NotEmpty(t, result)
 		fmt.Printf("\n[Exa search result]\n%s\n", result)
 	})
+}
+
+func TestToolSet_Tools_NotConnected(t *testing.T) {
+	ts := NewToolSet(nil)
+
+	tools, err := ts.Tools(t.Context())
+
+	assert.Nil(t, tools)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotConnected)
+}
+
+func TestToolWrapper_Run_NotConnected(t *testing.T) {
+	tw := &toolWrapper{
+		def: tool.Definition{Name: "search"},
+	}
+
+	result, err := tw.Run(t.Context(), "call-1", `{}`)
+
+	assert.Empty(t, result)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotConnected)
+	var target error = ErrNotConnected
+	assert.True(t, errors.Is(err, target))
 }

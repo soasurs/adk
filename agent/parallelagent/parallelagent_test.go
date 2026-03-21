@@ -2,6 +2,7 @@ package parallelagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -117,7 +118,7 @@ func TestParallelAgent_Name(t *testing.T) {
 // TestParallelAgent_ErrorOnEmpty verifies that New returns an error with no agents.
 func TestParallelAgent_PanicOnEmpty(t *testing.T) {
 	_, err := New(Config{Name: "empty", Description: "no agents"})
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoAgents)
 }
 
 // TestParallelAgent_SingleAgent verifies that wrapping a single agent yields
@@ -350,6 +351,58 @@ func TestParallelAgent_ErrorPropagation(t *testing.T) {
 	}
 
 	require.Error(t, gotErr, "expected an error from agent-1")
+}
+
+// errorAgent always yields a single error.
+type errorAgent struct {
+	name string
+	err  error
+}
+
+func (a *errorAgent) Name() string        { return a.name }
+func (a *errorAgent) Description() string { return "always errors" }
+func (a *errorAgent) Run(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+	return func(yield func(*model.Event, error) bool) {
+		yield(nil, a.err)
+	}
+}
+
+// TestParallelAgent_PrefersRootCauseOverContextCanceled verifies that the
+// caller sees the original failing agent error instead of a sibling's
+// context.Canceled follow-on error.
+func TestParallelAgent_PrefersRootCauseOverContextCanceled(t *testing.T) {
+	rootErr := errors.New("root failure")
+	ready := make(chan struct{}, 1)
+
+	llm := &blockingMockLLM{
+		name:  "blocking",
+		ready: ready,
+		gate:  make(chan struct{}),
+		response: &model.LLMResponse{
+			Message:      model.Message{Role: model.RoleAssistant, Content: "ignored"},
+			FinishReason: model.FinishReasonStop,
+		},
+	}
+
+	a1 := llmagent.New(llmagent.Config{Name: "blocked-agent", Description: "blocked", Model: llm})
+	a2 := &errorAgent{name: "failing-agent", err: rootErr}
+	pa, err := New(Config{
+		Name:        "fanout",
+		Description: "root cause preservation test",
+		Agents:      []agent.Agent{a1, a2},
+	})
+	require.NoError(t, err)
+
+	var gotErr error
+	for _, err := range pa.Run(t.Context(), []model.Message{{Role: model.RoleUser, Content: "go"}}) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+
+	require.Error(t, gotErr)
+	assert.ErrorIs(t, gotErr, rootErr)
 }
 
 // TestParallelAgent_CustomMergeFunc verifies that a caller-provided MergeFunc
