@@ -205,11 +205,21 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 		wantEnabled    bool
 		wantDisabled   bool
 		wantNoThinking bool
+		wantBudget     int64
 	}{
 		{
 			name:        "EnableThinking=true → OfEnabled set",
 			cfg:         model.GenerateConfig{EnableThinking: boolPtr(true)},
 			wantEnabled: true,
+			wantBudget:  defaultThinkingBudget,
+		},
+		{
+			name: "ThinkingBudget>0 enables thinking without EnableThinking",
+			cfg: model.GenerateConfig{
+				ThinkingBudget: 4096,
+			},
+			wantEnabled: true,
+			wantBudget:  4096,
 		},
 		{
 			name:         "EnableThinking=false → OfDisabled set",
@@ -233,7 +243,7 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 			}
 			if tt.wantEnabled {
 				require.NotNil(t, p.Thinking.OfEnabled)
-				assert.Equal(t, int64(defaultThinkingBudget), p.Thinking.OfEnabled.BudgetTokens)
+				assert.Equal(t, tt.wantBudget, p.Thinking.OfEnabled.BudgetTokens)
 			}
 			if tt.wantDisabled {
 				require.NotNil(t, p.Thinking.OfDisabled)

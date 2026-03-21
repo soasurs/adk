@@ -265,6 +265,23 @@ func TestApplyConfig_ReasoningEffort(t *testing.T) {
 		wantInclude bool
 	}{
 		{
+			name: "thinking level high → HIGH + IncludeThoughts",
+			cfg: model.GenerateConfig{
+				ThinkingLevel: model.ThinkingLevelHigh,
+			},
+			wantLevel:   genai.ThinkingLevelHigh,
+			wantInclude: true,
+		},
+		{
+			name: "thinking level wins over legacy reasoning effort",
+			cfg: model.GenerateConfig{
+				ThinkingLevel:   model.ThinkingLevelLow,
+				ReasoningEffort: model.ReasoningEffortHigh,
+			},
+			wantLevel:   genai.ThinkingLevelLow,
+			wantInclude: true,
+		},
+		{
 			name:       "none → budget=0",
 			cfg:        model.GenerateConfig{ReasoningEffort: model.ReasoningEffortNone},
 			wantBudget: func() *int32 { z := int32(0); return &z }(),

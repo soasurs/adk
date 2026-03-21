@@ -383,13 +383,12 @@ func applyConfig(p *goanthropic.MessageNewParams, cfg *model.GenerateConfig) {
 		p.Temperature = param.NewOpt(cfg.Temperature)
 	}
 
-	// Map EnableThinking → Anthropic ThinkingConfig.
-	// ReasoningEffort is not directly supported by Anthropic; EnableThinking is used instead.
-	if cfg.EnableThinking != nil && *cfg.EnableThinking {
+	// Map Anthropic thinking controls. A positive ThinkingBudget is the most
+	// specific signal and enables thinking even when EnableThinking is nil.
+	if cfg.ThinkingBudget > 0 {
+		p.Thinking = goanthropic.ThinkingConfigParamOfEnabled(cfg.ThinkingBudget)
+	} else if cfg.EnableThinking != nil && *cfg.EnableThinking {
 		budget := int64(defaultThinkingBudget)
-		if cfg.ThinkingBudget > 0 {
-			budget = cfg.ThinkingBudget
-		}
 		p.Thinking = goanthropic.ThinkingConfigParamOfEnabled(budget)
 	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking {
 		disabled := goanthropic.NewThinkingConfigDisabledParam()

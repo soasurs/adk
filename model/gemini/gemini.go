@@ -403,10 +403,16 @@ func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig) {
 		gCfg.Temperature = &t
 	}
 
-	// Map ReasoningEffort / EnableThinking → Gemini ThinkingConfig.
-	// Priority: ReasoningEffort (explicit effort level) > EnableThinking (bool toggle).
+	// Map ThinkingLevel / legacy ReasoningEffort / EnableThinking →
+	// Gemini ThinkingConfig.
+	// Priority: ThinkingLevel > ReasoningEffort > EnableThinking.
 	var thinkCfg *genai.ThinkingConfig
 	switch {
+	case cfg.ThinkingLevel != "":
+		thinkCfg = &genai.ThinkingConfig{
+			IncludeThoughts: true,
+			ThinkingLevel:   mapThinkingLevel(cfg.ThinkingLevel),
+		}
 	case cfg.ReasoningEffort == model.ReasoningEffortNone:
 		zero := int32(0)
 		thinkCfg = &genai.ThinkingConfig{ThinkingBudget: &zero}
@@ -426,7 +432,23 @@ func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig) {
 	}
 }
 
-// mapReasoningEffort maps the provider-agnostic ReasoningEffort to a Gemini ThinkingLevel.
+// mapThinkingLevel maps the provider-agnostic Gemini ThinkingLevel to the SDK enum.
+func mapThinkingLevel(level model.ThinkingLevel) genai.ThinkingLevel {
+	switch level {
+	case model.ThinkingLevelMinimal:
+		return genai.ThinkingLevelMinimal
+	case model.ThinkingLevelLow:
+		return genai.ThinkingLevelLow
+	case model.ThinkingLevelMedium:
+		return genai.ThinkingLevelMedium
+	case model.ThinkingLevelHigh:
+		return genai.ThinkingLevelHigh
+	default:
+		return ""
+	}
+}
+
+// mapReasoningEffort maps the legacy provider-agnostic ReasoningEffort to a Gemini ThinkingLevel.
 func mapReasoningEffort(effort model.ReasoningEffort) genai.ThinkingLevel {
 	switch effort {
 	case model.ReasoningEffortMinimal:
