@@ -98,3 +98,22 @@ func TestFromModel_ToModel_NilParts(t *testing.T) {
 	assert.Equal(t, "plain text", restored.Content)
 	assert.Empty(t, restored.Parts)
 }
+
+func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
+	original := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				ID:               "call-1",
+				Name:             "lookup",
+				Arguments:        `{"query":"weather"}`,
+				ThoughtSignature: []byte{0x01, 0x02, 0xff},
+			},
+		},
+	}
+
+	restored := FromModel(original).ToModel()
+
+	require.Len(t, restored.ToolCalls, 1)
+	assert.Equal(t, original.ToolCalls[0], restored.ToolCalls[0])
+}

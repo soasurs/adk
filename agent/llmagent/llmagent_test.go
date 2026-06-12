@@ -155,6 +155,65 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([
 // Unit tests (no network required)
 // ---------------------------------------------------------------------------
 
+func TestNewWithError_InvalidConfig(t *testing.T) {
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		config Config
+	}{
+		{
+			name:   "nil model",
+			config: Config{},
+		},
+		{
+			name: "negative max iterations",
+			config: Config{
+				Model:         &mockLLM{name: "mock"},
+				MaxIterations: -1,
+			},
+		},
+		{
+			name: "negative tool timeout",
+			config: Config{
+				Model:       &mockLLM{name: "mock"},
+				ToolTimeout: -time.Second,
+			},
+		},
+		{
+			name: "nil tool",
+			config: Config{
+				Model: &mockLLM{name: "mock"},
+				Tools: []tool.Tool{nil},
+			},
+		},
+		{
+			name: "duplicate tool name",
+			config: Config{
+				Model: &mockLLM{name: "mock"},
+				Tools: []tool.Tool{echoTool, echoTool},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := NewWithError(tc.config)
+			assert.Nil(t, a)
+			assert.ErrorIs(t, err, ErrInvalidConfig)
+			var configErr *ConfigError
+			assert.ErrorAs(t, err, &configErr)
+		})
+	}
+}
+
+func TestNew_InvalidConfigPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		New(Config{})
+	})
+}
+
 // TestLlmAgent_MaxIterations verifies that Run yields an error once the
 // MaxIterations limit is reached instead of looping forever.
 func TestLlmAgent_MaxIterations(t *testing.T) {

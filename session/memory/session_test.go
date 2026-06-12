@@ -124,6 +124,26 @@ func TestMemorySession_GetMessages(t *testing.T) {
 	})
 }
 
+func TestMemorySession_GetMessages_StableOrder(t *testing.T) {
+	sess := NewMemorySession(1)
+	ctx := t.Context()
+
+	const createdAt = int64(1234)
+	for _, id := range []int64{3, 1, 2} {
+		msg := newTestMessage(id, "msg")
+		msg.CreatedAt = createdAt
+		assert.NoError(t, sess.CreateMessage(ctx, msg))
+	}
+
+	msgs, err := sess.ListMessages(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{1, 2, 3}, []int64{
+		msgs[0].MessageID,
+		msgs[1].MessageID,
+		msgs[2].MessageID,
+	})
+}
+
 func TestMemorySession_CompactMessages(t *testing.T) {
 	snowflaker, err := snowflake.New()
 	assert.Nil(t, err)

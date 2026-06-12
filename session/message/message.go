@@ -44,6 +44,9 @@ type ToolCall struct {
 	ID        string `json:"id" db:"id"`
 	Name      string `json:"name" db:"name"`
 	Arguments string `json:"arguments" db:"arguments"`
+	// ThoughtSignature is provider-supplied opaque state that must survive
+	// history persistence for subsequent Gemini tool-call turns.
+	ThoughtSignature []byte `json:"thought_signature,omitempty" db:"thought_signature"`
 }
 
 // ToolCalls is a slice of ToolCall that serializes to/from JSON for database storage.
@@ -110,9 +113,10 @@ func (m *Message) ToModel() model.Message {
 	toolCalls := make([]model.ToolCall, len(m.ToolCalls))
 	for i, tc := range m.ToolCalls {
 		toolCalls[i] = model.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Name,
-			Arguments: tc.Arguments,
+			ID:               tc.ID,
+			Name:             tc.Name,
+			Arguments:        tc.Arguments,
+			ThoughtSignature: tc.ThoughtSignature,
 		}
 	}
 	msg := model.Message{
@@ -140,9 +144,10 @@ func FromModel(m model.Message) *Message {
 	toolCalls := make(ToolCalls, len(m.ToolCalls))
 	for i, tc := range m.ToolCalls {
 		toolCalls[i] = ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Name,
-			Arguments: tc.Arguments,
+			ID:               tc.ID,
+			Name:             tc.Name,
+			Arguments:        tc.Arguments,
+			ThoughtSignature: tc.ThoughtSignature,
 		}
 	}
 	msg := &Message{

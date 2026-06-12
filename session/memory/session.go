@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -75,6 +77,7 @@ func (s *memorySession) ListCompactedMessages(ctx context.Context) ([]*message.M
 			out = append(out, m)
 		}
 	}
+	sortMessages(out)
 	return out, nil
 }
 
@@ -114,5 +117,15 @@ func (s *memorySession) activeMessages() []*message.Message {
 			out = append(out, m)
 		}
 	}
+	sortMessages(out)
 	return out
+}
+
+func sortMessages(messages []*message.Message) {
+	slices.SortFunc(messages, func(a, b *message.Message) int {
+		if n := cmp.Compare(a.CreatedAt, b.CreatedAt); n != 0 {
+			return n
+		}
+		return cmp.Compare(a.MessageID, b.MessageID)
+	})
 }

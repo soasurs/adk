@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -60,14 +61,68 @@ type LlmAgent struct {
 }
 
 // New creates a new LlmAgent from the given config.
+// It panics when config is invalid. Call NewWithError when configuration is
+// assembled dynamically and validation errors should be handled by the caller.
 func New(config Config) agent.Agent {
-	tools := make(map[string]tool.Tool, len(config.Tools))
-	for _, t := range config.Tools {
-		tools[t.Definition().Name] = t
+	a, err := NewWithError(config)
+	if err != nil {
+		panic(err)
 	}
+	return a
+}
+
+// NewWithError validates config and creates a new LlmAgent.
+func NewWithError(config Config) (agent.Agent, error) {
+	if isNil(config.Model) {
+		return nil, &ConfigError{Field: "model", Reason: "must not be nil"}
+	}
+	if config.MaxIterations < 0 {
+		return nil, &ConfigError{Field: "max_iterations", Reason: "must not be negative"}
+	}
+	if config.ToolTimeout < 0 {
+		return nil, &ConfigError{Field: "tool_timeout", Reason: "must not be negative"}
+	}
+
+	tools := make(map[string]tool.Tool, len(config.Tools))
+	for i, t := range config.Tools {
+		if isNil(t) {
+			return nil, &ConfigError{
+				Field:  fmt.Sprintf("tools[%d]", i),
+				Reason: "must not be nil",
+			}
+		}
+		name := t.Definition().Name
+		if name == "" {
+			return nil, &ConfigError{
+				Field:  fmt.Sprintf("tools[%d].definition.name", i),
+				Reason: "must not be empty",
+			}
+		}
+		if _, exists := tools[name]; exists {
+			return nil, &ConfigError{
+				Field:  "tools",
+				Reason: fmt.Sprintf("duplicate tool name %q", name),
+			}
+		}
+		tools[name] = t
+	}
+	config.Tools = append([]tool.Tool(nil), config.Tools...)
 	return &LlmAgent{
 		config: &config,
 		tools:  tools,
+	}, nil
+}
+
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	value := reflect.ValueOf(v)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 

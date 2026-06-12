@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -10,48 +9,6 @@ import (
 	"github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/message"
 )
-
-const (
-	defaultSessionsTable = "sessions"
-	defaultMessagesTable = "messages"
-)
-
-// queries holds all pre-built SQL expressions for a given pair of table names.
-type queries struct {
-	createSession         string
-	getSession            string
-	deleteSession         string
-	createMessage         string
-	deleteMessage         string
-	getMessages           string
-	listMessages          string
-	listCompactedMessages string
-	compactActiveMessages string
-	compactMessagesBefore string
-}
-
-// buildQueries constructs SQL expressions using the provided table names.
-func buildQueries(sessionsTable, messagesTable string) *queries {
-	return &queries{
-		createSession: "INSERT INTO " + sessionsTable + " (session_id, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4)",
-		getSession:    "SELECT * FROM " + sessionsTable + " WHERE session_id = $1 AND deleted_at = $2 LIMIT 1",
-		deleteSession: "UPDATE " + sessionsTable + " SET deleted_at = $1 WHERE session_id = $2 AND deleted_at = $3",
-		// Only active (non-deleted, non-compacted) messages are inserted with compacted_at = 0 and deleted_at = 0.
-		createMessage:         "INSERT INTO " + messagesTable + " (message_id, session_id, role, name, content, reasoning_content, tool_calls, tool_call_id, parts, prompt_tokens, completion_tokens, total_tokens, created_at, updated_at, compacted_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, 0)",
-		deleteMessage:         "UPDATE " + messagesTable + " SET deleted_at = $1 WHERE session_id = $2 AND message_id = $3 AND deleted_at = 0",
-		getMessages:           "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
-		listMessages:          "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND deleted_at = 0 AND compacted_at = 0 ORDER BY created_at ASC",
-		listCompactedMessages: "SELECT * FROM " + messagesTable + " WHERE session_id = $1 AND compacted_at > 0 AND deleted_at = 0 ORDER BY created_at ASC",
-		// compactActiveMessages sets compacted_at on all currently active messages.
-		compactActiveMessages: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE session_id = $2 AND deleted_at = 0 AND compacted_at = 0",
-		// compactMessagesBefore archives only messages whose message_id is less than
-		// the given split point, leaving messages at or after it active.
-		compactMessagesBefore: "UPDATE " + messagesTable + " SET compacted_at = $1 WHERE session_id = $2 AND deleted_at = 0 AND compacted_at = 0 AND message_id < $3",
-	}
-}
-
-// defaultQueries is built from the default table names for backward compatibility.
-var defaultQueries = buildQueries(defaultSessionsTable, defaultMessagesTable)
 
 type databaseSession struct {
 	db        *sqlx.DB `json:"-"`
@@ -63,7 +20,11 @@ type databaseSession struct {
 }
 
 // NewDatabaseSession creates a new session in the database using default table names.
-// For custom table names, use NewDatabaseSessionService with option functions.
+//
+// Deprecated: prefer NewDatabaseSessionService, which supports custom table
+// names via Option functions and integrates with InitSchema. NewDatabaseSession
+// is retained for simple single-tenant use cases where the default table names
+// are acceptable.
 func NewDatabaseSession(ctx context.Context, db *sqlx.DB, sessionID int64) (session.Session, error) {
 	return newDatabaseSession(ctx, db, sessionID, defaultQueries)
 }
@@ -138,7 +99,7 @@ func (s *databaseSession) ListCompactedMessages(ctx context.Context) ([]*message
 func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error {
 	now := time.Now()
 
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}

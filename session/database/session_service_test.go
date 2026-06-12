@@ -176,32 +176,7 @@ func setupTestDBWithPrefix(t *testing.T, prefix string) *sqlx.DB {
 	db, err := sqlx.Connect("sqlite3", ":memory:")
 	require.NoError(t, err)
 
-	_, err = db.Exec(`CREATE TABLE ` + prefix + `sessions (
-		session_id INTEGER PRIMARY KEY,
-		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL,
-		deleted_at INTEGER NOT NULL
-	)`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`CREATE TABLE ` + prefix + `messages (
-		message_id        INTEGER PRIMARY KEY,
-		session_id        INTEGER NOT NULL,
-		role              TEXT    NOT NULL DEFAULT '',
-		name              TEXT    NOT NULL DEFAULT '',
-		content           TEXT    NOT NULL DEFAULT '',
-		reasoning_content TEXT    NOT NULL DEFAULT '',
-		tool_calls        TEXT    NOT NULL DEFAULT '[]',
-		tool_call_id      TEXT    NOT NULL DEFAULT '',
-		parts             TEXT    NOT NULL DEFAULT '[]',
-		prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-		completion_tokens INTEGER NOT NULL DEFAULT 0,
-		total_tokens      INTEGER NOT NULL DEFAULT 0,
-		created_at        INTEGER NOT NULL,
-		updated_at        INTEGER NOT NULL,
-		compacted_at      INTEGER NOT NULL DEFAULT 0,
-		deleted_at        INTEGER NOT NULL
-	)`)
+	err = InitSchema(t.Context(), db, WithTablePrefix(prefix))
 	require.NoError(t, err)
 
 	return db
@@ -239,32 +214,7 @@ func TestDatabaseSessionService_WithSessionsTable(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	_, err = db.Exec(`CREATE TABLE custom_sessions (
-		session_id INTEGER PRIMARY KEY,
-		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL,
-		deleted_at INTEGER NOT NULL
-	)`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`CREATE TABLE messages (
-		message_id        INTEGER PRIMARY KEY,
-		session_id        INTEGER NOT NULL,
-		role              TEXT    NOT NULL DEFAULT '',
-		name              TEXT    NOT NULL DEFAULT '',
-		content           TEXT    NOT NULL DEFAULT '',
-		reasoning_content TEXT    NOT NULL DEFAULT '',
-		tool_calls        TEXT    NOT NULL DEFAULT '[]',
-		tool_call_id      TEXT    NOT NULL DEFAULT '',
-		parts             TEXT    NOT NULL DEFAULT '[]',
-		prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-		completion_tokens INTEGER NOT NULL DEFAULT 0,
-		total_tokens      INTEGER NOT NULL DEFAULT 0,
-		created_at        INTEGER NOT NULL,
-		updated_at        INTEGER NOT NULL,
-		compacted_at      INTEGER NOT NULL DEFAULT 0,
-		deleted_at        INTEGER NOT NULL
-	)`)
+	err = InitSchema(t.Context(), db, WithSessionsTable("custom_sessions"))
 	require.NoError(t, err)
 
 	service, err := NewDatabaseSessionService(db, WithSessionsTable("custom_sessions"))

@@ -47,6 +47,15 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 // Its Role is always set to RoleUser by the runner.
 func (r *Runner) Run(ctx context.Context, sessionID int64, userInput model.Message) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
+		if locker, ok := r.session.(session.RunLocker); ok {
+			unlock, err := locker.LockSession(ctx, sessionID)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			defer unlock()
+		}
+
 		sess, err := r.session.GetSession(ctx, sessionID)
 		if err != nil {
 			yield(nil, err)

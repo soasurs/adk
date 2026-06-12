@@ -154,9 +154,16 @@ svc := memory.NewSessionService()
 **SQLite** (persistent across restarts):
 
 ```go
-import "github.com/soasurs/adk/session/database"
+import (
+    "github.com/jmoiron/sqlx"
+    _ "github.com/mattn/go-sqlite3"
+    "github.com/soasurs/adk/session/database"
+)
 
-svc, err := database.NewSessionService("sessions.db")
+db, err := sqlx.Connect("sqlite3", "sessions.db")
+// Initialize schema if not exists
+err = database.InitSchema(ctx, db)
+svc, err := database.NewDatabaseSessionService(db)
 ```
 
 ### 4. Create a Runner and Run

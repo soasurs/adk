@@ -9,6 +9,25 @@ import (
 // MaxIterations limit.
 var ErrMaxIterationsExceeded = errors.New("llmagent: max iterations exceeded")
 
+// ErrInvalidConfig indicates that an LlmAgent Config is invalid.
+var ErrInvalidConfig = errors.New("llmagent: invalid config")
+
+// ConfigError reports an invalid LlmAgent configuration field.
+type ConfigError struct {
+	Field  string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ConfigError) Error() string {
+	return fmt.Sprintf("llmagent: invalid config %s: %s", e.Field, e.Reason)
+}
+
+// Unwrap allows callers to match ErrInvalidConfig with errors.Is.
+func (e *ConfigError) Unwrap() error {
+	return ErrInvalidConfig
+}
+
 // MaxIterationsError reports that an agent run exceeded its configured
 // MaxIterations limit.
 type MaxIterationsError struct {

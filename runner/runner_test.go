@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -486,6 +487,69 @@ func TestRunner_Run_SessionNotFound(t *testing.T) {
 	assert.Equal(t, int64(999), notFoundErr.SessionID)
 	assert.Contains(t, runErr.Error(), "not found")
 	assert.Empty(t, msgs)
+}
+
+func TestRunner_Run_SameSessionSerializesTurns(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	a := &mockAgent{
+		name:        "blocking-agent",
+		description: "blocks the first run",
+		runFunc: func(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				if calls.Add(1) == 1 {
+					close(started)
+				}
+				<-release
+				yield(&model.Event{
+					Message: model.Message{Role: model.RoleAssistant, Content: "done"},
+				}, nil)
+			}
+		},
+	}
+
+	const sessionID = int64(1)
+	svc := memorysession.NewMemorySessionService()
+	_, err := svc.CreateSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	r, err := New(a, svc)
+	require.NoError(t, err)
+
+	drain := func(ctx context.Context, input string) error {
+		for _, err := range r.Run(ctx, sessionID, model.Message{Content: input}) {
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- drain(t.Context(), "first")
+	}()
+	<-started
+
+	secondCtx, cancelSecond := context.WithCancel(t.Context())
+	cancelSecond()
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- drain(secondCtx, "second")
+	}()
+
+	close(release)
+	require.NoError(t, <-firstDone)
+	assert.ErrorIs(t, <-secondDone, context.Canceled)
+	assert.Equal(t, int32(1), calls.Load())
+
+	sess, err := svc.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	messages, err := sess.ListMessages(t.Context())
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "first", messages[0].Content)
+	assert.Equal(t, "done", messages[1].Content)
 }
 
 // TestRunner_Run_MultimodalInput verifies that a user message carrying ContentParts

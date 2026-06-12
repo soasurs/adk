@@ -18,36 +18,7 @@ func setupTestDB(t *testing.T) *sqlx.DB {
 	db, err := sqlx.Connect("sqlite3", ":memory:")
 	require.NoError(t, err)
 
-	_, err = db.Exec(`
-		CREATE TABLE sessions (
-			session_id INTEGER PRIMARY KEY,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			deleted_at INTEGER NOT NULL
-		)
-	`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`
-		CREATE TABLE messages (
-			message_id        INTEGER PRIMARY KEY,
-			session_id        INTEGER NOT NULL,
-			role              TEXT    NOT NULL DEFAULT '',
-			name              TEXT    NOT NULL DEFAULT '',
-			content           TEXT    NOT NULL DEFAULT '',
-			reasoning_content TEXT    NOT NULL DEFAULT '',
-			tool_calls        TEXT    NOT NULL DEFAULT '[]',
-			tool_call_id      TEXT    NOT NULL DEFAULT '',
-			parts             TEXT    NOT NULL DEFAULT '[]',
-			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-			completion_tokens INTEGER NOT NULL DEFAULT 0,
-			total_tokens      INTEGER NOT NULL DEFAULT 0,
-			created_at        INTEGER NOT NULL,
-			updated_at        INTEGER NOT NULL,
-			compacted_at      INTEGER NOT NULL DEFAULT 0,
-			deleted_at        INTEGER NOT NULL
-		)
-	`)
+	err = InitSchema(t.Context(), db)
 	require.NoError(t, err)
 
 	return db
@@ -159,6 +130,58 @@ func TestDatabaseSession_GetMessages(t *testing.T) {
 		assert.Len(t, msgs, 3)
 		assert.Equal(t, int64(3), msgs[0].MessageID)
 	})
+}
+
+func TestDatabaseSession_GetMessages_StableOrder(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, 1)
+	require.NoError(t, err)
+
+	const createdAt = int64(1234)
+	for _, id := range []int64{3, 1, 2} {
+		msg := newTestMessage(id, "msg")
+		msg.CreatedAt = createdAt
+		require.NoError(t, sess.CreateMessage(ctx, msg))
+	}
+
+	msgs, err := sess.ListMessages(ctx)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, []int64{1, 2, 3}, []int64{
+		msgs[0].MessageID,
+		msgs[1].MessageID,
+		msgs[2].MessageID,
+	})
+}
+
+func TestDatabaseSession_ToolCallThoughtSignature_RoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, 1)
+	require.NoError(t, err)
+
+	msg := newTestMessage(1, "")
+	msg.Role = string(model.RoleAssistant)
+	msg.ToolCalls = message.ToolCalls{
+		{
+			ID:               "call-1",
+			Name:             "lookup",
+			Arguments:        `{"query":"weather"}`,
+			ThoughtSignature: []byte{0x01, 0x02, 0xff},
+		},
+	}
+	require.NoError(t, sess.CreateMessage(ctx, msg))
+
+	msgs, err := sess.ListMessages(ctx)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, msg.ToolCalls[0], msgs[0].ToolCalls[0])
 }
 
 func TestDatabaseSession_CompactMessages(t *testing.T) {
@@ -403,4 +426,3 @@ func TestDatabaseSession_Parts_RoundTrip(t *testing.T) {
 	require.Len(t, modelMsg.Parts, 3)
 	assert.Equal(t, "what is in this image?", modelMsg.Parts[0].Text)
 }
-

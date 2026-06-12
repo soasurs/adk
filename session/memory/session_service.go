@@ -5,16 +5,25 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/soasurs/adk/internal/sessionlock"
 	"github.com/soasurs/adk/session"
 )
 
 type memorySessionService struct {
 	mu       sync.RWMutex
 	sessions []session.Session
+	runLocks *sessionlock.Locker
 }
 
 func NewMemorySessionService() session.SessionService {
-	return &memorySessionService{sessions: make([]session.Session, 0)}
+	return &memorySessionService{
+		sessions: make([]session.Session, 0),
+		runLocks: sessionlock.New(),
+	}
+}
+
+func (ss *memorySessionService) LockSession(ctx context.Context, sessionID int64) (func(), error) {
+	return ss.runLocks.Lock(ctx, sessionID)
 }
 
 func (ss *memorySessionService) CreateSession(ctx context.Context, sessionID int64) (session.Session, error) {

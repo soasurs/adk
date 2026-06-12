@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/soasurs/adk/internal/sessionlock"
 	"github.com/soasurs/adk/session"
 )
 
@@ -26,12 +27,13 @@ func validateTableName(name string) error {
 // Option is a functional option for configuring a DatabaseSessionService.
 type Option func(*databaseSessionService)
 
-// WithTablePrefix sets a prefix for both the sessions and messages table names.
-// For example, WithTablePrefix("myapp_") will use tables "myapp_sessions" and "myapp_messages".
+// WithTablePrefix sets a prefix for the sessions, messages, and migrations table names.
+// For example, WithTablePrefix("myapp_") will use tables "myapp_sessions", "myapp_messages", and "myapp_schema_migrations".
 func WithTablePrefix(prefix string) Option {
 	return func(s *databaseSessionService) {
 		s.sessionsTable = prefix + defaultSessionsTable
 		s.messagesTable = prefix + defaultMessagesTable
+		s.migrationsTable = prefix + defaultMigrationsTable
 	}
 }
 
@@ -49,11 +51,20 @@ func WithMessagesTable(name string) Option {
 	}
 }
 
+// WithMigrationsTable overrides the schema migrations table name.
+func WithMigrationsTable(name string) Option {
+	return func(s *databaseSessionService) {
+		s.migrationsTable = name
+	}
+}
+
 type databaseSessionService struct {
-	db            *sqlx.DB
-	sessionsTable string
-	messagesTable string
-	q             *queries
+	db              *sqlx.DB
+	sessionsTable   string
+	messagesTable   string
+	migrationsTable string
+	q               *queries
+	runLocks        *sessionlock.Locker
 }
 
 // NewDatabaseSessionService creates a new database-backed SessionService.
@@ -63,9 +74,11 @@ type databaseSessionService struct {
 // Returns an error if any configured table name is not a valid SQL identifier.
 func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionService, error) {
 	svc := &databaseSessionService{
-		db:            db,
-		sessionsTable: defaultSessionsTable,
-		messagesTable: defaultMessagesTable,
+		db:              db,
+		sessionsTable:   defaultSessionsTable,
+		messagesTable:   defaultMessagesTable,
+		migrationsTable: defaultMigrationsTable,
+		runLocks:        sessionlock.New(),
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -76,8 +89,15 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 	if err := validateTableName(svc.messagesTable); err != nil {
 		return nil, err
 	}
+	if err := validateTableName(svc.migrationsTable); err != nil {
+		return nil, err
+	}
 	svc.q = buildQueries(svc.sessionsTable, svc.messagesTable)
 	return svc, nil
+}
+
+func (ss *databaseSessionService) LockSession(ctx context.Context, sessionID int64) (func(), error) {
+	return ss.runLocks.Lock(ctx, sessionID)
 }
 
 func (ss *databaseSessionService) CreateSession(ctx context.Context, sessionID int64) (session.Session, error) {
