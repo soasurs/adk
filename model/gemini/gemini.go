@@ -163,14 +163,14 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 				continue
 			}
 
-			var deltaTxt string
-			var deltaReasoning string
+			var deltaTxt strings.Builder
+			var deltaReasoning strings.Builder
 			for idx, part := range candidate.Content.Parts {
 				switch {
 				case part.Thought:
 					if part.Text != "" {
 						reasoningBuf.WriteString(part.Text)
-						deltaReasoning += part.Text
+						deltaReasoning.WriteString(part.Text)
 					}
 				case part.FunctionCall != nil:
 					id := part.FunctionCall.ID
@@ -186,17 +186,17 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 					})
 				case part.Text != "":
 					contentBuf.WriteString(part.Text)
-					deltaTxt += part.Text
+					deltaTxt.WriteString(part.Text)
 				}
 			}
 
 			// Yield partial event for text/reasoning deltas.
-			if deltaTxt != "" || deltaReasoning != "" {
+			if deltaTxt.String() != "" || deltaReasoning.String() != "" {
 				if !yield(&model.LLMResponse{
 					Content: model.Content{
 						Role:             model.RoleAssistant,
-						Content:          deltaTxt,
-						ReasoningContent: deltaReasoning,
+						Content:          deltaTxt.String(),
+						ReasoningContent: deltaReasoning.String(),
 					},
 					Partial: true,
 				}, nil) {

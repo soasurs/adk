@@ -466,7 +466,7 @@ func TestRunner_Run_WithCompaction(t *testing.T) {
 	ctx := t.Context()
 
 	// Run 4 turns to build up history.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		_, err := collectRun(t, r, sessionID, model.Content{Content: "turn"})
 		require.NoError(t, err)
 	}

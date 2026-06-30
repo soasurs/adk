@@ -124,10 +124,7 @@ func Seq2[V any](
 // nextDelay returns the next backoff delay by applying the multiplier and
 // capping the result at MaxDelay.
 func nextDelay(current time.Duration, cfg Config) time.Duration {
-	next := time.Duration(float64(current) * cfg.Multiplier)
-	if next > cfg.MaxDelay {
-		next = cfg.MaxDelay
-	}
+	next := min(time.Duration(float64(current)*cfg.Multiplier), cfg.MaxDelay)
 	return next
 }
 

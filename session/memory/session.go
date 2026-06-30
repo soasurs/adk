@@ -67,10 +67,7 @@ func (s *memorySession) GetEvents(ctx context.Context, limit, offset int64) ([]*
 	if offset >= int64(len(active)) {
 		return []*event.Event{}, nil
 	}
-	end := offset + limit
-	if end > int64(len(active)) {
-		end = int64(len(active))
-	}
+	end := min(offset+limit, int64(len(active)))
 	return active[offset:end], nil
 }
 

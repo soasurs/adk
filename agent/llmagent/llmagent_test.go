@@ -252,7 +252,7 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 	}).(*LlmAgent)
 
 	_, runErr := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "loop forever"},
+		{Role: model.RoleUser, Content: "loop forever"},
 	})
 
 	require.Error(t, runErr)
@@ -285,7 +285,7 @@ func TestLlmAgent_MaxIterationsZeroMeansNoLimit(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "hi"},
+		{Role: model.RoleUser, Content: "hi"},
 	})
 
 	require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestLlmAgent_SimpleText(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "Reply with the single word: pong"},
+		{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 	})
 
 	require.NoError(t, err)
@@ -332,7 +332,7 @@ func TestLlmAgent_WithInstruction(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "What is 2+2?"},
+		{Role: model.RoleUser, Content: "What is 2+2?"},
 	})
 
 	require.NoError(t, err)
@@ -358,7 +358,7 @@ func TestLlmAgent_WithEchoTool(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "Please echo the message: hello world"},
+		{Role: model.RoleUser, Content: "Please echo the message: hello world"},
 	})
 
 	require.NoError(t, err)
@@ -394,7 +394,7 @@ func TestLlmAgent_MultiTurn(t *testing.T) {
 
 	// First turn.
 	history := []model.Content{
-		model.Content{Role: model.RoleUser, Content: "My name is Alice. Just say ok."},
+		{Role: model.RoleUser, Content: "My name is Alice. Just say ok."},
 	}
 	t.Log("=== turn 1 ===")
 	msgs, err := collectMessages(t, a, history)
@@ -493,7 +493,7 @@ func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "What is 6 times 7?"},
+		{Role: model.RoleUser, Content: "What is 6 times 7?"},
 	})
 
 	require.NoError(t, err)
@@ -542,7 +542,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "Echo hello"},
+		{Role: model.RoleUser, Content: "Echo hello"},
 	})
 
 	require.NoError(t, err)
@@ -577,7 +577,7 @@ func TestLlmAgent_ReasoningModel(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "What is 15 * 17? Think step by step."},
+		{Role: model.RoleUser, Content: "What is 15 * 17? Think step by step."},
 	})
 
 	require.NoError(t, err)
@@ -1097,10 +1097,10 @@ func TestLlmAgent_CompactionSummary_MergedWithInstruction(t *testing.T) {
 	}).(*LlmAgent)
 
 	input := []model.Content{
-		model.Content{Role: model.RoleUser, Content: "hello"},
-		model.Content{Role: model.RoleAssistant, Content: "hi"},
-		model.Content{Role: model.RoleSystem, Content: "Summary: the user asked about Go."},
-		model.Content{Role: model.RoleUser, Content: "tell me more"},
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleSystem, Content: "Summary: the user asked about Go."},
+		{Role: model.RoleUser, Content: "tell me more"},
 	}
 
 	_, err := collectMessages(t, a, input)
@@ -1143,11 +1143,11 @@ func TestLlmAgent_CompactionSummary_OnlyLastSystemTaken(t *testing.T) {
 	}).(*LlmAgent)
 
 	input := []model.Content{
-		model.Content{Role: model.RoleSystem, Content: "Old summary: session began with weather questions."},
-		model.Content{Role: model.RoleUser, Content: "What about sports?"},
-		model.Content{Role: model.RoleAssistant, Content: "Sports are great."},
-		model.Content{Role: model.RoleSystem, Content: "Latest summary: topics covered weather and sports."},
-		model.Content{Role: model.RoleUser, Content: "What else?"},
+		{Role: model.RoleSystem, Content: "Old summary: session began with weather questions."},
+		{Role: model.RoleUser, Content: "What about sports?"},
+		{Role: model.RoleAssistant, Content: "Sports are great."},
+		{Role: model.RoleSystem, Content: "Latest summary: topics covered weather and sports."},
+		{Role: model.RoleUser, Content: "What else?"},
 	}
 
 	_, err := collectMessages(t, a, input)
@@ -1182,10 +1182,10 @@ func TestLlmAgent_CompactionSummary_NoInstruction(t *testing.T) {
 	}).(*LlmAgent)
 
 	input := []model.Content{
-		model.Content{Role: model.RoleUser, Content: "recap?"},
-		model.Content{Role: model.RoleAssistant, Content: "sure"},
-		model.Content{Role: model.RoleSystem, Content: "Summary: prior conversation about cooking."},
-		model.Content{Role: model.RoleUser, Content: "continue"},
+		{Role: model.RoleUser, Content: "recap?"},
+		{Role: model.RoleAssistant, Content: "sure"},
+		{Role: model.RoleSystem, Content: "Summary: prior conversation about cooking."},
+		{Role: model.RoleUser, Content: "continue"},
 	}
 
 	_, err := collectMessages(t, a, input)
@@ -1218,9 +1218,9 @@ func TestLlmAgent_CompactionSummary_NoSystemInSession(t *testing.T) {
 	}).(*LlmAgent)
 
 	input := []model.Content{
-		model.Content{Role: model.RoleUser, Content: "hello"},
-		model.Content{Role: model.RoleAssistant, Content: "hi"},
-		model.Content{Role: model.RoleUser, Content: "bye"},
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleUser, Content: "bye"},
 	}
 
 	_, err := collectMessages(t, a, input)
@@ -1305,7 +1305,7 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 
 	start := time.Now()
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "run both tools"},
+		{Role: model.RoleUser, Content: "run both tools"},
 	})
 	elapsed := time.Since(start)
 
@@ -1388,7 +1388,7 @@ func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "run the blocker"},
+		{Role: model.RoleUser, Content: "run the blocker"},
 	})
 
 	require.NoError(t, err)
@@ -1439,7 +1439,7 @@ func TestLlmAgent_ToolTimeout_CompletesWithinDeadline(t *testing.T) {
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{
-		model.Content{Role: model.RoleUser, Content: "run fast"},
+		{Role: model.RoleUser, Content: "run fast"},
 	})
 
 	require.NoError(t, err)

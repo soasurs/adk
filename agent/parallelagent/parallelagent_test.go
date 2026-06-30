@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -252,7 +253,7 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 	// parallelism. If agents ran sequentially, the second ready signal would
 	// never arrive while the first agent is blocked on the gate.
 	timeout := time.After(2 * time.Second)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case <-ready:
 		case <-timeout:
@@ -442,14 +443,14 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 				}
 			}
 		}
-		joined := ""
+		var joined strings.Builder
 		for i, t := range texts {
 			if i > 0 {
-				joined += " | "
+				joined.WriteString(" | ")
 			}
-			joined += t
+			joined.WriteString(t)
 		}
-		return model.Event{Content: model.Content{Role: model.RoleAssistant, Content: joined}}
+		return model.Event{Content: model.Content{Role: model.RoleAssistant, Content: joined.String()}}
 	}
 
 	pa, err := New(Config{
@@ -561,7 +562,7 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 	assert.Nil(t, err)
 
 	input := []model.Content{
-		model.Content{Role: model.RoleUser, Content: "Hello, world!"},
+		{Role: model.RoleUser, Content: "Hello, world!"},
 	}
 
 	t.Log("=== input ===")

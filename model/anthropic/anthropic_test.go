@@ -15,9 +15,6 @@ import (
 	"github.com/soasurs/adk/tool/builtin"
 )
 
-// boolPtr returns a pointer to the given bool value.
-func boolPtr(b bool) *bool { return &b }
-
 // callGenerate is a test helper that calls GenerateContent(stream=false) and
 // returns the single complete response, mimicking the old Generate API.
 func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
@@ -209,7 +206,7 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 	}{
 		{
 			name:        "EnableThinking=true → OfEnabled set",
-			cfg:         model.GenerateConfig{EnableThinking: boolPtr(true)},
+			cfg:         model.GenerateConfig{EnableThinking: new(true)},
 			wantEnabled: true,
 			wantBudget:  defaultThinkingBudget,
 		},
@@ -223,7 +220,7 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 		},
 		{
 			name:         "EnableThinking=false → OfDisabled set",
-			cfg:          model.GenerateConfig{EnableThinking: boolPtr(false)},
+			cfg:          model.GenerateConfig{EnableThinking: new(false)},
 			wantDisabled: true,
 		},
 		{
@@ -322,7 +319,7 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 	}
 
 	var finalResp *model.LLMResponse
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
@@ -391,7 +388,7 @@ func TestMessages_Generate_Thinking(t *testing.T) {
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: boolPtr(true)})
+	}, &model.GenerateConfig{EnableThinking: new(true)})
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -416,7 +413,7 @@ func TestMessages_Stream_Thinking(t *testing.T) {
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 9 * 8? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: boolPtr(true)}, true) {
+	}, &model.GenerateConfig{EnableThinking: new(true)}, true) {
 		require.NoError(t, err)
 		if resp.Partial {
 			if resp.Content.ReasoningContent != "" {

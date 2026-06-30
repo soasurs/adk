@@ -17,9 +17,6 @@ import (
 	"github.com/soasurs/adk/tool/builtin"
 )
 
-// boolPtr returns a pointer to the given bool value.
-func boolPtr(b bool) *bool { return &b }
-
 // callGenerate is a test helper that calls GenerateContent(stream=false) and
 // returns the single complete response, mimicking the old Generate API.
 func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg *model.GenerateConfig) (*model.LLMResponse, error) {
@@ -158,14 +155,14 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 	}{
 		{
 			name:            "false with no effort → reasoning_effort=none + enable_thinking=false",
-			cfg:             model.GenerateConfig{EnableThinking: boolPtr(false)},
+			cfg:             model.GenerateConfig{EnableThinking: new(false)},
 			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortNone),
-			wantEnableThink: boolPtr(false),
+			wantEnableThink: new(false),
 		},
 		{
 			name: "false with explicit effort → effort wins, enable_thinking NOT injected",
 			cfg: model.GenerateConfig{
-				EnableThinking:  boolPtr(false),
+				EnableThinking:  new(false),
 				ReasoningEffort: model.ReasoningEffortHigh,
 			},
 			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortHigh),
@@ -173,9 +170,9 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 		},
 		{
 			name:            "true with no effort → enable_thinking=true injected",
-			cfg:             model.GenerateConfig{EnableThinking: boolPtr(true)},
+			cfg:             model.GenerateConfig{EnableThinking: new(true)},
 			wantEffort:      "",
-			wantEnableThink: boolPtr(true),
+			wantEnableThink: new(true),
 		},
 		{
 			name:            "nil → nothing injected",
@@ -267,7 +264,7 @@ func TestChatCompletion_Generate_WithTool(t *testing.T) {
 	}
 
 	var finalResp *model.LLMResponse
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
@@ -337,7 +334,7 @@ func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: boolPtr(true)})
+	}, &model.GenerateConfig{EnableThinking: new(true)})
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -360,7 +357,7 @@ func TestChatCompletion_Generate_EnableThinkingFalse(t *testing.T) {
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13?"},
 		},
-	}, &model.GenerateConfig{EnableThinking: boolPtr(false)})
+	}, &model.GenerateConfig{EnableThinking: new(false)})
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
