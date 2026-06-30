@@ -9,7 +9,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/soasurs/adk/internal/sessionlock"
 	"github.com/soasurs/adk/session"
 )
 
@@ -26,6 +25,17 @@ func validateTableName(name string) error {
 
 // Option is a functional option for configuring a DatabaseSessionService.
 type Option func(*databaseSessionService)
+
+// WithRunLocker overrides the locker used by Runner to serialize full turns.
+// Database session services do not lock runs by default; multi-process
+// deployments should provide a distributed implementation, such as PostgreSQL
+// advisory locks or Redis.
+func WithRunLocker(locker session.RunScopedLocker) Option {
+	return func(s *databaseSessionService) {
+		s.runLockerConfigured = true
+		s.runLocker = locker
+	}
+}
 
 // WithTablePrefix sets a prefix for the sessions, events, and migrations table names.
 // For example, WithTablePrefix("myapp_") will use tables "myapp_sessions", "myapp_events", and "myapp_schema_migrations".
@@ -59,12 +69,22 @@ func WithMigrationsTable(name string) Option {
 }
 
 type databaseSessionService struct {
-	db              *sqlx.DB
-	sessionsTable   string
-	eventsTable     string
-	migrationsTable string
-	q               *queries
-	runLocks        *sessionlock.Locker
+	db                  *sqlx.DB
+	sessionsTable       string
+	eventsTable         string
+	migrationsTable     string
+	q                   *queries
+	runLockerConfigured bool
+	runLocker           session.RunScopedLocker
+}
+
+type lockingDatabaseSessionService struct {
+	*databaseSessionService
+	runLocker session.RunScopedLocker
+}
+
+func (ss *lockingDatabaseSessionService) LockRun(ctx context.Context, key session.RunLockKey) (func(), error) {
+	return ss.runLocker.LockRun(ctx, key)
 }
 
 // NewDatabaseSessionService creates a new SQL database-backed SessionService.
@@ -73,6 +93,8 @@ type databaseSessionService struct {
 // By default it uses the table names "sessions" and "events".
 // Use Option functions such as WithTablePrefix, WithSessionsTable, or WithEventsTable
 // to customise the table names and avoid conflicts in shared databases.
+// Use WithRunLocker to serialize Runner turns with an application-provided
+// distributed lock.
 // Returns an error if any configured table name is not a valid SQL identifier.
 func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionService, error) {
 	svc := &databaseSessionService{
@@ -80,7 +102,6 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 		sessionsTable:   defaultSessionsTable,
 		eventsTable:     defaultEventsTable,
 		migrationsTable: defaultMigrationsTable,
-		runLocks:        sessionlock.New(),
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -94,12 +115,17 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 	if err := validateTableName(svc.migrationsTable); err != nil {
 		return nil, err
 	}
+	if svc.runLockerConfigured && svc.runLocker == nil {
+		return nil, errors.New("database: run locker is nil")
+	}
 	svc.q = buildQueries(svc.sessionsTable, svc.eventsTable)
+	if svc.runLocker != nil {
+		return &lockingDatabaseSessionService{
+			databaseSessionService: svc,
+			runLocker:              svc.runLocker,
+		}, nil
+	}
 	return svc, nil
-}
-
-func (ss *databaseSessionService) LockSession(ctx context.Context, sessionID string) (func(), error) {
-	return ss.runLocks.Lock(ctx, sessionID)
 }
 
 func (ss *databaseSessionService) CreateSession(ctx context.Context, req session.CreateSessionRequest) (session.Session, error) {

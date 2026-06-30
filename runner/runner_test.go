@@ -235,6 +235,28 @@ func TestRunner_Run_GetSessionError(t *testing.T) {
 	assert.Empty(t, msgs)
 }
 
+func TestRunner_Run_UsesAppUserSessionRunLockKey(t *testing.T) {
+	a := staticAgent(model.Content{Role: model.RoleAssistant, Content: "ok"})
+	svc := memorysession.NewMemorySessionService()
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{
+		SessionID: "session-1",
+		AppID:     "app-1",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+
+	lockingSvc := &recordingScopedLockService{SessionService: svc}
+	r, err := New(a, lockingSvc)
+	require.NoError(t, err)
+
+	_, err = collectRun(t, r, "session-1", model.Content{Content: "hello"})
+	require.NoError(t, err)
+
+	require.Equal(t, []session.RunLockKey{
+		{AppID: "app-1", UserID: "user-1", SessionID: "session-1"},
+	}, lockingSvc.keys)
+}
+
 // TestRunner_Run_AgentError verifies that an error from the agent is
 // propagated and stops iteration.
 func TestRunner_Run_AgentError(t *testing.T) {
@@ -395,6 +417,16 @@ func (s *errSession) ListEvents(_ context.Context) ([]*event.Event, error) {
 func (s *errSession) DeleteEvent(_ context.Context, _ int64) error { return errors.New("errSession") }
 func (s *errSession) CompactEvents(_ context.Context, _ int64, _ *event.Event) error {
 	return errors.New("errSession")
+}
+
+type recordingScopedLockService struct {
+	session.SessionService
+	keys []session.RunLockKey
+}
+
+func (s *recordingScopedLockService) LockRun(_ context.Context, key session.RunLockKey) (func(), error) {
+	s.keys = append(s.keys, key)
+	return func() {}, nil
 }
 
 // TestRunner_Run_WithCompaction verifies that compaction of memory session works

@@ -12,18 +12,18 @@ import (
 type memorySessionService struct {
 	mu       sync.RWMutex
 	sessions []session.Session
-	runLocks *sessionlock.Locker
+	runLocks *sessionlock.Locker[session.RunLockKey]
 }
 
 func NewMemorySessionService() session.SessionService {
 	return &memorySessionService{
 		sessions: make([]session.Session, 0),
-		runLocks: sessionlock.New(),
+		runLocks: sessionlock.New[session.RunLockKey](),
 	}
 }
 
-func (ss *memorySessionService) LockSession(ctx context.Context, sessionID string) (func(), error) {
-	return ss.runLocks.Lock(ctx, sessionID)
+func (ss *memorySessionService) LockRun(ctx context.Context, key session.RunLockKey) (func(), error) {
+	return ss.runLocks.Lock(ctx, key)
 }
 
 func (ss *memorySessionService) CreateSession(ctx context.Context, req session.CreateSessionRequest) (session.Session, error) {

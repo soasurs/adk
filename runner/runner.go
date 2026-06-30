@@ -47,23 +47,13 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 // Its Role is always set to RoleUser by the runner.
 func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Content) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
-		if locker, ok := r.session.(session.RunLocker); ok {
-			unlock, err := locker.LockSession(ctx, sessionID)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			defer unlock()
-		}
-
-		sess, err := r.session.GetSession(ctx, sessionID)
+		sess, unlock, err := r.getSessionForRun(ctx, sessionID)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
-		if sess == nil {
-			yield(nil, &SessionNotFoundError{SessionID: sessionID})
-			return
+		if unlock != nil {
+			defer unlock()
 		}
 
 		// Load all previous active events from the session.
@@ -112,6 +102,66 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 				return
 			}
 		}
+	}
+}
+
+func (r *Runner) getSessionForRun(ctx context.Context, sessionID string) (session.Session, func(), error) {
+	if locker, ok := r.session.(session.RunScopedLocker); ok {
+		return r.getSessionWithScopedLock(ctx, sessionID, locker)
+	}
+
+	sess, err := r.session.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sess == nil {
+		return nil, nil, &SessionNotFoundError{SessionID: sessionID}
+	}
+	return sess, nil, nil
+}
+
+func (r *Runner) getSessionWithScopedLock(
+	ctx context.Context,
+	sessionID string,
+	locker session.RunScopedLocker,
+) (session.Session, func(), error) {
+	for {
+		sess, err := r.session.GetSession(ctx, sessionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if sess == nil {
+			return nil, nil, &SessionNotFoundError{SessionID: sessionID}
+		}
+
+		key := runLockKey(sess)
+		unlock, err := locker.LockRun(ctx, key)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		lockedSess, err := r.session.GetSession(ctx, sessionID)
+		if err != nil {
+			unlock()
+			return nil, nil, err
+		}
+		if lockedSess == nil {
+			unlock()
+			return nil, nil, &SessionNotFoundError{SessionID: sessionID}
+		}
+		if lockedKey := runLockKey(lockedSess); lockedKey != key {
+			unlock()
+			continue
+		}
+		return lockedSess, unlock, nil
+	}
+}
+
+func runLockKey(sess session.Session) session.RunLockKey {
+	return session.RunLockKey{
+		AppID:     sess.GetAppID(),
+		UserID:    sess.GetUserID(),
+		SessionID: sess.GetSessionID(),
 	}
 }
 

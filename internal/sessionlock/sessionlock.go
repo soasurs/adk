@@ -12,21 +12,21 @@ type entry struct {
 	refs  int
 }
 
-// Locker serializes operations by session ID while allowing different
-// sessions to proceed independently.
-type Locker struct {
+// Locker serializes operations by key while allowing different keys to proceed
+// independently.
+type Locker[K comparable] struct {
 	mu      sync.Mutex
-	entries map[string]*entry
+	entries map[K]*entry
 }
 
 // New creates an empty keyed Locker.
-func New() *Locker {
-	return &Locker{entries: make(map[string]*entry)}
+func New[K comparable]() *Locker[K] {
+	return &Locker[K]{entries: make(map[K]*entry)}
 }
 
 // Lock acquires the lock for key. Waiting stops when ctx is canceled.
 // The returned unlock function is safe to call more than once.
-func (l *Locker) Lock(ctx context.Context, key string) (func(), error) {
+func (l *Locker[K]) Lock(ctx context.Context, key K) (func(), error) {
 	l.mu.Lock()
 	e := l.entries[key]
 	if e == nil {
@@ -64,7 +64,7 @@ func (l *Locker) Lock(ctx context.Context, key string) (func(), error) {
 	}, nil
 }
 
-func (l *Locker) releaseRef(key string, e *entry) {
+func (l *Locker[K]) releaseRef(key K, e *entry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e.refs--

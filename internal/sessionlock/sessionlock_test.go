@@ -10,7 +10,7 @@ import (
 )
 
 func TestLocker_ContextCancellation(t *testing.T) {
-	locker := New()
+	locker := New[string]()
 	unlock, err := locker.Lock(t.Context(), "session-1")
 	require.NoError(t, err)
 	defer unlock()
@@ -23,7 +23,7 @@ func TestLocker_ContextCancellation(t *testing.T) {
 }
 
 func TestLocker_DifferentSessionsProceedIndependently(t *testing.T) {
-	locker := New()
+	locker := New[string]()
 	unlockFirst, err := locker.Lock(t.Context(), "session-1")
 	require.NoError(t, err)
 	defer unlockFirst()
@@ -36,7 +36,7 @@ func TestLocker_DifferentSessionsProceedIndependently(t *testing.T) {
 }
 
 func TestLocker_UnlockIsIdempotent(t *testing.T) {
-	locker := New()
+	locker := New[string]()
 	unlock, err := locker.Lock(t.Context(), "session-1")
 	require.NoError(t, err)
 

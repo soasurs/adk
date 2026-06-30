@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -87,6 +88,49 @@ func TestSQLite_DatabaseSessionService_GetSession_NotFound(t *testing.T) {
 	assert.Nil(t, s)
 }
 
+func TestSQLite_DatabaseSessionService_DefaultDoesNotImplementRunLocker(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	service, err := NewDatabaseSessionService(db)
+	require.NoError(t, err)
+
+	_, ok := service.(adksession.RunScopedLocker)
+	assert.False(t, ok)
+}
+
+func TestSQLite_DatabaseSessionService_WithRunLocker(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	locker := new(recordingRunLocker)
+	service, err := NewDatabaseSessionService(db, WithRunLocker(locker))
+	require.NoError(t, err)
+
+	scopedLocker, ok := service.(adksession.RunScopedLocker)
+	require.True(t, ok)
+
+	key := adksession.RunLockKey{
+		AppID:     "chat",
+		UserID:    "user-1",
+		SessionID: "session-1",
+	}
+	unlock, err := scopedLocker.LockRun(t.Context(), key)
+	require.NoError(t, err)
+	unlock()
+
+	assert.Equal(t, []adksession.RunLockKey{key}, locker.keys)
+}
+
+func TestSQLite_DatabaseSessionService_WithRunLocker_Nil(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	_, err := NewDatabaseSessionService(db, WithRunLocker(nil))
+	require.Error(t, err)
+	assert.EqualError(t, err, "database: run locker is nil")
+}
+
 func TestSQLite_DatabaseSessionService_DeleteSession(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
@@ -151,6 +195,15 @@ func TestSQLite_DatabaseSessionService_FullWorkflow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, gotS2AfterDelete)
 	assert.Equal(t, "session-2", gotS2AfterDelete.GetSessionID())
+}
+
+type recordingRunLocker struct {
+	keys []adksession.RunLockKey
+}
+
+func (l *recordingRunLocker) LockRun(_ context.Context, key adksession.RunLockKey) (func(), error) {
+	l.keys = append(l.keys, key)
+	return func() {}, nil
 }
 
 func TestSQLite_DatabaseSessionService_WithStringID(t *testing.T) {
