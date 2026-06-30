@@ -135,13 +135,13 @@ func main() {
 
 	// ── 5. Compaction (Manual) ────────────────────────────────────────────────
 	// Compaction is now the responsibility of the user. The SDK provides only
-	// Session.CompactMessages to persist the archival state.
+	// Session.CompactEvents to persist the archival state.
 	//
 	// Users can implement their own compaction strategy by:
 	// 1. Monitoring session growth (e.g., when PromptTokens exceed a threshold)
-	// 2. Deciding which messages to archive (e.g., keep last N rounds)
+	// 2. Deciding which events to archive (e.g., keep last N rounds)
 	// 3. Generating a summary (e.g., via LLM)
-	// 4. Calling session.CompactMessages(ctx, splitMessageID, summaryMsg)
+	// 4. Calling session.CompactEvents(ctx, splitEventID, summaryEvent)
 	//
 	// Example compaction strategies:
 	// - Token-based: Archive when sum of tokens exceeds MaxTokens
@@ -191,7 +191,7 @@ func main() {
 		onAgentLine := false
 		hadPartials := false
 
-		for event, err := range r.Run(ctx, sessionID, model.Message{Content: input}) {
+		for event, err := range r.Run(ctx, sessionID, model.Content{Content: input}) {
 			if err != nil {
 				if onAgentLine {
 					fmt.Println()
@@ -206,37 +206,37 @@ func main() {
 					fmt.Print("Agent › ")
 					onAgentLine = true
 				}
-				fmt.Print(event.Message.Content)
+				fmt.Print(event.Content.Content)
 				hadPartials = true
 				continue
 			}
 
 			// Complete event.
-			switch event.Message.Role {
+			switch event.Content.Role {
 			case model.RoleAssistant:
-				if len(event.Message.ToolCalls) > 0 {
+				if len(event.Content.ToolCalls) > 0 {
 					// Tool-call decision: end the current agent line and show each call.
 					if onAgentLine {
 						fmt.Println()
 						onAgentLine = false
 					}
-					for _, tc := range event.Message.ToolCalls {
+					for _, tc := range event.Content.ToolCalls {
 						fmt.Printf("  → %s  %s\n", tc.Name, truncate(tc.Arguments, 60))
 					}
 					// Reset for the next LLM call that follows tool results.
 					hadPartials = false
-				} else if !hadPartials && event.Message.Content != "" {
+				} else if !hadPartials && event.Content.Content != "" {
 					// Non-streaming path: content was not yet printed via partials.
 					if !onAgentLine {
 						fmt.Print("Agent › ")
 						onAgentLine = true
 					}
-					fmt.Print(event.Message.Content)
+					fmt.Print(event.Content.Content)
 				}
 
 			case model.RoleTool:
 				// Show a brief summary of the tool result, then reset for the next round.
-				fmt.Printf("  ← %d chars\n", len(event.Message.Content))
+				fmt.Printf("  ← %d chars\n", len(event.Content.Content))
 				onAgentLine = false
 				hadPartials = false
 			}
@@ -249,7 +249,7 @@ func main() {
 
 		// ── Token stats ───────────────────────────────────────────────────────
 		if sess, err := sessionSvc.GetSession(ctx, sessionID); err == nil {
-			if msgs, err := sess.ListMessages(ctx); err == nil {
+			if msgs, err := sess.ListEvents(ctx); err == nil {
 				// Find the most recent prompt-token count for display.
 				var promptTokens, completionTokens int64
 				for i := len(msgs) - 1; i >= 0; i-- {
@@ -267,9 +267,9 @@ func main() {
 				// ── Compaction (Manual) ────────────────────────────────────────
 				// Users can implement custom compaction logic here.
 				// Example: check if promptTokens > compactCfg.MaxTokens:
-				//   1. Identify which messages to archive
+				//   1. Identify which events to archive
 				//   2. Generate a summary via LLM
-				//   3. Call sess.CompactMessages(ctx, splitMessageID, summaryMsg)
+				//   3. Call sess.CompactEvents(ctx, splitEventID, summaryEvent)
 				_ = msgs // Use msgs to implement custom compaction logic
 			}
 		}

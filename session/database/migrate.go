@@ -14,7 +14,7 @@ import (
 // keeps the up-function signature stable as new tables are added in future
 // migrations.
 type migrationTables struct {
-	sessions, messages, migrations string
+	sessions, events, migrations string
 }
 
 // migration describes a single, forward-only schema change.
@@ -47,7 +47,7 @@ var migrations = []migration{
 func InitSchema(ctx context.Context, db *sqlx.DB, opts ...Option) error {
 	svc := &databaseSessionService{
 		sessionsTable:   defaultSessionsTable,
-		messagesTable:   defaultMessagesTable,
+		eventsTable:     defaultEventsTable,
 		migrationsTable: defaultMigrationsTable,
 	}
 	for _, opt := range opts {
@@ -57,7 +57,7 @@ func InitSchema(ctx context.Context, db *sqlx.DB, opts ...Option) error {
 	if err := validateTableName(svc.sessionsTable); err != nil {
 		return err
 	}
-	if err := validateTableName(svc.messagesTable); err != nil {
+	if err := validateTableName(svc.eventsTable); err != nil {
 		return err
 	}
 	if err := validateTableName(svc.migrationsTable); err != nil {
@@ -66,7 +66,7 @@ func InitSchema(ctx context.Context, db *sqlx.DB, opts ...Option) error {
 
 	t := migrationTables{
 		sessions:   svc.sessionsTable,
-		messages:   svc.messagesTable,
+		events:     svc.eventsTable,
 		migrations: svc.migrationsTable,
 	}
 

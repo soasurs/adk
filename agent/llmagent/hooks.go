@@ -55,8 +55,8 @@ type ToolCall struct {
 
 // ToolCallResult captures the outcome of a single tool invocation.
 type ToolCallResult struct {
-	// Message is the tool message that will be appended to the conversation.
-	Message model.Message
+	// Event is the tool event that will be appended to the conversation.
+	Event model.Event
 	// Result is the raw successful tool result string.
 	Result string
 	// Err is the tool lookup or execution error, if any.

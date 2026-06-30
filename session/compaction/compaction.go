@@ -1,6 +1,6 @@
 // Package compaction provides types for manual context management.
 // Users are responsible for deciding when and how to compact context;
-// the SDK only provides CompactMessages to persist the compaction state.
+// the SDK only provides CompactEvents to persist the compaction state.
 package compaction
 
 // Config is provided for reference by users implementing custom compaction logic.

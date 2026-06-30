@@ -109,7 +109,7 @@ func (m *streamingMockLLM) GenerateContent(_ context.Context, _ *model.LLMReques
 }
 
 // logMessage prints a single message in a concise one-line format.
-func logMessage(t *testing.T, idx int, m model.Message) {
+func logMessage(t *testing.T, idx int, m model.Content) {
 	t.Helper()
 	if len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
@@ -130,23 +130,23 @@ func logMessage(t *testing.T, idx int, m model.Message) {
 // collectMessages drains the agent Run iterator, logs every complete yielded
 // message, and returns all complete messages plus the first error (if any).
 // Partial streaming events are consumed silently.
-func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Message) ([]model.Message, error) {
+func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Content) ([]model.Content, error) {
 	t.Helper()
 	t.Log("  --- input ---")
 	for i, m := range messages {
 		logMessage(t, i, m)
 	}
 	t.Log("  --- output ---")
-	var collected []model.Message
-	for event, err := range agent.Run(t.Context(), messages) {
+	var collected []model.Content
+	for event, err := range agent.Run(t.Context(), model.EventsFromContents(messages)) {
 		if err != nil {
 			return collected, err
 		}
 		if event.Partial {
 			continue
 		}
-		logMessage(t, len(collected), event.Message)
-		collected = append(collected, event.Message)
+		logMessage(t, len(collected), event.Content)
+		collected = append(collected, event.Content)
 	}
 	return collected, nil
 }
@@ -220,7 +220,7 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 	// Each call returns a tool-call response so the loop never stops on its own.
 	toolCallResp := func() *model.LLMResponse {
 		return &model.LLMResponse{
-			Message: model.Message{
+			Content: model.Content{
 				Role: model.RoleAssistant,
 				ToolCalls: []model.ToolCall{
 					{ID: "c1", Name: "echo", Arguments: `{"message":"hi"}`},
@@ -251,8 +251,8 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 		MaxIterations: limit,
 	}).(*LlmAgent)
 
-	_, runErr := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "loop forever"},
+	_, runErr := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "loop forever"},
 	})
 
 	require.Error(t, runErr)
@@ -270,7 +270,7 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 // does not impose any cap — the loop runs until the LLM stops requesting tools.
 func TestLlmAgent_MaxIterationsZeroMeansNoLimit(t *testing.T) {
 	stopResp := &model.LLMResponse{
-		Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+		Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 		FinishReason: model.FinishReasonStop,
 	}
 	llm := &mockLLM{
@@ -284,8 +284,8 @@ func TestLlmAgent_MaxIterationsZeroMeansNoLimit(t *testing.T) {
 		MaxIterations: 0, // no limit
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "hi"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "hi"},
 	})
 
 	require.NoError(t, err)
@@ -308,8 +308,8 @@ func TestLlmAgent_SimpleText(t *testing.T) {
 		Model:       llm,
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "Reply with the single word: pong"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 	})
 
 	require.NoError(t, err)
@@ -331,8 +331,8 @@ func TestLlmAgent_WithInstruction(t *testing.T) {
 		Instruction: "You are a concise assistant. Keep answers to one sentence.",
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "What is 2+2?"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "What is 2+2?"},
 	})
 
 	require.NoError(t, err)
@@ -357,8 +357,8 @@ func TestLlmAgent_WithEchoTool(t *testing.T) {
 		Tools:       []tool.Tool{echoTool},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "Please echo the message: hello world"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "Please echo the message: hello world"},
 	})
 
 	require.NoError(t, err)
@@ -393,8 +393,8 @@ func TestLlmAgent_MultiTurn(t *testing.T) {
 	}).(*LlmAgent)
 
 	// First turn.
-	history := []model.Message{
-		{Role: model.RoleUser, Content: "My name is Alice. Just say ok."},
+	history := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "My name is Alice. Just say ok."},
 	}
 	t.Log("=== turn 1 ===")
 	msgs, err := collectMessages(t, a, history)
@@ -407,7 +407,7 @@ func TestLlmAgent_MultiTurn(t *testing.T) {
 	}
 
 	// Second turn: verify the agent can reference prior context.
-	history = append(history, model.Message{
+	history = append(history, model.Content{
 		Role:    model.RoleUser,
 		Content: "What is my name? Reply with just the name.",
 	})
@@ -436,16 +436,16 @@ func TestLlmAgent_Streaming_Integration(t *testing.T) {
 	var partialEvents []*model.Event
 	var completeEvents []*model.Event
 
-	for event, err := range a.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Count from 1 to 5, one number per line."},
-	}) {
+	for event, err := range a.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Count from 1 to 5, one number per line."},
+	)) {
 		require.NoError(t, err)
 		if event.Partial {
 			partialEvents = append(partialEvents, event)
-			t.Logf("  [partial +%d] %q", len(partialEvents), event.Message.Content)
+			t.Logf("  [partial +%d] %q", len(partialEvents), event.Content.Content)
 		} else {
 			completeEvents = append(completeEvents, event)
-			t.Logf("  [complete] role=%s content=%q", event.Message.Role, event.Message.Content)
+			t.Logf("  [complete] role=%s content=%q", event.Content.Role, event.Content.Content)
 		}
 	}
 
@@ -455,12 +455,12 @@ func TestLlmAgent_Streaming_Integration(t *testing.T) {
 	// There must be exactly one final complete assistant message.
 	require.NotEmpty(t, completeEvents, "expected a complete assistant event")
 	last := completeEvents[len(completeEvents)-1]
-	assert.Equal(t, model.RoleAssistant, last.Message.Role)
-	assert.NotEmpty(t, last.Message.Content)
+	assert.Equal(t, model.RoleAssistant, last.Content.Role)
+	assert.NotEmpty(t, last.Content.Content)
 
 	// All partial chunks must carry assistant role.
 	for i, ev := range partialEvents {
-		assert.Equal(t, model.RoleAssistant, ev.Message.Role, "partial event [%d] must have assistant role", i)
+		assert.Equal(t, model.RoleAssistant, ev.Content.Role, "partial event [%d] must have assistant role", i)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
 		name: "mock-reasoning",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:             model.RoleAssistant,
 					Content:          "The answer is 42.",
 					ReasoningContent: "I need to think about this carefully. 6 times 7 is 42.",
@@ -492,8 +492,8 @@ func TestLlmAgent_Reasoning_PassThrough(t *testing.T) {
 		Model:       mock,
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "What is 6 times 7?"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "What is 6 times 7?"},
 	})
 
 	require.NoError(t, err)
@@ -514,7 +514,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 		responses: []*model.LLMResponse{
 			// First call: model reasons and decides to call echo.
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:             model.RoleAssistant,
 					ReasoningContent: "I should use the echo tool to repeat the message.",
 					ToolCalls: []model.ToolCall{
@@ -525,7 +525,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 			},
 			// Second call: model produces the final answer.
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:    model.RoleAssistant,
 					Content: "The echo result is: hello",
 				},
@@ -541,8 +541,8 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 		Tools:       []tool.Tool{echoTool},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "Echo hello"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "Echo hello"},
 	})
 
 	require.NoError(t, err)
@@ -576,8 +576,8 @@ func TestLlmAgent_ReasoningModel(t *testing.T) {
 		Model:       llm,
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "What is 15 * 17? Think step by step."},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "What is 15 * 17? Think step by step."},
 	})
 
 	require.NoError(t, err)
@@ -601,12 +601,12 @@ func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
 		calls: [][]*model.LLMResponse{
 			{
 				// Three incremental chunks.
-				{Message: model.Message{Role: model.RoleAssistant, Content: "He"}, Partial: true},
-				{Message: model.Message{Role: model.RoleAssistant, Content: "llo"}, Partial: true},
-				{Message: model.Message{Role: model.RoleAssistant, Content: " World"}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "He"}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "llo"}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: " World"}, Partial: true},
 				// Final assembled response.
 				{
-					Message:      model.Message{Role: model.RoleAssistant, Content: "Hello World"},
+					Content:      model.Content{Role: model.RoleAssistant, Content: "Hello World"},
 					FinishReason: model.FinishReasonStop,
 					TurnComplete: true,
 				},
@@ -621,9 +621,9 @@ func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
 	}).(*LlmAgent)
 
 	var events []*model.Event
-	for event, err := range a.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Say hello"},
-	}) {
+	for event, err := range a.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Say hello"},
+	)) {
 		require.NoError(t, err)
 		events = append(events, event)
 	}
@@ -632,17 +632,17 @@ func TestLlmAgent_Streaming_YieldsPartialThenComplete(t *testing.T) {
 	require.Len(t, events, 4)
 
 	assert.True(t, events[0].Partial)
-	assert.Equal(t, "He", events[0].Message.Content)
+	assert.Equal(t, "He", events[0].Content.Content)
 
 	assert.True(t, events[1].Partial)
-	assert.Equal(t, "llo", events[1].Message.Content)
+	assert.Equal(t, "llo", events[1].Content.Content)
 
 	assert.True(t, events[2].Partial)
-	assert.Equal(t, " World", events[2].Message.Content)
+	assert.Equal(t, " World", events[2].Content.Content)
 
 	assert.False(t, events[3].Partial)
-	assert.Equal(t, model.RoleAssistant, events[3].Message.Role)
-	assert.Equal(t, "Hello World", events[3].Message.Content)
+	assert.Equal(t, model.RoleAssistant, events[3].Content.Role)
+	assert.Equal(t, "Hello World", events[3].Content.Content)
 }
 
 // TestLlmAgent_Streaming_WithToolCall verifies the full streaming + tool-call
@@ -657,9 +657,9 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 		calls: [][]*model.LLMResponse{
 			// First call: a streaming preamble then the tool-call decision.
 			{
-				{Message: model.Message{Role: model.RoleAssistant, Content: "Let me echo that..."}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "Let me echo that..."}, Partial: true},
 				{
-					Message: model.Message{
+					Content: model.Content{
 						Role:      model.RoleAssistant,
 						ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "echo", Arguments: `{"message":"streaming"}`}},
 					},
@@ -668,10 +668,10 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 			},
 			// Second call: streaming final answer.
 			{
-				{Message: model.Message{Role: model.RoleAssistant, Content: "The result: "}, Partial: true},
-				{Message: model.Message{Role: model.RoleAssistant, Content: "streaming"}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "The result: "}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "streaming"}, Partial: true},
 				{
-					Message:      model.Message{Role: model.RoleAssistant, Content: "The result: streaming"},
+					Content:      model.Content{Role: model.RoleAssistant, Content: "The result: streaming"},
 					FinishReason: model.FinishReasonStop,
 					TurnComplete: true,
 				},
@@ -687,9 +687,9 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 	}).(*LlmAgent)
 
 	var events []*model.Event
-	for event, err := range a.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Echo streaming"},
-	}) {
+	for event, err := range a.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Echo streaming"},
+	)) {
 		require.NoError(t, err)
 		events = append(events, event)
 	}
@@ -704,25 +704,25 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 	require.Len(t, events, 6)
 
 	assert.True(t, events[0].Partial)
-	assert.Equal(t, "Let me echo that...", events[0].Message.Content)
+	assert.Equal(t, "Let me echo that...", events[0].Content.Content)
 
 	assert.False(t, events[1].Partial)
-	assert.Equal(t, model.RoleAssistant, events[1].Message.Role)
-	require.Len(t, events[1].Message.ToolCalls, 1)
-	assert.Equal(t, "echo", events[1].Message.ToolCalls[0].Name)
+	assert.Equal(t, model.RoleAssistant, events[1].Content.Role)
+	require.Len(t, events[1].Content.ToolCalls, 1)
+	assert.Equal(t, "echo", events[1].Content.ToolCalls[0].Name)
 
 	assert.False(t, events[2].Partial)
-	assert.Equal(t, model.RoleTool, events[2].Message.Role)
-	assert.Equal(t, "tc-1", events[2].Message.ToolCallID)
+	assert.Equal(t, model.RoleTool, events[2].Content.Role)
+	assert.Equal(t, "tc-1", events[2].Content.ToolCallID)
 
 	assert.True(t, events[3].Partial)
-	assert.Equal(t, "The result: ", events[3].Message.Content)
+	assert.Equal(t, "The result: ", events[3].Content.Content)
 
 	assert.True(t, events[4].Partial)
-	assert.Equal(t, "streaming", events[4].Message.Content)
+	assert.Equal(t, "streaming", events[4].Content.Content)
 
 	assert.False(t, events[5].Partial)
-	assert.Equal(t, "The result: streaming", events[5].Message.Content)
+	assert.Equal(t, "The result: streaming", events[5].Content.Content)
 }
 
 // TestLlmAgent_Hooks_LLMCallLifecycle verifies that before/after LLM hooks are
@@ -752,14 +752,14 @@ func TestLlmAgent_Hooks_LLMCallLifecycle(t *testing.T) {
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "hello"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
 
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, []string{"before-llm-1", "after-llm-1"}, order)
 	require.NotNil(t, llm.lastRequest)
-	assert.Equal(t, "hello", llm.lastRequest.Messages[0].Content)
-	assert.Equal(t, model.RoleUser, llm.lastRequest.Messages[0].Role)
+	assert.Equal(t, "hello", llm.lastRequest.Contents[0].Content)
+	assert.Equal(t, model.RoleUser, llm.lastRequest.Contents[0].Role)
 	assert.Equal(t, "ok", msgs[0].Content)
 }
 
@@ -797,14 +797,14 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 		name: "mock-hook-tool",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:      model.RoleAssistant,
 					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -849,12 +849,12 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			mu.Unlock()
 			assert.Equal(t, "tool-result", result.Result)
 			assert.NoError(t, result.Err)
-			assert.Equal(t, "tool-result", result.Message.Content)
+			assert.Equal(t, "tool-result", result.Event.Content.Content)
 			return nil
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run hook tool"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run hook tool"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), callCount.Load())
@@ -885,14 +885,14 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 		name: "mock-hook-error",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:      model.RoleAssistant,
 					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -908,7 +908,7 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run blocked tool"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run blocked tool"}})
 
 	require.ErrorIs(t, err, hookErr)
 	assert.Equal(t, int64(0), callCount.Load())
@@ -924,14 +924,14 @@ func TestLlmAgent_MissingTool_UsesTypedError(t *testing.T) {
 		name: "mock-missing-tool",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:      model.RoleAssistant,
 					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "missing-tool", Arguments: `{}`}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -947,7 +947,7 @@ func TestLlmAgent_MissingTool_UsesTypedError(t *testing.T) {
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run missing tool"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run missing tool"}})
 
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
@@ -968,7 +968,7 @@ func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
 	neverCalled := &mockLLM{name: "never-called"}
 
 	fakeResp := &model.LLMResponse{
-		Message:      model.Message{Role: model.RoleAssistant, Content: "cached response"},
+		Content:      model.Content{Role: model.RoleAssistant, Content: "cached response"},
 		FinishReason: model.FinishReasonStop,
 	}
 
@@ -982,12 +982,12 @@ func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
 		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
 			afterCalled = true
 			require.NotNil(t, result.Response)
-			assert.Equal(t, "cached response", result.Response.Message.Content)
+			assert.Equal(t, "cached response", result.Response.Content.Content)
 			return nil
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "hello"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
 
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
@@ -1011,20 +1011,20 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		name: "mock-skip-tool",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:      model.RoleAssistant,
 					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "real-tool", Arguments: `{}`}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
 	}
 
-	fakeToolMsg := model.Message{
+	fakeToolMsg := model.Content{
 		Role:       model.RoleTool,
 		ToolCallID: "tc-1",
 		Content:    "injected-result",
@@ -1037,19 +1037,19 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		Tools: []tool.Tool{realTool},
 		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
 			return &ToolCallResult{
-				Message: fakeToolMsg,
-				Result:  "injected-result",
+				Event:  model.Event{Content: fakeToolMsg},
+				Result: "injected-result",
 			}, nil
 		},
 		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
 			assert.Equal(t, "injected-result", result.Result)
-			assert.Equal(t, "injected-result", result.Message.Content)
+			assert.Equal(t, "injected-result", result.Event.Content.Content)
 			return nil
 		},
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{{Role: model.RoleUser, Content: "run tool"}})
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tool"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), callCount.Load(), "real tool must not have been called")
@@ -1077,7 +1077,7 @@ func (c *captureLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _
 	c.lastRequest = req
 	return func(yield func(*model.LLMResponse, error) bool) {
 		yield(&model.LLMResponse{
-			Message:      model.Message{Role: model.RoleAssistant, Content: "ok"},
+			Content:      model.Content{Role: model.RoleAssistant, Content: "ok"},
 			FinishReason: model.FinishReasonStop,
 		}, nil)
 	}
@@ -1096,18 +1096,18 @@ func TestLlmAgent_CompactionSummary_MergedWithInstruction(t *testing.T) {
 		Instruction: "You are a helpful assistant.",
 	}).(*LlmAgent)
 
-	input := []model.Message{
-		{Role: model.RoleUser, Content: "hello"},
-		{Role: model.RoleAssistant, Content: "hi"},
-		{Role: model.RoleSystem, Content: "Summary: the user asked about Go."},
-		{Role: model.RoleUser, Content: "tell me more"},
+	input := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "hello"},
+		model.Content{Role: model.RoleAssistant, Content: "hi"},
+		model.Content{Role: model.RoleSystem, Content: "Summary: the user asked about Go."},
+		model.Content{Role: model.RoleUser, Content: "tell me more"},
 	}
 
 	_, err := collectMessages(t, a, input)
 	require.NoError(t, err)
 	require.NotNil(t, llm.lastRequest)
 
-	msgs := llm.lastRequest.Messages
+	msgs := llm.lastRequest.Contents
 
 	// First message must be the merged system message.
 	require.NotEmpty(t, msgs)
@@ -1142,19 +1142,19 @@ func TestLlmAgent_CompactionSummary_OnlyLastSystemTaken(t *testing.T) {
 		Instruction: "You are concise.",
 	}).(*LlmAgent)
 
-	input := []model.Message{
-		{Role: model.RoleSystem, Content: "Old summary: session began with weather questions."},
-		{Role: model.RoleUser, Content: "What about sports?"},
-		{Role: model.RoleAssistant, Content: "Sports are great."},
-		{Role: model.RoleSystem, Content: "Latest summary: topics covered weather and sports."},
-		{Role: model.RoleUser, Content: "What else?"},
+	input := []model.Content{
+		model.Content{Role: model.RoleSystem, Content: "Old summary: session began with weather questions."},
+		model.Content{Role: model.RoleUser, Content: "What about sports?"},
+		model.Content{Role: model.RoleAssistant, Content: "Sports are great."},
+		model.Content{Role: model.RoleSystem, Content: "Latest summary: topics covered weather and sports."},
+		model.Content{Role: model.RoleUser, Content: "What else?"},
 	}
 
 	_, err := collectMessages(t, a, input)
 	require.NoError(t, err)
 	require.NotNil(t, llm.lastRequest)
 
-	msgs := llm.lastRequest.Messages
+	msgs := llm.lastRequest.Contents
 
 	// Only one system message at position 0.
 	require.NotEmpty(t, msgs)
@@ -1181,18 +1181,18 @@ func TestLlmAgent_CompactionSummary_NoInstruction(t *testing.T) {
 		// Instruction intentionally empty.
 	}).(*LlmAgent)
 
-	input := []model.Message{
-		{Role: model.RoleUser, Content: "recap?"},
-		{Role: model.RoleAssistant, Content: "sure"},
-		{Role: model.RoleSystem, Content: "Summary: prior conversation about cooking."},
-		{Role: model.RoleUser, Content: "continue"},
+	input := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "recap?"},
+		model.Content{Role: model.RoleAssistant, Content: "sure"},
+		model.Content{Role: model.RoleSystem, Content: "Summary: prior conversation about cooking."},
+		model.Content{Role: model.RoleUser, Content: "continue"},
 	}
 
 	_, err := collectMessages(t, a, input)
 	require.NoError(t, err)
 	require.NotNil(t, llm.lastRequest)
 
-	msgs := llm.lastRequest.Messages
+	msgs := llm.lastRequest.Contents
 
 	require.NotEmpty(t, msgs)
 	assert.Equal(t, model.RoleSystem, msgs[0].Role)
@@ -1217,17 +1217,17 @@ func TestLlmAgent_CompactionSummary_NoSystemInSession(t *testing.T) {
 		Instruction: "You are precise.",
 	}).(*LlmAgent)
 
-	input := []model.Message{
-		{Role: model.RoleUser, Content: "hello"},
-		{Role: model.RoleAssistant, Content: "hi"},
-		{Role: model.RoleUser, Content: "bye"},
+	input := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "hello"},
+		model.Content{Role: model.RoleAssistant, Content: "hi"},
+		model.Content{Role: model.RoleUser, Content: "bye"},
 	}
 
 	_, err := collectMessages(t, a, input)
 	require.NoError(t, err)
 	require.NotNil(t, llm.lastRequest)
 
-	msgs := llm.lastRequest.Messages
+	msgs := llm.lastRequest.Contents
 
 	// System message is just the instruction, unchanged.
 	require.NotEmpty(t, msgs)
@@ -1280,7 +1280,7 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 		responses: []*model.LLMResponse{
 			// First call: LLM requests both tools simultaneously.
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
 						{ID: "tc-a", Name: "tool-a", Arguments: `{}`},
@@ -1291,7 +1291,7 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 			},
 			// Second call: final answer.
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -1304,8 +1304,8 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 	}).(*LlmAgent)
 
 	start := time.Now()
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "run both tools"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "run both tools"},
 	})
 	elapsed := time.Since(start)
 
@@ -1315,7 +1315,7 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 	assert.Equal(t, int64(2), callCount.Load(), "both tools should be called")
 
 	// Verify tool result messages are present and ordered correctly.
-	var toolMsgs []model.Message
+	var toolMsgs []model.Content
 	for _, m := range msgs {
 		if m.Role == model.RoleTool {
 			toolMsgs = append(toolMsgs, m)
@@ -1364,7 +1364,7 @@ func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
 		responses: []*model.LLMResponse{
 			// First call: LLM requests the blocking tool.
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
 						{ID: "tc-1", Name: "blocker", Arguments: `{}`},
@@ -1374,7 +1374,7 @@ func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
 			},
 			// Second call: final stop after tool result is returned.
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -1387,14 +1387,14 @@ func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
 		ToolTimeout: 30 * time.Millisecond,
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "run the blocker"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "run the blocker"},
 	})
 
 	require.NoError(t, err)
 
 	// Find the tool result message.
-	var toolMsg *model.Message
+	var toolMsg *model.Content
 	for i := range msgs {
 		if msgs[i].Role == model.RoleTool {
 			toolMsg = &msgs[i]
@@ -1418,14 +1418,14 @@ func TestLlmAgent_ToolTimeout_CompletesWithinDeadline(t *testing.T) {
 		name: "mock-fast",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role:      model.RoleAssistant,
 					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "fast", Arguments: `{}`}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -1438,14 +1438,14 @@ func TestLlmAgent_ToolTimeout_CompletesWithinDeadline(t *testing.T) {
 		ToolTimeout: 500 * time.Millisecond,
 	}).(*LlmAgent)
 
-	msgs, err := collectMessages(t, a, []model.Message{
-		{Role: model.RoleUser, Content: "run fast"},
+	msgs, err := collectMessages(t, a, []model.Content{
+		model.Content{Role: model.RoleUser, Content: "run fast"},
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), callCount.Load())
 
-	var toolMsg *model.Message
+	var toolMsg *model.Content
 	for i := range msgs {
 		if msgs[i].Role == model.RoleTool {
 			toolMsg = &msgs[i]

@@ -89,7 +89,7 @@ func (g *GenerateContent) Name() string {
 // provided at construction time.
 func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		contents, sysInstruction, err := convertMessages(req.Messages)
+		contents, sysInstruction, err := convertMessages(req.Contents)
 		if err != nil {
 			yield(nil, fmt.Errorf("gemini: convert messages: %w", err))
 			return
@@ -193,7 +193,7 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 			// Yield partial event for text/reasoning deltas.
 			if deltaTxt != "" || deltaReasoning != "" {
 				if !yield(&model.LLMResponse{
-					Message: model.Message{
+					Content: model.Content{
 						Role:             model.RoleAssistant,
 						Content:          deltaTxt,
 						ReasoningContent: deltaReasoning,
@@ -225,7 +225,7 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 
 		// Yield final complete response.
 		yield(&model.LLMResponse{
-			Message: model.Message{
+			Content: model.Content{
 				Role:             model.RoleAssistant,
 				Content:          contentBuf.String(),
 				ReasoningContent: reasoningBuf.String(),
@@ -242,9 +242,9 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 // converts the remaining messages to a Gemini []*genai.Content slice.
 // Consecutive RoleTool messages are batched into a single "user" content so
 // that all FunctionResponse parts for a single model turn are grouped correctly.
-func convertMessages(msgs []model.Message) ([]*genai.Content, *genai.Content, error) {
+func convertMessages(msgs []model.Content) ([]*genai.Content, *genai.Content, error) {
 	// Pre-build a toolCallID → name lookup so each FunctionResponse can include
-	// the required function name (absent from model.Message{Role: RoleTool}).
+	// the required function name (absent from model.Content{Role: RoleTool}).
 	toolCallNames := make(map[string]string)
 	for _, m := range msgs {
 		for _, tc := range m.ToolCalls {
@@ -308,8 +308,8 @@ func convertMessages(msgs []model.Message) ([]*genai.Content, *genai.Content, er
 	return contents, sysInstruction, nil
 }
 
-// convertUserParts converts a RoleUser model.Message to a Gemini Part slice.
-func convertUserParts(m model.Message) ([]*genai.Part, error) {
+// convertUserParts converts a RoleUser model.Content to a Gemini Part slice.
+func convertUserParts(m model.Content) ([]*genai.Part, error) {
 	if len(m.Parts) == 0 {
 		return []*genai.Part{{Text: m.Content}}, nil
 	}
@@ -339,8 +339,8 @@ func convertUserParts(m model.Message) ([]*genai.Part, error) {
 	return parts, nil
 }
 
-// convertAssistantParts converts a RoleAssistant model.Message to a Gemini Part slice.
-func convertAssistantParts(m model.Message) ([]*genai.Part, error) {
+// convertAssistantParts converts a RoleAssistant model.Content to a Gemini Part slice.
+func convertAssistantParts(m model.Content) ([]*genai.Part, error) {
 	var parts []*genai.Part
 	if m.Content != "" {
 		parts = append(parts, &genai.Part{Text: m.Content})
@@ -470,7 +470,7 @@ func mapReasoningEffort(effort model.ReasoningEffort) genai.ThinkingLevel {
 // raw FinishReason with FinishReasonToolCalls.
 func convertResponse(resp *genai.GenerateContentResponse) *model.LLMResponse {
 	candidate := resp.Candidates[0]
-	msg := model.Message{Role: model.RoleAssistant}
+	msg := model.Content{Role: model.RoleAssistant}
 
 	var textParts []string
 	var reasoningParts []string
@@ -520,7 +520,7 @@ func convertResponse(resp *genai.GenerateContentResponse) *model.LLMResponse {
 	}
 
 	return &model.LLMResponse{
-		Message:      msg,
+		Content:      msg,
 		FinishReason: finishReason,
 		Usage:        usage,
 	}

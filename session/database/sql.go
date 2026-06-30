@@ -2,27 +2,27 @@ package database
 
 const (
 	defaultSessionsTable   = "sessions"
-	defaultMessagesTable   = "messages"
+	defaultEventsTable     = "events"
 	defaultMigrationsTable = "schema_migrations"
 )
 
 // queries holds all pre-built SQL expressions for a set of table names.
 type queries struct {
-	createSession         string
-	getSession            string
-	deleteSession         string
-	createMessage         string
-	deleteMessage         string
-	getMessages           string
-	listMessages          string
-	listCompactedMessages string
-	compactActiveMessages string
-	compactMessagesBefore string
+	createSession       string
+	getSession          string
+	deleteSession       string
+	createEvent         string
+	deleteEvent         string
+	getEvents           string
+	listEvents          string
+	listCompactedEvents string
+	compactActiveEvents string
+	compactEventsBefore string
 }
 
 // buildQueries constructs SQL expressions using the provided table names.
 // Table names are validated before this function is called.
-func buildQueries(sessionsTable, messagesTable string) *queries {
+func buildQueries(sessionsTable, eventsTable string) *queries {
 	return &queries{
 		createSession: `
 			INSERT INTO ` + sessionsTable + ` (
@@ -46,16 +46,17 @@ func buildQueries(sessionsTable, messagesTable string) *queries {
 			WHERE session_id = $2
 				AND deleted_at = $3
 		`,
-		createMessage: `
-			INSERT INTO ` + messagesTable + ` (
-				message_id,
+		createEvent: `
+			INSERT INTO ` + eventsTable + ` (
+				event_id,
 				session_id,
+				author,
 				role,
-				name,
-				content,
-				reasoning_content,
+				text,
+				reasoning_text,
 				tool_calls,
 				tool_call_id,
+				finish_reason,
 				parts,
 				prompt_tokens,
 				completion_tokens,
@@ -67,61 +68,61 @@ func buildQueries(sessionsTable, messagesTable string) *queries {
 			)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14, 0, 0
+				$9, $10, $11, $12, $13, $14, $15, 0, 0
 			)
 		`,
-		deleteMessage: `
-			UPDATE ` + messagesTable + `
+		deleteEvent: `
+			UPDATE ` + eventsTable + `
 			SET deleted_at = $1
 			WHERE session_id = $2
-				AND message_id = $3
+				AND event_id = $3
 				AND deleted_at = 0
 		`,
-		getMessages: `
+		getEvents: `
 			SELECT *
-			FROM ` + messagesTable + `
+			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
 				AND compacted_at = 0
-			ORDER BY created_at ASC, message_id ASC
+			ORDER BY created_at ASC, event_id ASC
 			LIMIT $2 OFFSET $3
 		`,
-		listMessages: `
+		listEvents: `
 			SELECT *
-			FROM ` + messagesTable + `
+			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
 				AND compacted_at = 0
-			ORDER BY created_at ASC, message_id ASC
+			ORDER BY created_at ASC, event_id ASC
 		`,
-		listCompactedMessages: `
+		listCompactedEvents: `
 			SELECT *
-			FROM ` + messagesTable + `
+			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND compacted_at > 0
 				AND deleted_at = 0
-			ORDER BY created_at ASC, message_id ASC
+			ORDER BY created_at ASC, event_id ASC
 		`,
-		compactActiveMessages: `
-			UPDATE ` + messagesTable + `
+		compactActiveEvents: `
+			UPDATE ` + eventsTable + `
 			SET compacted_at = $1
 			WHERE session_id = $2
 				AND deleted_at = 0
 				AND compacted_at = 0
 		`,
-		compactMessagesBefore: `
-			UPDATE ` + messagesTable + `
+		compactEventsBefore: `
+			UPDATE ` + eventsTable + `
 			SET compacted_at = $1
 			WHERE session_id = $2
 				AND deleted_at = 0
 				AND compacted_at = 0
-				AND message_id < $3
+				AND event_id < $3
 		`,
 	}
 }
 
 // defaultQueries is built from the default table names for backward compatibility.
-var defaultQueries = buildQueries(defaultSessionsTable, defaultMessagesTable)
+var defaultQueries = buildQueries(defaultSessionsTable, defaultEventsTable)
 
 func createMigrationsTableSQL(table string) string {
 	return `
@@ -157,15 +158,16 @@ func migrationV1SQL(t migrationTables) []string {
 			)
 		`,
 		`
-			CREATE TABLE IF NOT EXISTS ` + t.messages + ` (
-				message_id        BIGINT PRIMARY KEY,
+			CREATE TABLE IF NOT EXISTS ` + t.events + ` (
+				event_id          BIGINT PRIMARY KEY,
 				session_id        BIGINT NOT NULL,
+				author            TEXT    NOT NULL DEFAULT '',
 				role              TEXT    NOT NULL DEFAULT '',
-				name              TEXT    NOT NULL DEFAULT '',
-				content           TEXT    NOT NULL DEFAULT '',
-				reasoning_content TEXT    NOT NULL DEFAULT '',
+				text              TEXT    NOT NULL DEFAULT '',
+				reasoning_text    TEXT    NOT NULL DEFAULT '',
 				tool_calls        TEXT    NOT NULL DEFAULT '[]',
 				tool_call_id      TEXT    NOT NULL DEFAULT '',
+				finish_reason     TEXT    NOT NULL DEFAULT '',
 				parts             TEXT    NOT NULL DEFAULT '[]',
 				prompt_tokens     BIGINT NOT NULL DEFAULT 0,
 				completion_tokens BIGINT NOT NULL DEFAULT 0,
@@ -177,8 +179,8 @@ func migrationV1SQL(t migrationTables) []string {
 			)
 		`,
 		`
-			CREATE INDEX IF NOT EXISTS idx_` + t.messages + `_session
-			ON ` + t.messages + ` (
+			CREATE INDEX IF NOT EXISTS idx_` + t.events + `_session
+			ON ` + t.events + ` (
 				session_id,
 				deleted_at,
 				compacted_at,

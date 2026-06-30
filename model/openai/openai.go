@@ -59,7 +59,7 @@ func (c *ChatCompletion) Name() string {
 // provided at construction time.
 func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, err := convertMessages(req.Messages)
+		messages, err := convertMessages(req.Contents)
 		if err != nil {
 			yield(nil, fmt.Errorf("openai: convert messages: %w", err))
 			return
@@ -150,7 +150,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			if delta.Content != "" {
 				contentBuf.WriteString(delta.Content)
 				if !yield(&model.LLMResponse{
-					Message: model.Message{
+					Content: model.Content{
 						Role:    model.RoleAssistant,
 						Content: delta.Content,
 					},
@@ -170,7 +170,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 				if err := json.Unmarshal([]byte(raw), &envelope); err == nil && envelope.ReasoningContent != "" {
 					reasoningBuf.WriteString(envelope.ReasoningContent)
 					if !yield(&model.LLMResponse{
-						Message: model.Message{
+						Content: model.Content{
 							Role:             model.RoleAssistant,
 							ReasoningContent: envelope.ReasoningContent,
 						},
@@ -208,7 +208,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 		}
 
 		// Build the final complete response.
-		msg := model.Message{
+		msg := model.Content{
 			Role:             model.RoleAssistant,
 			Content:          contentBuf.String(),
 			ReasoningContent: reasoningBuf.String(),
@@ -235,7 +235,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			}
 		}
 		yield(&model.LLMResponse{
-			Message:      msg,
+			Content:      msg,
 			FinishReason: convertFinishReason(finishReasonStr),
 			TurnComplete: true,
 			Usage:        usage,
@@ -243,8 +243,8 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 	}
 }
 
-// convertMessages maps model.Message slice to openai ChatCompletionMessageParamUnion slice.
-func convertMessages(msgs []model.Message) ([]goopenai.ChatCompletionMessageParamUnion, error) {
+// convertMessages maps model.Content slice to openai ChatCompletionMessageParamUnion slice.
+func convertMessages(msgs []model.Content) ([]goopenai.ChatCompletionMessageParamUnion, error) {
 	result := make([]goopenai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
 		p, err := convertMessage(m)
@@ -256,7 +256,7 @@ func convertMessages(msgs []model.Message) ([]goopenai.ChatCompletionMessagePara
 	return result, nil
 }
 
-func convertMessage(m model.Message) (goopenai.ChatCompletionMessageParamUnion, error) {
+func convertMessage(m model.Content) (goopenai.ChatCompletionMessageParamUnion, error) {
 	switch m.Role {
 	case model.RoleSystem:
 		return goopenai.SystemMessage(m.Content), nil
@@ -385,7 +385,7 @@ func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig,
 
 // convertResponse maps the first OpenAI choice and usage to model.LLMResponse.
 func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.CompletionUsage) *model.LLMResponse {
-	msg := model.Message{
+	msg := model.Content{
 		Role:    model.RoleAssistant,
 		Content: choice.Message.Content,
 	}
@@ -414,7 +414,7 @@ func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.Compl
 	}
 
 	return &model.LLMResponse{
-		Message:      msg,
+		Content:      msg,
 		FinishReason: convertFinishReason(choice.FinishReason),
 		Usage: &model.TokenUsage{
 			PromptTokens:     usage.PromptTokens,

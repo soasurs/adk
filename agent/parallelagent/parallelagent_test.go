@@ -87,7 +87,7 @@ func newLLMFromEnv(t *testing.T) model.LLM {
 }
 
 // logMessage prints a single message in a concise one-line format.
-func logMessage(t *testing.T, idx int, m model.Message) {
+func logMessage(t *testing.T, idx int, m model.Content) {
 	t.Helper()
 	if len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
@@ -129,7 +129,7 @@ func TestParallelAgent_SingleAgent(t *testing.T) {
 		name: "mock",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "Hello!"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "Hello!"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -138,13 +138,13 @@ func TestParallelAgent_SingleAgent(t *testing.T) {
 	pa, err := New(Config{Name: "fanout", Description: "single-agent fanout", Agents: []agent.Agent{a}})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Hi"},
-	}) {
+	var msgs []model.Content
+	for event, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Hi"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -160,7 +160,7 @@ func TestParallelAgent_TwoAgents_Merged(t *testing.T) {
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "from-agent-1"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "from-agent-1"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -169,7 +169,7 @@ func TestParallelAgent_TwoAgents_Merged(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "from-agent-2"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "from-agent-2"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -184,13 +184,13 @@ func TestParallelAgent_TwoAgents_Merged(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	var msgs []model.Content
+	for event, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -212,7 +212,7 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 
 	resp := func(content string) *model.LLMResponse {
 		return &model.LLMResponse{
-			Message:      model.Message{Role: model.RoleAssistant, Content: content},
+			Content:      model.Content{Role: model.RoleAssistant, Content: content},
 			FinishReason: model.FinishReasonStop,
 		}
 	}
@@ -230,20 +230,20 @@ func TestParallelAgent_TrueParallelism(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Run the parallel agent in a background goroutine.
-	var collectedMsgs []model.Message
+	var collectedMsgs []model.Content
 	var runErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for event, err := range pa.Run(t.Context(), []model.Message{
-			{Role: model.RoleUser, Content: "go"},
-		}) {
+		for event, err := range pa.Run(t.Context(), model.EventHistory(
+			model.Content{Role: model.RoleUser, Content: "go"},
+		)) {
 			if err != nil {
 				runErr = err
 				return
 			}
 			if !event.Partial {
-				collectedMsgs = append(collectedMsgs, event.Message)
+				collectedMsgs = append(collectedMsgs, event.Content)
 			}
 		}
 	}()
@@ -278,7 +278,7 @@ func TestParallelAgent_EarlyStop(t *testing.T) {
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "first"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "first"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -287,7 +287,7 @@ func TestParallelAgent_EarlyStop(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "second"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "second"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -301,13 +301,13 @@ func TestParallelAgent_EarlyStop(t *testing.T) {
 		Agents:      []agent.Agent{a1, a2},
 	})
 	assert.Nil(t, err)
-	var msgs []model.Message
-	for event, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	var msgs []model.Content
+	for event, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 		break // stop after the first (and only) merged message
 	}
@@ -325,7 +325,7 @@ func TestParallelAgent_ErrorPropagation(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "from-agent-2"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "from-agent-2"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -341,9 +341,9 @@ func TestParallelAgent_ErrorPropagation(t *testing.T) {
 	assert.Nil(t, err)
 
 	var gotErr error
-	for _, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	for _, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		if err != nil {
 			gotErr = err
 			break
@@ -361,7 +361,7 @@ type errorAgent struct {
 
 func (a *errorAgent) Name() string        { return a.name }
 func (a *errorAgent) Description() string { return "always errors" }
-func (a *errorAgent) Run(_ context.Context, _ []model.Message) iter.Seq2[*model.Event, error] {
+func (a *errorAgent) Run(_ context.Context, _ []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		yield(nil, a.err)
 	}
@@ -379,7 +379,7 @@ func TestParallelAgent_PrefersRootCauseOverContextCanceled(t *testing.T) {
 		ready: ready,
 		gate:  make(chan struct{}),
 		response: &model.LLMResponse{
-			Message:      model.Message{Role: model.RoleAssistant, Content: "ignored"},
+			Content:      model.Content{Role: model.RoleAssistant, Content: "ignored"},
 			FinishReason: model.FinishReasonStop,
 		},
 	}
@@ -394,7 +394,7 @@ func TestParallelAgent_PrefersRootCauseOverContextCanceled(t *testing.T) {
 	require.NoError(t, err)
 
 	var gotErr error
-	for _, err := range pa.Run(t.Context(), []model.Message{{Role: model.RoleUser, Content: "go"}}) {
+	for _, err := range pa.Run(t.Context(), model.EventHistory(model.Content{Role: model.RoleUser, Content: "go"})) {
 		if err != nil {
 			gotErr = err
 			break
@@ -412,7 +412,7 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "answer-1"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "answer-1"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -421,7 +421,7 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "answer-2"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "answer-2"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -431,12 +431,13 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 	a2 := llmagent.New(llmagent.Config{Name: "agent-2", Description: "second", Model: llm2})
 
 	// Custom merger: concatenate contents with " | " separator.
-	customMerge := func(results []AgentOutput) model.Message {
+	customMerge := func(results []AgentOutput) model.Event {
 		var texts []string
 		for _, r := range results {
-			for i := len(r.Messages) - 1; i >= 0; i-- {
-				if r.Messages[i].Role == model.RoleAssistant && r.Messages[i].Content != "" {
-					texts = append(texts, r.Messages[i].Content)
+			for i := len(r.Events) - 1; i >= 0; i-- {
+				content := r.Events[i].Content
+				if content.Role == model.RoleAssistant && content.Content != "" {
+					texts = append(texts, content.Content)
 					break
 				}
 			}
@@ -448,7 +449,7 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 			}
 			joined += t
 		}
-		return model.Message{Role: model.RoleAssistant, Content: joined}
+		return model.Event{Content: model.Content{Role: model.RoleAssistant, Content: joined}}
 	}
 
 	pa, err := New(Config{
@@ -459,13 +460,13 @@ func TestParallelAgent_CustomMergeFunc(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	var msgs []model.Content
+	for event, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -483,7 +484,7 @@ func TestParallelAgent_DefaultMergeFunc_OmitsEmptyAgents(t *testing.T) {
 		responses: []*model.LLMResponse{
 			{
 				// FinishReasonStop but empty content — simulates a no-text response.
-				Message:      model.Message{Role: model.RoleAssistant, Content: ""},
+				Content:      model.Content{Role: model.RoleAssistant, Content: ""},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -492,7 +493,7 @@ func TestParallelAgent_DefaultMergeFunc_OmitsEmptyAgents(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "only me"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "only me"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -507,13 +508,13 @@ func TestParallelAgent_DefaultMergeFunc_OmitsEmptyAgents(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range pa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	var msgs []model.Content
+	for event, err := range pa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -559,8 +560,8 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	input := []model.Message{
-		{Role: model.RoleUser, Content: "Hello, world!"},
+	input := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "Hello, world!"},
 	}
 
 	t.Log("=== input ===")
@@ -570,14 +571,14 @@ func TestParallelAgent_Integration_FanOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
-	var msgs []model.Message
-	for event, err := range fanout.Run(ctx, input) {
+	var msgs []model.Content
+	for event, err := range fanout.Run(ctx, model.EventsFromContents(input)) {
 		require.NoError(t, err)
 		if event.Partial {
 			continue
 		}
-		logMessage(t, len(msgs), event.Message)
-		msgs = append(msgs, event.Message)
+		logMessage(t, len(msgs), event.Content)
+		msgs = append(msgs, event.Content)
 	}
 
 	// Always exactly one merged assistant message.

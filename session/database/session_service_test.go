@@ -235,7 +235,7 @@ func TestDatabaseSessionService_InvalidTableName(t *testing.T) {
 		opts []Option
 	}{
 		{"empty sessions table", []Option{WithSessionsTable("")}},
-		{"empty messages table", []Option{WithMessagesTable("")}},
+		{"empty events table", []Option{WithEventsTable("")}},
 		{"spaces in name", []Option{WithSessionsTable("my sessions")}},
 		{"SQL injection attempt", []Option{WithSessionsTable("sessions; DROP TABLE sessions")}},
 		{"starts with digit", []Option{WithSessionsTable("1sessions")}},

@@ -27,12 +27,12 @@ func validateTableName(name string) error {
 // Option is a functional option for configuring a DatabaseSessionService.
 type Option func(*databaseSessionService)
 
-// WithTablePrefix sets a prefix for the sessions, messages, and migrations table names.
-// For example, WithTablePrefix("myapp_") will use tables "myapp_sessions", "myapp_messages", and "myapp_schema_migrations".
+// WithTablePrefix sets a prefix for the sessions, events, and migrations table names.
+// For example, WithTablePrefix("myapp_") will use tables "myapp_sessions", "myapp_events", and "myapp_schema_migrations".
 func WithTablePrefix(prefix string) Option {
 	return func(s *databaseSessionService) {
 		s.sessionsTable = prefix + defaultSessionsTable
-		s.messagesTable = prefix + defaultMessagesTable
+		s.eventsTable = prefix + defaultEventsTable
 		s.migrationsTable = prefix + defaultMigrationsTable
 	}
 }
@@ -44,10 +44,10 @@ func WithSessionsTable(name string) Option {
 	}
 }
 
-// WithMessagesTable overrides the messages table name.
-func WithMessagesTable(name string) Option {
+// WithEventsTable overrides the events table name.
+func WithEventsTable(name string) Option {
 	return func(s *databaseSessionService) {
-		s.messagesTable = name
+		s.eventsTable = name
 	}
 }
 
@@ -61,22 +61,22 @@ func WithMigrationsTable(name string) Option {
 type databaseSessionService struct {
 	db              *sqlx.DB
 	sessionsTable   string
-	messagesTable   string
+	eventsTable     string
 	migrationsTable string
 	q               *queries
 	runLocks        *sessionlock.Locker
 }
 
 // NewDatabaseSessionService creates a new database-backed SessionService.
-// By default it uses the table names "sessions" and "messages".
-// Use Option functions such as WithTablePrefix, WithSessionsTable, or WithMessagesTable
+// By default it uses the table names "sessions" and "events".
+// Use Option functions such as WithTablePrefix, WithSessionsTable, or WithEventsTable
 // to customise the table names and avoid conflicts in shared databases.
 // Returns an error if any configured table name is not a valid SQL identifier.
 func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionService, error) {
 	svc := &databaseSessionService{
 		db:              db,
 		sessionsTable:   defaultSessionsTable,
-		messagesTable:   defaultMessagesTable,
+		eventsTable:     defaultEventsTable,
 		migrationsTable: defaultMigrationsTable,
 		runLocks:        sessionlock.New(),
 	}
@@ -86,13 +86,13 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 	if err := validateTableName(svc.sessionsTable); err != nil {
 		return nil, err
 	}
-	if err := validateTableName(svc.messagesTable); err != nil {
+	if err := validateTableName(svc.eventsTable); err != nil {
 		return nil, err
 	}
 	if err := validateTableName(svc.migrationsTable); err != nil {
 		return nil, err
 	}
-	svc.q = buildQueries(svc.sessionsTable, svc.messagesTable)
+	svc.q = buildQueries(svc.sessionsTable, svc.eventsTable)
 	return svc, nil
 }
 

@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/soasurs/adk/session"
-	"github.com/soasurs/adk/session/message"
+	"github.com/soasurs/adk/session/event"
 )
 
 type memorySession struct {
 	mu        sync.RWMutex
 	sessionID int64
-	messages  []*message.Message // all messages: active (compacted_at=0, deleted_at=0) + archived
+	events    []*event.Event // all events: active (compacted_at=0, deleted_at=0) + archived
 }
 
 func NewMemorySession(sessionID int64) session.Session {
 	return &memorySession{
 		sessionID: sessionID,
-		messages:  make([]*message.Message, 0),
+		events:    make([]*event.Event, 0),
 	}
 }
 
@@ -28,32 +28,32 @@ func (s *memorySession) GetSessionID() int64 {
 	return s.sessionID
 }
 
-func (s *memorySession) CreateMessage(ctx context.Context, msg *message.Message) error {
+func (s *memorySession) CreateEvent(ctx context.Context, ev *event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.messages = append(s.messages, msg)
+	s.events = append(s.events, cloneEvent(ev))
 	return nil
 }
 
-func (s *memorySession) DeleteMessage(ctx context.Context, messageID int64) error {
+func (s *memorySession) DeleteEvent(ctx context.Context, eventID int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
-	for _, m := range s.messages {
-		if m.MessageID == messageID && m.CompactedAt == 0 && m.DeletedAt == 0 {
-			m.DeletedAt = now
+	for _, ev := range s.events {
+		if ev.EventID == eventID && ev.CompactedAt == 0 && ev.DeletedAt == 0 {
+			ev.DeletedAt = now
 			break
 		}
 	}
 	return nil
 }
 
-func (s *memorySession) GetMessages(ctx context.Context, limit, offset int64) ([]*message.Message, error) {
+func (s *memorySession) GetEvents(ctx context.Context, limit, offset int64) ([]*event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	active := s.activeMessages()
+	active := s.activeEvents()
 	if offset >= int64(len(active)) {
-		return []*message.Message{}, nil
+		return []*event.Event{}, nil
 	}
 	end := offset + limit
 	if end > int64(len(active)) {
@@ -62,70 +62,85 @@ func (s *memorySession) GetMessages(ctx context.Context, limit, offset int64) ([
 	return active[offset:end], nil
 }
 
-func (s *memorySession) ListMessages(ctx context.Context) ([]*message.Message, error) {
+func (s *memorySession) ListEvents(ctx context.Context) ([]*event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.activeMessages(), nil
+	return s.activeEvents(), nil
 }
 
-func (s *memorySession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
+func (s *memorySession) ListCompactedEvents(ctx context.Context) ([]*event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*message.Message, 0)
-	for _, m := range s.messages {
-		if m.CompactedAt > 0 && m.DeletedAt == 0 {
-			out = append(out, m)
+	out := make([]*event.Event, 0)
+	for _, ev := range s.events {
+		if ev.CompactedAt > 0 && ev.DeletedAt == 0 {
+			out = append(out, cloneEvent(ev))
 		}
 	}
-	sortMessages(out)
+	sortEvents(out)
 	return out, nil
 }
 
-func (s *memorySession) CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error {
+func (s *memorySession) CompactEvents(ctx context.Context, splitEventID int64, summaryEvent *event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
 
-	// Determine the index of the first active message to keep.
-	active := s.activeMessages()
+	// Determine the index of the first active event to keep.
+	active := s.activeEvents()
 	splitIdx := len(active) // default: archive all active messages
-	if splitMessageID > 0 {
-		for i, m := range active {
-			if m.MessageID == splitMessageID {
+	if splitEventID > 0 {
+		for i, ev := range active {
+			if ev.EventID == splitEventID {
 				splitIdx = i
 				break
 			}
 		}
 	}
 
-	// Set CompactedAt on active messages before the split point.
-	for _, m := range active[:splitIdx] {
-		m.CompactedAt = now
+	// Set CompactedAt on stored active events before the split point.
+	for _, activeEvent := range active[:splitIdx] {
+		for _, stored := range s.events {
+			if stored.EventID == activeEvent.EventID {
+				stored.CompactedAt = now
+				break
+			}
+		}
 	}
 
-	// Append the summary as a new active message.
-	s.messages = append(s.messages, summaryMsg)
+	// Append the summary as a new active event.
+	s.events = append(s.events, cloneEvent(summaryEvent))
 	return nil
 }
 
-// activeMessages returns all messages with CompactedAt == 0 and DeletedAt == 0,
+// activeEvents returns all events with CompactedAt == 0 and DeletedAt == 0,
 // preserving insertion order. Must be called with s.mu held (read or write).
-func (s *memorySession) activeMessages() []*message.Message {
-	out := make([]*message.Message, 0, len(s.messages))
-	for _, m := range s.messages {
-		if m.CompactedAt == 0 && m.DeletedAt == 0 {
-			out = append(out, m)
+func (s *memorySession) activeEvents() []*event.Event {
+	out := make([]*event.Event, 0, len(s.events))
+	for _, ev := range s.events {
+		if ev.CompactedAt == 0 && ev.DeletedAt == 0 {
+			out = append(out, cloneEvent(ev))
 		}
 	}
-	sortMessages(out)
+	sortEvents(out)
 	return out
 }
 
-func sortMessages(messages []*message.Message) {
-	slices.SortFunc(messages, func(a, b *message.Message) int {
+func sortEvents(events []*event.Event) {
+	slices.SortFunc(events, func(a, b *event.Event) int {
 		if n := cmp.Compare(a.CreatedAt, b.CreatedAt); n != 0 {
 			return n
 		}
-		return cmp.Compare(a.MessageID, b.MessageID)
+		return cmp.Compare(a.EventID, b.EventID)
 	})
+}
+
+func cloneEvent(ev *event.Event) *event.Event {
+	if ev == nil {
+		return nil
+	}
+	out := *ev
+	out.Parts = append(event.Parts(nil), ev.Parts...)
+	out.ToolCalls = append(event.ToolCalls(nil), ev.ToolCalls...)
+	return &out
 }

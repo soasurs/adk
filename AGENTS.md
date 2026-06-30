@@ -31,7 +31,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `session/memory` | In-memory session (tests / ephemeral use) |
 | `session/database` | SQLite-backed session with schema migration |
 | `session/compaction` | `compaction.Config` reference type for manual context management |
-| `session/message` | `message.Message` — persisted form of `model.Message` |
+| `session/event` | `event.Event` — persisted form of `model.Event` |
 | `tool` | `Tool` interface and `Definition` |
 | `tool/builtin` | Ready-made tools (e.g. code execution) |
 | `tool/mcp` | MCP client tool adapter |
@@ -87,7 +87,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Stateless agents** — agents hold no conversation state; all history is supplied by `Runner` via `SessionService` on every call.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.
-- **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactMessages(ctx, splitMessageID, summaryMsg)` to archive old messages and insert a summary. `splitMessageID=0` archives all active messages.
+- **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactEvents(ctx, splitEventID, summaryEvent)` to archive old events and insert a summary. `splitEventID=0` archives all active events.
 
 ## Coding Style
 

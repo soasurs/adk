@@ -138,14 +138,14 @@ func (a *LlmAgent) Description() string {
 // loop. When Stream is true, partial events with incremental text are yielded
 // before each complete assistant message. Tool result messages are always
 // yielded as complete events. Iteration ends when the LLM stops calling tools.
-func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		// Find the last system message in the session history, which is the most
 		// recent compaction summary. Earlier system messages, if any, have already
 		// been subsumed by a subsequent compaction and should be dropped.
 		lastSummaryIdx := -1
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == model.RoleSystem {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Content.Role == model.RoleSystem {
 				lastSummaryIdx = i
 				break
 			}
@@ -158,30 +158,30 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 			systemParts = append(systemParts, a.config.Instruction)
 		}
 		if lastSummaryIdx >= 0 {
-			systemParts = append(systemParts, messages[lastSummaryIdx].Content)
+			systemParts = append(systemParts, events[lastSummaryIdx].Content.Content)
 		}
 
-		history := make([]model.Message, 0, len(messages)+1)
+		history := make([]model.Content, 0, len(events)+1)
 		if len(systemParts) > 0 {
-			history = append(history, model.Message{
+			history = append(history, model.Content{
 				Role:    model.RoleSystem,
 				Content: strings.Join(systemParts, "\n\n"),
 			})
 		}
 
-		// Append all non-system messages, preserving conversation order.
-		// All session-sourced system messages are dropped here: the last one has
+		// Append all non-system event content, preserving conversation order.
+		// All session-sourced system events are dropped here: the last one has
 		// been merged above, and earlier ones are stale compaction artifacts.
-		for _, m := range messages {
-			if m.Role == model.RoleSystem {
+		for _, event := range events {
+			if event.Content.Role == model.RoleSystem {
 				continue
 			}
-			history = append(history, m)
+			history = append(history, event.Content)
 		}
 
 		req := &model.LLMRequest{
 			Model:    a.config.Model.Name(),
-			Messages: history,
+			Contents: history,
 			Tools:    a.config.Tools,
 		}
 
@@ -222,7 +222,7 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 					if resp.Partial {
 						partialResponses++
 						// Yield streaming fragment for real-time display.
-						if !yield(&model.Event{Message: resp.Message, Partial: true}, nil) {
+						if !yield(&model.Event{Author: a.Name(), Content: resp.Content, Partial: true}, nil) {
 							stoppedEarly = true
 							break
 						}
@@ -256,11 +256,15 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 				return
 			}
 
-			// Attach token usage to the complete assistant message.
-			completeResp.Message.Usage = completeResp.Usage
+			completeEvent := model.Event{
+				Author:       a.Name(),
+				Content:      completeResp.Content,
+				FinishReason: completeResp.FinishReason,
+				Usage:        completeResp.Usage,
+			}
 
-			// Yield the complete assistant message (may contain tool_calls).
-			if !yield(&model.Event{Message: completeResp.Message, Partial: false}, nil) {
+			// Yield the complete assistant event (may contain tool_calls).
+			if !yield(&completeEvent, nil) {
 				return
 			}
 
@@ -269,25 +273,25 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 				return
 			}
 
-			// Append the assistant message before executing tools.
-			req.Messages = append(req.Messages, completeResp.Message)
+			// Append the assistant content before executing tools.
+			req.Contents = append(req.Contents, completeResp.Content)
 
 			// Execute all tool calls in parallel, preserving original order.
 			toolCtx, cancelTools := context.WithCancel(ctx)
-			toolMsgs := make([]model.Message, len(completeResp.Message.ToolCalls))
-			toolErrs := make([]error, len(completeResp.Message.ToolCalls))
+			toolEvents := make([]model.Event, len(completeResp.Content.ToolCalls))
+			toolErrs := make([]error, len(completeResp.Content.ToolCalls))
 			var wg sync.WaitGroup
-			for i, tc := range completeResp.Message.ToolCalls {
+			for i, tc := range completeResp.Content.ToolCalls {
 				wg.Add(1)
 				go func(i int, tc model.ToolCall) {
 					defer wg.Done()
-					toolMsg, err := a.runToolCall(toolCtx, iteration, i, tc)
+					toolEvent, err := a.runToolCall(toolCtx, iteration, i, tc)
 					if err != nil {
 						toolErrs[i] = err
 						cancelTools()
 						return
 					}
-					toolMsgs[i] = toolMsg
+					toolEvents[i] = toolEvent
 				}(i, tc)
 			}
 			wg.Wait()
@@ -300,18 +304,18 @@ func (a *LlmAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[
 				}
 			}
 
-			for _, toolMsg := range toolMsgs {
-				if !yield(&model.Event{Message: toolMsg, Partial: false}, nil) {
+			for _, toolEvent := range toolEvents {
+				if !yield(&toolEvent, nil) {
 					return
 				}
-				req.Messages = append(req.Messages, toolMsg)
+				req.Contents = append(req.Contents, toolEvent.Content)
 			}
 		}
 	}
 }
 
-// runToolCall executes a single tool call and returns the resulting tool message.
-func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc model.ToolCall) (model.Message, error) {
+// runToolCall executes a single tool call and returns the resulting tool event.
+func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc model.ToolCall) (model.Event, error) {
 	if a.config.ToolTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, a.config.ToolTimeout)
@@ -334,52 +338,58 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 	}
 	skipResult, err := a.beforeToolCall(ctx, call)
 	if err != nil {
-		return model.Message{}, err
+		return model.Event{}, err
 	}
 
 	startedAt := time.Now()
 	if skipResult != nil {
 		if err := a.afterToolCall(ctx, call, skipResult); err != nil {
-			return model.Message{}, err
+			return model.Event{}, err
 		}
-		return skipResult.Message, nil
+		return skipResult.Event, nil
 	}
 
 	if !ok {
 		toolErr := &ToolNotFoundError{Name: tc.Name}
-		msg := model.Message{
-			Role:       model.RoleTool,
-			ToolCallID: tc.ID,
-			Content:    toolErr.Error(),
+		event := model.Event{
+			Author: tc.Name,
+			Content: model.Content{
+				Role:       model.RoleTool,
+				ToolCallID: tc.ID,
+				Content:    toolErr.Error(),
+			},
 		}
 		if err := a.afterToolCall(ctx, call, &ToolCallResult{
-			Message:  msg,
+			Event:    event,
 			Err:      toolErr,
 			Duration: time.Since(startedAt),
 		}); err != nil {
-			return model.Message{}, err
+			return model.Event{}, err
 		}
-		return msg, nil
+		return event, nil
 	}
 
 	result, toolErr := t.Run(ctx, tc.ID, tc.Arguments)
-	msg := model.Message{
-		Role:       model.RoleTool,
-		ToolCallID: tc.ID,
-		Content:    result,
+	event := model.Event{
+		Author: t.Definition().Name,
+		Content: model.Content{
+			Role:       model.RoleTool,
+			ToolCallID: tc.ID,
+			Content:    result,
+		},
 	}
 	if toolErr != nil {
-		msg.Content = fmt.Sprintf("error: %s", toolErr.Error())
+		event.Content.Content = fmt.Sprintf("error: %s", toolErr.Error())
 	}
 	if err := a.afterToolCall(ctx, call, &ToolCallResult{
-		Message:  msg,
+		Event:    event,
 		Result:   result,
 		Err:      toolErr,
 		Duration: time.Since(startedAt),
 	}); err != nil {
-		return model.Message{}, err
+		return model.Event{}, err
 	}
-	return msg, nil
+	return event, nil
 }
 
 func (a *LlmAgent) beforeLLMCall(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {

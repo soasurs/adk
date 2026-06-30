@@ -93,7 +93,7 @@ func TestConvertStopReason(t *testing.T) {
 }
 
 func TestConvertMessages_System(t *testing.T) {
-	messages, system, err := convertMessages([]model.Message{
+	messages, system, err := convertMessages([]model.Content{
 		{Role: model.RoleSystem, Content: "you are helpful"},
 	})
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestConvertMessages_System(t *testing.T) {
 }
 
 func TestConvertMessages_User(t *testing.T) {
-	messages, system, err := convertMessages([]model.Message{
+	messages, system, err := convertMessages([]model.Content{
 		{Role: model.RoleUser, Content: "hello"},
 	})
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestConvertMessages_User(t *testing.T) {
 }
 
 func TestConvertMessages_Assistant_Text(t *testing.T) {
-	messages, _, err := convertMessages([]model.Message{
+	messages, _, err := convertMessages([]model.Content{
 		{Role: model.RoleAssistant, Content: "hi there"},
 	})
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestConvertMessages_Assistant_Text(t *testing.T) {
 }
 
 func TestConvertMessages_Assistant_ToolCalls(t *testing.T) {
-	messages, _, err := convertMessages([]model.Message{
+	messages, _, err := convertMessages([]model.Content{
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
@@ -146,7 +146,7 @@ func TestConvertMessages_Assistant_ToolCalls(t *testing.T) {
 }
 
 func TestConvertMessages_Tool(t *testing.T) {
-	messages, _, err := convertMessages([]model.Message{
+	messages, _, err := convertMessages([]model.Content{
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
@@ -169,7 +169,7 @@ func TestConvertMessages_Tool(t *testing.T) {
 }
 
 func TestConvertMessages_ConsecutiveToolsBatched(t *testing.T) {
-	messages, _, err := convertMessages([]model.Message{
+	messages, _, err := convertMessages([]model.Content{
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
@@ -187,7 +187,7 @@ func TestConvertMessages_ConsecutiveToolsBatched(t *testing.T) {
 }
 
 func TestConvertMessages_UnknownRole(t *testing.T) {
-	_, _, err := convertMessages([]model.Message{{Role: "invalid"}})
+	_, _, err := convertMessages([]model.Content{{Role: "invalid"}})
 	assert.Error(t, err)
 }
 
@@ -279,15 +279,15 @@ func TestMessages_Generate_Text(t *testing.T) {
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
-		Messages: []model.Message{
+		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "Reply with the single word: pong"},
 		},
 	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, model.RoleAssistant, resp.Message.Role)
-	assert.NotEmpty(t, resp.Message.Content)
+	assert.Equal(t, model.RoleAssistant, resp.Content.Role)
+	assert.NotEmpty(t, resp.Content.Content)
 	assert.Equal(t, model.FinishReasonStop, resp.FinishReason)
 	require.NotNil(t, resp.Usage)
 	assert.Positive(t, resp.Usage.TotalTokens)
@@ -298,7 +298,7 @@ func TestMessages_Generate_WithSystemPrompt(t *testing.T) {
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
-		Messages: []model.Message{
+		Contents: []model.Content{
 			{Role: model.RoleSystem, Content: "You are a helpful assistant. Keep answers very short."},
 			{Role: model.RoleUser, Content: "What is 1+1?"},
 		},
@@ -306,8 +306,8 @@ func TestMessages_Generate_WithSystemPrompt(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, model.RoleAssistant, resp.Message.Role)
-	assert.NotEmpty(t, resp.Message.Content)
+	assert.Equal(t, model.RoleAssistant, resp.Content.Role)
+	assert.NotEmpty(t, resp.Content.Content)
 }
 
 func TestMessages_Generate_WithTool(t *testing.T) {
@@ -317,7 +317,7 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 	require.NoError(t, err)
 	tools := []tool.Tool{echo}
 
-	messages := []model.Message{
+	messages := []model.Content{
 		{Role: model.RoleUser, Content: "Please echo the message: hello world"},
 	}
 
@@ -326,29 +326,29 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 		t.Logf("[turn %d] sending %d messages", i+1, len(messages))
 		resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 			Model:    llm.Name(),
-			Messages: messages,
+			Contents: messages,
 			Tools:    tools,
 		}, nil)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 
-		messages = append(messages, resp.Message)
+		messages = append(messages, resp.Content)
 
 		if resp.FinishReason == model.FinishReasonStop {
-			t.Logf("[turn %d] finish_reason=stop, content=%q", i+1, resp.Message.Content)
+			t.Logf("[turn %d] finish_reason=stop, content=%q", i+1, resp.Content.Content)
 			finalResp = resp
 			break
 		}
 
 		require.Equal(t, model.FinishReasonToolCalls, resp.FinishReason)
-		require.NotEmpty(t, resp.Message.ToolCalls)
+		require.NotEmpty(t, resp.Content.ToolCalls)
 
-		for _, tc := range resp.Message.ToolCalls {
+		for _, tc := range resp.Content.ToolCalls {
 			t.Logf("[turn %d] tool_call: %s args=%s", i+1, tc.Name, tc.Arguments)
 			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
 			require.NoError(t, err)
 			t.Logf("[turn %d] tool_result: %s", i+1, result)
-			messages = append(messages, model.Message{
+			messages = append(messages, model.Content{
 				Role:       model.RoleTool,
 				Content:    result,
 				ToolCallID: tc.ID,
@@ -357,7 +357,7 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 	}
 
 	require.NotNil(t, finalResp, "model did not stop within max iterations")
-	assert.Equal(t, model.RoleAssistant, finalResp.Message.Role)
+	assert.Equal(t, model.RoleAssistant, finalResp.Content.Role)
 	assert.Equal(t, model.FinishReasonStop, finalResp.FinishReason)
 }
 
@@ -370,14 +370,14 @@ func TestMessages_Generate_WithConfig(t *testing.T) {
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
-		Messages: []model.Message{
+		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "Say hi"},
 		},
 	}, cfg)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.NotEmpty(t, resp.Message.Content)
+	assert.NotEmpty(t, resp.Content.Content)
 }
 
 // TestMessages_Generate_Thinking verifies that a thinking-capable model
@@ -388,18 +388,18 @@ func TestMessages_Generate_Thinking(t *testing.T) {
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
-		Messages: []model.Message{
+		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
 	}, &model.GenerateConfig{EnableThinking: boolPtr(true)})
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, model.RoleAssistant, resp.Message.Role)
-	assert.NotEmpty(t, resp.Message.Content)
-	assert.NotEmpty(t, resp.Message.ReasoningContent, "expected thinking model to populate ReasoningContent")
-	t.Logf("reasoning: %s", resp.Message.ReasoningContent)
-	t.Logf("answer:    %s", resp.Message.Content)
+	assert.Equal(t, model.RoleAssistant, resp.Content.Role)
+	assert.NotEmpty(t, resp.Content.Content)
+	assert.NotEmpty(t, resp.Content.ReasoningContent, "expected thinking model to populate ReasoningContent")
+	t.Logf("reasoning: %s", resp.Content.ReasoningContent)
+	t.Logf("answer:    %s", resp.Content.Content)
 }
 
 // TestMessages_Stream_Thinking verifies that streaming mode yields partial
@@ -413,15 +413,15 @@ func TestMessages_Stream_Thinking(t *testing.T) {
 
 	for resp, err := range llm.GenerateContent(t.Context(), &model.LLMRequest{
 		Model: llm.Name(),
-		Messages: []model.Message{
+		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 9 * 8? Think step by step."},
 		},
 	}, &model.GenerateConfig{EnableThinking: boolPtr(true)}, true) {
 		require.NoError(t, err)
 		if resp.Partial {
-			if resp.Message.ReasoningContent != "" {
-				partialReasoningBuf.WriteString(resp.Message.ReasoningContent)
-				t.Logf("partial reasoning: %s", resp.Message.ReasoningContent)
+			if resp.Content.ReasoningContent != "" {
+				partialReasoningBuf.WriteString(resp.Content.ReasoningContent)
+				t.Logf("partial reasoning: %s", resp.Content.ReasoningContent)
 			}
 		} else {
 			finalResp = resp
@@ -429,11 +429,11 @@ func TestMessages_Stream_Thinking(t *testing.T) {
 	}
 
 	require.NotNil(t, finalResp)
-	assert.Equal(t, model.RoleAssistant, finalResp.Message.Role)
-	assert.NotEmpty(t, finalResp.Message.Content)
-	assert.NotEmpty(t, finalResp.Message.ReasoningContent, "expected final response to include full ReasoningContent")
-	assert.GreaterOrEqual(t, len(finalResp.Message.ReasoningContent), partialReasoningBuf.Len(),
+	assert.Equal(t, model.RoleAssistant, finalResp.Content.Role)
+	assert.NotEmpty(t, finalResp.Content.Content)
+	assert.NotEmpty(t, finalResp.Content.ReasoningContent, "expected final response to include full ReasoningContent")
+	assert.GreaterOrEqual(t, len(finalResp.Content.ReasoningContent), partialReasoningBuf.Len(),
 		"final ReasoningContent should be at least as long as accumulated partials")
-	t.Logf("\nfinal reasoning: %s", finalResp.Message.ReasoningContent)
-	t.Logf("final answer:    %s", finalResp.Message.Content)
+	t.Logf("\nfinal reasoning: %s", finalResp.Content.ReasoningContent)
+	t.Logf("final answer:    %s", finalResp.Content.Content)
 }

@@ -15,7 +15,7 @@ import (
 
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/session"
-	"github.com/soasurs/adk/session/message"
+	"github.com/soasurs/adk/session/event"
 )
 
 // Integration tests (require ADK_TEST_POSTGRES_DSN)
@@ -68,9 +68,9 @@ func (f *postgresFixture) createSession(t *testing.T, sessionID int64) session.S
 	return sess
 }
 
-func postgresMessage(id int64, content string) *message.Message {
-	return &message.Message{
-		MessageID: id,
+func postgresMessage(id int64, content string) *event.Event {
+	return &event.Event{
+		EventID:   id,
 		Role:      string(model.RoleAssistant),
 		Content:   content,
 		CreatedAt: 1_781_289_412_066 + id,
@@ -78,10 +78,10 @@ func postgresMessage(id int64, content string) *message.Message {
 	}
 }
 
-func messageIDs(messages []*message.Message) []int64 {
+func messageIDs(messages []*event.Event) []int64 {
 	ids := make([]int64, len(messages))
 	for i, msg := range messages {
-		ids[i] = msg.MessageID
+		ids[i] = msg.EventID
 	}
 	return ids
 }
@@ -126,7 +126,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			columns[row.Name] = row.DataType
 		}
 		for _, name := range []string{
-			"message_id",
+			"event_id",
 			"session_id",
 			"prompt_tokens",
 			"completion_tokens",
@@ -154,7 +154,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 
 		opts := []Option{
 			WithSessionsTable("adk_custom_sessions"),
-			WithMessagesTable("adk_custom_messages"),
+			WithEventsTable("adk_custom_messages"),
 			WithMigrationsTable("adk_custom_schema_migrations"),
 		}
 		require.NoError(t, InitSchema(t.Context(), db, opts...))
@@ -261,16 +261,16 @@ func TestPostgres_DatabaseSessionService_DeleteSession(t *testing.T) {
 	})
 }
 
-func TestPostgres_DatabaseSession_CreateMessage(t *testing.T) {
+func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 	t.Run("round trips every persisted field", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		msg := &message.Message{
-			MessageID: 5_000_000_001,
-			Role:      string(model.RoleAssistant),
-			Name:      "researcher",
-			Content:   "answer",
-			Parts: message.Parts{
+		msg := &event.Event{
+			EventID: 5_000_000_001,
+			Author:  "researcher",
+			Role:    string(model.RoleAssistant),
+			Content: "answer",
+			Parts: event.Parts{
 				{Type: model.ContentPartTypeText, Text: "text"},
 				{
 					Type:        model.ContentPartTypeImageBase64,
@@ -279,7 +279,7 @@ func TestPostgres_DatabaseSession_CreateMessage(t *testing.T) {
 				},
 			},
 			ReasoningContent: "reasoning",
-			ToolCalls: message.ToolCalls{
+			ToolCalls: event.ToolCalls{
 				{
 					ID:               "call-1",
 					Name:             "lookup",
@@ -295,16 +295,16 @@ func TestPostgres_DatabaseSession_CreateMessage(t *testing.T) {
 			UpdatedAt:        1_781_289_412_067,
 		}
 
-		require.NoError(t, sess.CreateMessage(t.Context(), msg))
-		messages, err := sess.ListMessages(t.Context())
+		require.NoError(t, sess.CreateEvent(t.Context(), msg))
+		messages, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
 
 		got := messages[0]
 		assert.Equal(t, int64(1), got.SessionID)
-		assert.Equal(t, msg.MessageID, got.MessageID)
+		assert.Equal(t, msg.EventID, got.EventID)
+		assert.Equal(t, msg.Author, got.Author)
 		assert.Equal(t, msg.Role, got.Role)
-		assert.Equal(t, msg.Name, got.Name)
 		assert.Equal(t, msg.Content, got.Content)
 		assert.Equal(t, msg.Parts, got.Parts)
 		assert.Equal(t, msg.ReasoningContent, got.ReasoningContent)
@@ -320,9 +320,9 @@ func TestPostgres_DatabaseSession_CreateMessage(t *testing.T) {
 	t.Run("rejects a duplicate message id", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "first")))
 
-		err := sess.CreateMessage(t.Context(), postgresMessage(1, "duplicate"))
+		err := sess.CreateEvent(t.Context(), postgresMessage(1, "duplicate"))
 		assert.Error(t, err)
 	})
 
@@ -332,20 +332,20 @@ func TestPostgres_DatabaseSession_CreateMessage(t *testing.T) {
 		msg := postgresMessage(1, "message")
 		msg.SessionID = 999
 
-		require.NoError(t, sess.CreateMessage(t.Context(), msg))
+		require.NoError(t, sess.CreateEvent(t.Context(), msg))
 		assert.Equal(t, int64(42), msg.SessionID)
 	})
 }
 
-func TestPostgres_DatabaseSession_DeleteMessage(t *testing.T) {
+func TestPostgres_DatabaseSession_DeleteEvent(t *testing.T) {
 	t.Run("hides the deleted message", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "first")))
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(2, "second")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(2, "second")))
 
-		require.NoError(t, sess.DeleteMessage(t.Context(), 1))
-		messages, err := sess.ListMessages(t.Context())
+		require.NoError(t, sess.DeleteEvent(t.Context(), 1))
+		messages, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{2}, messageIDs(messages))
 	})
@@ -353,15 +353,15 @@ func TestPostgres_DatabaseSession_DeleteMessage(t *testing.T) {
 	t.Run("sets deleted_at instead of removing the row", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "message")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "message")))
 
-		require.NoError(t, sess.DeleteMessage(t.Context(), 1))
+		require.NoError(t, sess.DeleteEvent(t.Context(), 1))
 
 		var deletedAt int64
 		err := f.db.GetContext(
 			t.Context(),
 			&deletedAt,
-			"SELECT deleted_at FROM "+f.prefix+"messages WHERE message_id = $1",
+			"SELECT deleted_at FROM "+f.prefix+"messages WHERE event_id = $1",
 			1,
 		)
 		require.NoError(t, err)
@@ -371,16 +371,16 @@ func TestPostgres_DatabaseSession_DeleteMessage(t *testing.T) {
 	t.Run("is a no-op for a missing message", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		assert.NoError(t, sess.DeleteMessage(t.Context(), 999))
+		assert.NoError(t, sess.DeleteEvent(t.Context(), 999))
 	})
 }
 
-func TestPostgres_DatabaseSession_GetMessages(t *testing.T) {
+func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 	t.Run("applies limit and offset", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 		for id := int64(1); id <= 6; id++ {
-			require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(id, "message")))
+			require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(id, "message")))
 		}
 
 		tests := []struct {
@@ -397,7 +397,7 @@ func TestPostgres_DatabaseSession_GetMessages(t *testing.T) {
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				messages, err := sess.GetMessages(t.Context(), tc.limit, tc.offset)
+				messages, err := sess.GetEvents(t.Context(), tc.limit, tc.offset)
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, messageIDs(messages))
 			})
@@ -410,10 +410,10 @@ func TestPostgres_DatabaseSession_GetMessages(t *testing.T) {
 		for _, id := range []int64{3, 1, 2} {
 			msg := postgresMessage(id, "message")
 			msg.CreatedAt = 1000
-			require.NoError(t, sess.CreateMessage(t.Context(), msg))
+			require.NoError(t, sess.CreateEvent(t.Context(), msg))
 		}
 
-		messages, err := sess.GetMessages(t.Context(), 10, 0)
+		messages, err := sess.GetEvents(t.Context(), 10, 0)
 		require.NoError(t, err)
 		assert.Equal(t, []int64{1, 2, 3}, messageIDs(messages))
 	})
@@ -422,12 +422,12 @@ func TestPostgres_DatabaseSession_GetMessages(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 		for id := int64(1); id <= 4; id++ {
-			require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(id, "message")))
+			require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(id, "message")))
 		}
-		require.NoError(t, sess.DeleteMessage(t.Context(), 2))
-		require.NoError(t, sess.CompactMessages(t.Context(), 3, postgresMessage(10, "summary")))
+		require.NoError(t, sess.DeleteEvent(t.Context(), 2))
+		require.NoError(t, sess.CompactEvents(t.Context(), 3, postgresMessage(10, "summary")))
 
-		messages, err := sess.GetMessages(t.Context(), 10, 0)
+		messages, err := sess.GetEvents(t.Context(), 10, 0)
 		require.NoError(t, err)
 		assert.Equal(t, []int64{3, 4, 10}, messageIDs(messages))
 	})
@@ -436,27 +436,27 @@ func TestPostgres_DatabaseSession_GetMessages(t *testing.T) {
 		f := newPostgresFixture(t)
 		first := f.createSession(t, 1)
 		second := f.createSession(t, 2)
-		require.NoError(t, first.CreateMessage(t.Context(), postgresMessage(1, "first")))
-		require.NoError(t, second.CreateMessage(t.Context(), postgresMessage(2, "second")))
+		require.NoError(t, first.CreateEvent(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, second.CreateEvent(t.Context(), postgresMessage(2, "second")))
 
-		firstMessages, err := first.GetMessages(t.Context(), 10, 0)
+		firstMessages, err := first.GetEvents(t.Context(), 10, 0)
 		require.NoError(t, err)
-		secondMessages, err := second.GetMessages(t.Context(), 10, 0)
+		secondMessages, err := second.GetEvents(t.Context(), 10, 0)
 		require.NoError(t, err)
 		assert.Equal(t, []int64{1}, messageIDs(firstMessages))
 		assert.Equal(t, []int64{2}, messageIDs(secondMessages))
 	})
 }
 
-func TestPostgres_DatabaseSession_ListMessages(t *testing.T) {
+func TestPostgres_DatabaseSession_ListEvents(t *testing.T) {
 	t.Run("returns every active message", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 		for id := int64(1); id <= 5; id++ {
-			require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(id, "message")))
+			require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(id, "message")))
 		}
 
-		messages, err := sess.ListMessages(t.Context())
+		messages, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{1, 2, 3, 4, 5}, messageIDs(messages))
 	})
@@ -465,28 +465,28 @@ func TestPostgres_DatabaseSession_ListMessages(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 
-		messages, err := sess.ListMessages(t.Context())
+		messages, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Empty(t, messages)
 		assert.NotNil(t, messages)
 	})
 }
 
-func TestPostgres_DatabaseSession_CompactMessages(t *testing.T) {
+func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 	t.Run("archives messages before the split point", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 		for id := int64(1); id <= 4; id++ {
-			require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(id, "message")))
+			require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(id, "message")))
 		}
 
-		require.NoError(t, sess.CompactMessages(t.Context(), 3, postgresMessage(10, "summary")))
+		require.NoError(t, sess.CompactEvents(t.Context(), 3, postgresMessage(10, "summary")))
 
-		active, err := sess.ListMessages(t.Context())
+		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{3, 4, 10}, messageIDs(active))
 
-		compacted, err := sess.(*databaseSession).ListCompactedMessages(t.Context())
+		compacted, err := sess.(*databaseSession).ListCompactedEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{1, 2}, messageIDs(compacted))
 	})
@@ -494,12 +494,12 @@ func TestPostgres_DatabaseSession_CompactMessages(t *testing.T) {
 	t.Run("archives all messages when split id is zero", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "first")))
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(2, "second")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(2, "second")))
 
-		require.NoError(t, sess.CompactMessages(t.Context(), 0, postgresMessage(10, "summary")))
+		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresMessage(10, "summary")))
 
-		active, err := sess.ListMessages(t.Context())
+		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{10}, messageIDs(active))
 	})
@@ -508,9 +508,9 @@ func TestPostgres_DatabaseSession_CompactMessages(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
 
-		require.NoError(t, sess.CompactMessages(t.Context(), 0, postgresMessage(10, "summary")))
+		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresMessage(10, "summary")))
 
-		active, err := sess.ListMessages(t.Context())
+		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{10}, messageIDs(active))
 	})
@@ -518,12 +518,12 @@ func TestPostgres_DatabaseSession_CompactMessages(t *testing.T) {
 	t.Run("supports repeated compaction", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "first")))
-		require.NoError(t, sess.CompactMessages(t.Context(), 0, postgresMessage(10, "summary one")))
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(2, "second")))
-		require.NoError(t, sess.CompactMessages(t.Context(), 0, postgresMessage(20, "summary two")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresMessage(10, "summary one")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(2, "second")))
+		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresMessage(20, "summary two")))
 
-		active, err := sess.ListMessages(t.Context())
+		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []int64{20}, messageIDs(active))
 	})
@@ -531,13 +531,13 @@ func TestPostgres_DatabaseSession_CompactMessages(t *testing.T) {
 	t.Run("rolls back archival when summary insertion fails", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, 1)
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(1, "first")))
-		require.NoError(t, sess.CreateMessage(t.Context(), postgresMessage(2, "second")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(1, "first")))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresMessage(2, "second")))
 
-		err := sess.CompactMessages(t.Context(), 0, postgresMessage(2, "duplicate summary id"))
+		err := sess.CompactEvents(t.Context(), 0, postgresMessage(2, "duplicate summary id"))
 		require.Error(t, err)
 
-		active, listErr := sess.ListMessages(t.Context())
+		active, listErr := sess.ListEvents(t.Context())
 		require.NoError(t, listErr)
 		assert.Equal(t, []int64{1, 2}, messageIDs(active))
 	})

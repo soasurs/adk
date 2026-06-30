@@ -53,23 +53,26 @@ func (s *SequentialAgent) Description() string { return s.config.Description }
 //
 // Iteration stops early (without error) if the caller breaks out of the loop.
 // If any agent returns an error, the error is yielded and iteration stops.
-func (s *SequentialAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+func (s *SequentialAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		// accumulated holds complete messages produced by agents that have already run.
-		accumulated := make([]model.Message, 0)
+		accumulated := make([]model.Event, 0)
 
 		for i, a := range s.config.Agents {
 			// Build this agent's input: original messages + accumulated context.
-			input := make([]model.Message, 0, len(messages)+len(accumulated)+1)
-			input = append(input, messages...)
+			input := make([]model.Event, 0, len(events)+len(accumulated)+1)
+			input = append(input, events...)
 			input = append(input, accumulated...)
 
 			// For agents after the first, inject a handoff message so the LLM
 			// sees a conversation ending with a user turn.
 			if i > 0 && len(accumulated) > 0 {
-				handoff := model.Message{
-					Role:    model.RoleUser,
-					Content: "Please proceed.",
+				handoff := model.Event{
+					Author: "sequential-agent",
+					Content: model.Content{
+						Role:    model.RoleUser,
+						Content: "Please proceed.",
+					},
 				}
 				input = append(input, handoff)
 			}
@@ -84,7 +87,7 @@ func (s *SequentialAgent) Run(ctx context.Context, messages []model.Message) ite
 				}
 				// Only complete (non-partial) messages contribute to accumulated context.
 				if !event.Partial {
-					accumulated = append(accumulated, event.Message)
+					accumulated = append(accumulated, *event)
 				}
 			}
 		}

@@ -67,7 +67,7 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 		name: "sub-llm",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "The answer is 4."},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "The answer is 4."},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -85,7 +85,7 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 		name: "orch-llm",
 		responses: []*model.LLMResponse{
 			{
-				Message: model.Message{
+				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
 						{ID: "tc-1", Name: "math_agent", Arguments: `{"task":"what is 2+2?"}`},
@@ -94,7 +94,7 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 				FinishReason: model.FinishReasonToolCalls,
 			},
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "2+2 equals 4."},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "2+2 equals 4."},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -109,13 +109,13 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 	})
 
 	// --- run --------------------------------------------------------------
-	var msgs []model.Message
-	for event, err := range orchestrator.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "What is 2+2?"},
-	}) {
+	var msgs []model.Content
+	for event, err := range orchestrator.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "What is 2+2?"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -142,7 +142,7 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // logMessage prints a single message in a concise one-line format.
-func logMessage(t *testing.T, idx int, m model.Message) {
+func logMessage(t *testing.T, idx int, m model.Content) {
 	t.Helper()
 	if len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
@@ -195,16 +195,16 @@ func TestAgentTool_Integration_OrchestratorDelegation(t *testing.T) {
 	t.Logf("  [0] user      Translate 'hello' to Chinese.")
 	t.Log("=== output ===")
 
-	var msgs []model.Message
-	for event, err := range orchestrator.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Please translate 'hello' to Chinese."},
-	}) {
+	var msgs []model.Content
+	for event, err := range orchestrator.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Please translate 'hello' to Chinese."},
+	)) {
 		require.NoError(t, err)
 		if event.Partial {
 			continue
 		}
-		logMessage(t, len(msgs), event.Message)
-		msgs = append(msgs, event.Message)
+		logMessage(t, len(msgs), event.Content)
+		msgs = append(msgs, event.Content)
 	}
 
 	require.NotEmpty(t, msgs, "expected at least one output message")

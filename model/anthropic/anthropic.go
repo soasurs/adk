@@ -62,7 +62,7 @@ func (m *Model) Name() string {
 // provided at construction time.
 func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, system, err := convertMessages(req.Messages)
+		messages, system, err := convertMessages(req.Contents)
 		if err != nil {
 			yield(nil, fmt.Errorf("anthropic: convert messages: %w", err))
 			return
@@ -155,7 +155,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 				if text := e.Delta.AsTextDelta(); text.Text != "" {
 					contentBuf.WriteString(text.Text)
 					if !yield(&model.LLMResponse{
-						Message: model.Message{
+						Content: model.Content{
 							Role:    model.RoleAssistant,
 							Content: text.Text,
 						},
@@ -168,7 +168,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 				if thinking := e.Delta.AsThinkingDelta(); thinking.Thinking != "" {
 					reasoningBuf.WriteString(thinking.Thinking)
 					if !yield(&model.LLMResponse{
-						Message: model.Message{
+						Content: model.Content{
 							Role:             model.RoleAssistant,
 							ReasoningContent: thinking.Thinking,
 						},
@@ -198,7 +198,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 		}
 
 		// Build final complete response.
-		msg := model.Message{
+		msg := model.Content{
 			Role:             model.RoleAssistant,
 			Content:          contentBuf.String(),
 			ReasoningContent: reasoningBuf.String(),
@@ -218,17 +218,17 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 		}
 
 		yield(&model.LLMResponse{
-			Message:      msg,
+			Content:      msg,
 			FinishReason: f,
 			TurnComplete: true,
 		}, nil)
 	}
 }
 
-// convertMessages maps model.Message slice to Anthropic MessageParam slice,
+// convertMessages maps model.Content slice to Anthropic MessageParam slice,
 // extracting system messages into the top-level system prompt.
 // Consecutive RoleTool messages are batched into a single user message.
-func convertMessages(msgs []model.Message) ([]goanthropic.MessageParam, []goanthropic.TextBlockParam, error) {
+func convertMessages(msgs []model.Content) ([]goanthropic.MessageParam, []goanthropic.TextBlockParam, error) {
 	var system []goanthropic.TextBlockParam
 	var messages []goanthropic.MessageParam
 
@@ -282,8 +282,8 @@ func convertMessages(msgs []model.Message) ([]goanthropic.MessageParam, []goanth
 	return messages, system, nil
 }
 
-// convertUserBlocks converts a RoleUser model.Message to Anthropic ContentBlockParamUnion slice.
-func convertUserBlocks(m model.Message) ([]goanthropic.ContentBlockParamUnion, error) {
+// convertUserBlocks converts a RoleUser model.Content to Anthropic ContentBlockParamUnion slice.
+func convertUserBlocks(m model.Content) ([]goanthropic.ContentBlockParamUnion, error) {
 	if len(m.Parts) == 0 {
 		return []goanthropic.ContentBlockParamUnion{
 			{OfText: &goanthropic.TextBlockParam{Text: m.Content}},
@@ -319,8 +319,8 @@ func convertUserBlocks(m model.Message) ([]goanthropic.ContentBlockParamUnion, e
 	return blocks, nil
 }
 
-// convertAssistantBlocks converts a RoleAssistant model.Message to Anthropic ContentBlockParamUnion slice.
-func convertAssistantBlocks(m model.Message) ([]goanthropic.ContentBlockParamUnion, error) {
+// convertAssistantBlocks converts a RoleAssistant model.Content to Anthropic ContentBlockParamUnion slice.
+func convertAssistantBlocks(m model.Content) ([]goanthropic.ContentBlockParamUnion, error) {
 	var blocks []goanthropic.ContentBlockParamUnion
 	if m.Content != "" {
 		blocks = append(blocks, goanthropic.ContentBlockParamUnion{
@@ -398,7 +398,7 @@ func applyConfig(p *goanthropic.MessageNewParams, cfg *model.GenerateConfig) {
 
 // convertResponse maps an Anthropic Message to a provider-agnostic LLMResponse.
 func convertResponse(resp *goanthropic.Message) *model.LLMResponse {
-	msg := model.Message{Role: model.RoleAssistant}
+	msg := model.Content{Role: model.RoleAssistant}
 
 	var textParts []string
 	var reasoningParts []string
@@ -441,7 +441,7 @@ func convertResponse(resp *goanthropic.Message) *model.LLMResponse {
 	}
 
 	return &model.LLMResponse{
-		Message:      msg,
+		Content:      msg,
 		FinishReason: finishReason,
 		Usage:        usage,
 	}

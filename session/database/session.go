@@ -7,7 +7,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/soasurs/adk/session"
-	"github.com/soasurs/adk/session/message"
+	"github.com/soasurs/adk/session/event"
 )
 
 type databaseSession struct {
@@ -41,62 +41,63 @@ func newDatabaseSession(ctx context.Context, db *sqlx.DB, sessionID int64, q *qu
 func (s *databaseSession) GetSessionID() int64 {
 	return s.SessionID
 }
-func (s *databaseSession) CreateMessage(ctx context.Context, message *message.Message) error {
-	message.SessionID = s.SessionID
+func (s *databaseSession) CreateEvent(ctx context.Context, ev *event.Event) error {
+	ev.SessionID = s.SessionID
 	_, err := s.db.ExecContext(
 		ctx,
-		s.q.createMessage,
-		message.MessageID,
-		message.SessionID,
-		message.Role,
-		message.Name,
-		message.Content,
-		message.ReasoningContent,
-		message.ToolCalls,
-		message.ToolCallID,
-		message.Parts,
-		message.PromptTokens,
-		message.CompletionTokens,
-		message.TotalTokens,
-		message.CreatedAt,
-		message.UpdatedAt,
+		s.q.createEvent,
+		ev.EventID,
+		ev.SessionID,
+		ev.Author,
+		ev.Role,
+		ev.Content,
+		ev.ReasoningContent,
+		ev.ToolCalls,
+		ev.ToolCallID,
+		ev.FinishReason,
+		ev.Parts,
+		ev.PromptTokens,
+		ev.CompletionTokens,
+		ev.TotalTokens,
+		ev.CreatedAt,
+		ev.UpdatedAt,
 	)
 	return err
 }
 
-func (s *databaseSession) DeleteMessage(ctx context.Context, messageID int64) error {
-	_, err := s.db.ExecContext(ctx, s.q.deleteMessage, time.Now().UnixMilli(), s.SessionID, messageID)
+func (s *databaseSession) DeleteEvent(ctx context.Context, eventID int64) error {
+	_, err := s.db.ExecContext(ctx, s.q.deleteEvent, time.Now().UnixMilli(), s.SessionID, eventID)
 	return err
 }
 
-func (s *databaseSession) GetMessages(ctx context.Context, limit, offset int64) ([]*message.Message, error) {
-	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.getMessages, s.SessionID, limit, offset)
+func (s *databaseSession) GetEvents(ctx context.Context, limit, offset int64) ([]*event.Event, error) {
+	events := make([]*event.Event, 0)
+	err := s.db.SelectContext(ctx, &events, s.q.getEvents, s.SessionID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return events, nil
 }
 
-func (s *databaseSession) ListMessages(ctx context.Context) ([]*message.Message, error) {
-	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.listMessages, s.SessionID)
+func (s *databaseSession) ListEvents(ctx context.Context) ([]*event.Event, error) {
+	events := make([]*event.Event, 0)
+	err := s.db.SelectContext(ctx, &events, s.q.listEvents, s.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return events, nil
 }
 
-func (s *databaseSession) ListCompactedMessages(ctx context.Context) ([]*message.Message, error) {
-	messages := make([]*message.Message, 0)
-	err := s.db.SelectContext(ctx, &messages, s.q.listCompactedMessages, s.SessionID)
+func (s *databaseSession) ListCompactedEvents(ctx context.Context) ([]*event.Event, error) {
+	events := make([]*event.Event, 0)
+	err := s.db.SelectContext(ctx, &events, s.q.listCompactedEvents, s.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	return messages, nil
+	return events, nil
 }
 
-func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID int64, summaryMsg *message.Message) error {
+func (s *databaseSession) CompactEvents(ctx context.Context, splitEventID int64, summaryEvent *event.Event) error {
 	now := time.Now()
 
 	tx, err := s.db.BeginTxx(ctx, nil)
@@ -105,36 +106,35 @@ func (s *databaseSession) CompactMessages(ctx context.Context, splitMessageID in
 	}
 	defer tx.Rollback()
 
-	// Archive messages before the split point. When splitMessageID is 0, archive all.
-	if splitMessageID > 0 {
-		_, err = tx.ExecContext(ctx, s.q.compactMessagesBefore, now.UnixMilli(), s.SessionID, splitMessageID)
+	// Archive events before the split point. When splitEventID is 0, archive all.
+	if splitEventID > 0 {
+		_, err = tx.ExecContext(ctx, s.q.compactEventsBefore, now.UnixMilli(), s.SessionID, splitEventID)
 	} else {
-		_, err = tx.ExecContext(ctx, s.q.compactActiveMessages, now.UnixMilli(), s.SessionID)
+		_, err = tx.ExecContext(ctx, s.q.compactActiveEvents, now.UnixMilli(), s.SessionID)
 	}
 	if err != nil {
 		return err
 	}
 
-	// Insert the summary as a new active message. The listMessagesExpr ordering
-	// guarantees that system-role messages are returned before conversation messages,
-	// so created_at does not need to precede the kept messages.
+	// Insert the summary as a new active event.
 	_, err = tx.ExecContext(
 		ctx,
-		s.q.createMessage,
-		summaryMsg.MessageID,
+		s.q.createEvent,
+		summaryEvent.EventID,
 		s.SessionID,
-		summaryMsg.Role,
-		summaryMsg.Name,
-		summaryMsg.Content,
-		summaryMsg.ReasoningContent,
-		summaryMsg.ToolCalls,
-		summaryMsg.ToolCallID,
-		summaryMsg.Parts,
-		summaryMsg.PromptTokens,
-		summaryMsg.CompletionTokens,
-		summaryMsg.TotalTokens,
-		summaryMsg.CreatedAt,
-		summaryMsg.UpdatedAt,
+		summaryEvent.Author,
+		summaryEvent.Role,
+		summaryEvent.Content,
+		summaryEvent.ReasoningContent,
+		summaryEvent.ToolCalls,
+		summaryEvent.ToolCallID,
+		summaryEvent.FinishReason,
+		summaryEvent.Parts,
+		summaryEvent.PromptTokens,
+		summaryEvent.CompletionTokens,
+		summaryEvent.TotalTokens,
+		summaryEvent.CreatedAt,
+		summaryEvent.UpdatedAt,
 	)
 	if err != nil {
 		return err

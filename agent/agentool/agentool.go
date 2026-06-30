@@ -67,18 +67,24 @@ func (t *agentTool) Run(ctx context.Context, _ string, arguments string) (string
 		return "", fmt.Errorf("agentool %q: parse arguments: %w", t.a.Name(), err)
 	}
 
-	messages := []model.Message{
-		{Role: model.RoleUser, Content: req.Task},
+	events := []model.Event{
+		{
+			Author: "user",
+			Content: model.Content{
+				Role:    model.RoleUser,
+				Content: req.Task,
+			},
+		},
 	}
 
 	var result string
-	for event, err := range t.a.Run(ctx, messages) {
+	for event, err := range t.a.Run(ctx, events) {
 		if err != nil {
 			return "", fmt.Errorf("agentool %q: %w", t.a.Name(), err)
 		}
 		// Only capture the last complete assistant text response.
-		if !event.Partial && event.Message.Role == model.RoleAssistant && event.Message.Content != "" {
-			result = event.Message.Content
+		if !event.Partial && event.Content.Role == model.RoleAssistant && event.Content.Content != "" {
+			result = event.Content.Content
 		}
 	}
 	return result, nil

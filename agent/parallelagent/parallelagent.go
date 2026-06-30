@@ -12,19 +12,19 @@ import (
 	"github.com/soasurs/adk/model"
 )
 
-// MergeFunc combines the collected outputs of all agents into a single
-// assistant message that is yielded by the ParallelAgent.
+// MergeFunc combines the collected outputs of all agents into a single event
+// that is yielded by the ParallelAgent.
 //
 // results contains one entry per agent in definition order. Each entry holds
 // the agent's name and all messages it produced during its Run.
-type MergeFunc func(results []AgentOutput) model.Message
+type MergeFunc func(results []AgentOutput) model.Event
 
-// AgentOutput holds the name of an agent and the messages it produced.
+// AgentOutput holds the name of an agent and the complete events it produced.
 type AgentOutput struct {
 	// Name is the agent's Name() value.
 	Name string
-	// Messages are all messages yielded by the agent during its Run, in order.
-	Messages []model.Message
+	// Events are all complete events yielded by the agent during its Run, in order.
+	Events []model.Event
 }
 
 // Config holds the configuration for a ParallelAgent.
@@ -51,20 +51,23 @@ type Config struct {
 //	content ...
 //
 // Agents that produce no assistant text are omitted.
-func DefaultMergeFunc(results []AgentOutput) model.Message {
+func DefaultMergeFunc(results []AgentOutput) model.Event {
 	var parts []string
 	for _, r := range results {
 		// Use the last non-empty assistant text produced by this agent.
-		for i := len(r.Messages) - 1; i >= 0; i-- {
-			if r.Messages[i].Role == model.RoleAssistant && r.Messages[i].Content != "" {
-				parts = append(parts, fmt.Sprintf("[%s]\n%s", r.Name, r.Messages[i].Content))
+		for i := len(r.Events) - 1; i >= 0; i-- {
+			content := r.Events[i].Content
+			if content.Role == model.RoleAssistant && content.Content != "" {
+				parts = append(parts, fmt.Sprintf("[%s]\n%s", r.Name, content.Content))
 				break
 			}
 		}
 	}
-	return model.Message{
-		Role:    model.RoleAssistant,
-		Content: strings.Join(parts, "\n\n"),
+	return model.Event{
+		Content: model.Content{
+			Role:    model.RoleAssistant,
+			Content: strings.Join(parts, "\n\n"),
+		},
 	}
 }
 
@@ -123,7 +126,7 @@ type agentResult struct {
 //
 // Note: partial (streaming) events from sub-agents are consumed silently;
 // only complete messages are collected and merged.
-func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error] {
+func (p *ParallelAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -135,8 +138,8 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 			wg.Add(1)
 			go func(idx int, ag agent.Agent) {
 				defer wg.Done()
-				var collected []model.Message
-				for event, err := range ag.Run(ctx, messages) {
+				var collected []model.Event
+				for event, err := range ag.Run(ctx, events) {
 					if err != nil {
 						results[idx] = agentResult{err: err}
 						cancel() // signal sibling agents to stop
@@ -144,13 +147,13 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 					}
 					// Only accumulate complete messages for merging.
 					if !event.Partial {
-						collected = append(collected, event.Message)
+						collected = append(collected, *event)
 					}
 				}
 				results[idx] = agentResult{
 					output: AgentOutput{
-						Name:     ag.Name(),
-						Messages: collected,
+						Name:   ag.Name(),
+						Events: collected,
 					},
 				}
 			}(i, a)
@@ -186,6 +189,6 @@ func (p *ParallelAgent) Run(ctx context.Context, messages []model.Message) iter.
 
 		// Merge all outputs into a single message and yield it as a complete event.
 		merged := p.config.MergeFunc(outputs)
-		yield(&model.Event{Message: merged, Partial: false}, nil)
+		yield(&merged, nil)
 	}
 }

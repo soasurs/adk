@@ -33,7 +33,7 @@ func (m *mockLLM) Name() string { return m.name }
 func (m *mockLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		if m.callIdx >= len(m.responses) {
-			yield(nil, fmt.Errorf("mockLLM %q: no more responses (call %d, got %d messages)", m.name, m.callIdx, len(req.Messages)))
+			yield(nil, fmt.Errorf("mockLLM %q: no more responses (call %d, got %d messages)", m.name, m.callIdx, len(req.Contents)))
 			return
 		}
 		resp := m.responses[m.callIdx]
@@ -61,7 +61,7 @@ func newLLMFromEnv(t *testing.T) model.LLM {
 }
 
 // logMessage prints a single message in a concise one-line format.
-func logMessage(t *testing.T, idx int, m model.Message) {
+func logMessage(t *testing.T, idx int, m model.Content) {
 	t.Helper()
 	if len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
@@ -106,7 +106,7 @@ func TestSequentialAgent_SingleAgent(t *testing.T) {
 		name: "mock",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "Hello!"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "Hello!"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -115,13 +115,13 @@ func TestSequentialAgent_SingleAgent(t *testing.T) {
 	sa, err := New(Config{Name: "pipeline", Description: "single-agent pipeline", Agents: []agent.Agent{a}})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range sa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "Hi"},
-	}) {
+	var msgs []model.Content
+	for event, err := range sa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "Hi"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -142,7 +142,7 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "pong"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "pong"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -151,7 +151,7 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "done"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -162,13 +162,13 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 	sa, err := New(Config{Name: "pipeline", Description: "two-agent pipeline", Agents: []agent.Agent{a1, a2}})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range sa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "ping"},
-	}) {
+	var msgs []model.Content
+	for event, err := range sa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "ping"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -187,13 +187,13 @@ func TestSequentialAgent_TwoAgents(t *testing.T) {
 // We do this by inspecting the request that arrives at the second mock LLM.
 func TestSequentialAgent_ContextPropagation(t *testing.T) {
 	// Capture what messages the second LLM receives.
-	var capturedMessages []model.Message
+	var capturedMessages []model.Content
 
 	llm1 := &mockLLM{
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "first-result"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "first-result"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -205,7 +205,7 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 			name: "capturing-mock",
 			responses: []*model.LLMResponse{
 				{
-					Message:      model.Message{Role: model.RoleAssistant, Content: "second-result"},
+					Content:      model.Content{Role: model.RoleAssistant, Content: "second-result"},
 					FinishReason: model.FinishReasonStop,
 				},
 			},
@@ -218,13 +218,13 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 	sa, err := New(Config{Name: "pipeline", Description: "context propagation test", Agents: []agent.Agent{a1, a2}})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range sa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "start"},
-	}) {
+	var msgs []model.Content
+	for event, err := range sa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "start"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 	}
 
@@ -244,11 +244,11 @@ func TestSequentialAgent_ContextPropagation(t *testing.T) {
 // capturingMockLLM wraps mockLLM and captures the request messages.
 type capturingMockLLM struct {
 	mockLLM
-	capture *[]model.Message
+	capture *[]model.Content
 }
 
 func (c *capturingMockLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	*c.capture = append(*c.capture, req.Messages...)
+	*c.capture = append(*c.capture, req.Contents...)
 	return c.mockLLM.GenerateContent(ctx, req, cfg, stream)
 }
 
@@ -259,7 +259,7 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 		name: "mock-1",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "first"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "first"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -268,7 +268,7 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "second"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "second"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -279,13 +279,13 @@ func TestSequentialAgent_EarlyStop(t *testing.T) {
 	sa, err := New(Config{Name: "pipeline", Description: "early-stop test", Agents: []agent.Agent{a1, a2}})
 	assert.Nil(t, err)
 
-	var msgs []model.Message
-	for event, err := range sa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	var msgs []model.Content
+	for event, err := range sa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		require.NoError(t, err)
 		if !event.Partial {
-			msgs = append(msgs, event.Message)
+			msgs = append(msgs, event.Content)
 		}
 		break // stop after the first message
 	}
@@ -305,7 +305,7 @@ func TestSequentialAgent_ErrorPropagation(t *testing.T) {
 		name: "mock-2",
 		responses: []*model.LLMResponse{
 			{
-				Message:      model.Message{Role: model.RoleAssistant, Content: "unreachable"},
+				Content:      model.Content{Role: model.RoleAssistant, Content: "unreachable"},
 				FinishReason: model.FinishReasonStop,
 			},
 		},
@@ -317,9 +317,9 @@ func TestSequentialAgent_ErrorPropagation(t *testing.T) {
 	assert.Nil(t, err)
 
 	var gotErr error
-	for _, err := range sa.Run(t.Context(), []model.Message{
-		{Role: model.RoleUser, Content: "go"},
-	}) {
+	for _, err := range sa.Run(t.Context(), model.EventHistory(
+		model.Content{Role: model.RoleUser, Content: "go"},
+	)) {
 		if err != nil {
 			gotErr = err
 			break
@@ -374,8 +374,8 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	input := []model.Message{
-		{Role: model.RoleUser, Content: "Go is an open-source programming language designed for simplicity, reliability, and efficiency, created at Google."},
+	input := []model.Content{
+		model.Content{Role: model.RoleUser, Content: "Go is an open-source programming language designed for simplicity, reliability, and efficiency, created at Google."},
 	}
 
 	t.Log("=== input ===")
@@ -386,14 +386,14 @@ func TestSequentialAgent_Integration_TwoStepPipeline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
-	var msgs []model.Message
-	for event, err := range pipeline.Run(ctx, input) {
+	var msgs []model.Content
+	for event, err := range pipeline.Run(ctx, model.EventsFromContents(input)) {
 		require.NoError(t, err)
 		if event.Partial {
 			continue
 		}
-		logMessage(t, len(msgs), event.Message)
-		msgs = append(msgs, event.Message)
+		logMessage(t, len(msgs), event.Content)
+		msgs = append(msgs, event.Content)
 	}
 
 	// Expect exactly two assistant messages: one from each agent.

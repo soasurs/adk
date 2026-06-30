@@ -1,33 +1,29 @@
-# ADK — Agent Development Kit
+# ADK - Agent Development Kit
 
 [简体中文](README_zh-CN.md)
 
-A lightweight, idiomatic Go library for building AI agents.
-ADK decouples agent logic from LLM providers, session storage, and tool
-integrations so you can compose exactly the pieces you need.
+A lightweight, idiomatic Go library for building AI agents. ADK keeps agent
+logic separate from LLM providers, tools, and session storage, so agents stay
+stateless while the runner manages the durable event ledger.
 
-> **Early Development Notice:** This project is under active development and is
-> not yet recommended for production use. APIs may change without notice.
+> Early development notice: this project is under active development and APIs
+> may change without notice.
 
-> **Module path:** `github.com/soasurs/adk`  
-> **Go version:** 1.26+
+Module path: `github.com/soasurs/adk`
 
----
+Go version: `1.26+`
 
 ## Features
 
-- **Provider-agnostic LLM interface** — swap OpenAI, Gemini, or Anthropic without touching agent code
-- **Stateless Agent + Stateful Runner** — clean separation of concerns
-- **Automatic tool-call loop** — `LlmAgent` drives the model until a stop response
-- **Agent composition** — chain agents sequentially or run them in parallel
-- **Agent as Tool** — delegate tasks to sub-agents via function calling
-- **Pluggable session backends** — in-memory (zero config) or SQLite (persistent)
-- **Message history compaction** — soft-archive old messages without deleting them
-- **MCP tool integration** — connect any [Model Context Protocol](https://modelcontextprotocol.io) server
-- **Snowflake IDs** — distributed, time-ordered message identifiers
-- **Streaming via Go iterators** — native `iter.Seq2` for incremental output
-
----
+- Provider-neutral LLM interface for OpenAI, Gemini, and Anthropic adapters
+- Event-first session history: complete events are persisted, partial events are transient
+- Stateless agents coordinated by a stateful `runner.Runner`
+- Automatic tool-call loop in `llmagent`
+- Sequential and parallel agent composition
+- Agent-as-tool delegation
+- In-memory and SQLite session backends
+- MCP tool integration
+- Native Go streaming with `iter.Seq2`
 
 ## Installation
 
@@ -35,173 +31,134 @@ integrations so you can compose exactly the pieces you need.
 go get github.com/soasurs/adk
 ```
 
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────┐
-│                       Runner                         │
-│  - loads session history                             │
-│  - appends & persists every message                  │
-│  - drives the Agent per user turn                    │
-└───────────────┬──────────────────────────────────────┘
-                │ []model.Message
-                ▼
-┌──────────────────────────────────────────────────────┐
-│                    LlmAgent  (stateless)            │
-│  - prepends system prompt                            │
-│  - calls model.LLM.Generate in a loop                │
-│  - executes tool calls, yields each message          │
-└───────────────┬──────────────────────────────────────┘
-                │
-        ┌───────┴────────┐
-        ▼                ▼
-  model.LLM          tool.Tool
-  (OpenAI, …)    (builtin / MCP / custom)
-```
-
-The **Runner** is stateful — it owns the session and persists every message.  
-The **Agent** is stateless — it only sees the messages passed to it and yields
-results; it has no memory of previous turns.
-
----
-
 ## Package Layout
 
 | Package | Purpose |
 |---|---|
 | `agent` | `Agent` interface |
 | `agent/llmagent` | LLM-backed agent with tool-call loop |
-| `agent/sequentialagent` | Sequential agent composition (pipeline) |
-| `agent/parallelagent` | Parallel agent composition (fan-out) |
-| `agent/agentool` | Wrap agents as tools for delegation |
-| `model` | Provider-agnostic LLM interface and message types |
-| `model/openai` | OpenAI adapter |
-| `model/gemini` | Google Gemini adapter (Gemini API & Vertex AI) |
-| `model/anthropic` | Anthropic Claude adapter |
-| `model/retry` | Retry wrapper with exponential backoff |
+| `agent/sequentialagent` | Sequential agent pipeline |
+| `agent/parallelagent` | Parallel fan-out and merge |
+| `agent/agentool` | Wrap an agent as a tool |
+| `model` | Provider-neutral LLM, content, and event types |
+| `model/openai` | OpenAI-compatible adapter |
+| `model/gemini` | Gemini and Vertex AI adapter |
+| `model/anthropic` | Anthropic adapter |
 | `session` | `Session` and `SessionService` interfaces |
+| `session/event` | Persisted event representation |
 | `session/memory` | In-memory session backend |
-| `session/database` | SQLite session backend |
-| `session/message` | Persisted message type |
-| `session/compaction` | Sliding-window message compaction utilities |
-| `tool` | `Tool` interface and `Definition` |
-| `tool/builtin` | Built-in tools (echo, …) |
-| `tool/mcp` | MCP server bridge |
-| `runner` | Wires Agent + SessionService together |
-| `internal/snowflake` | Snowflake node factory |
-
----
+| `session/database` | SQLite-backed session backend |
+| `session/compaction` | Reference config for manual compaction |
+| `tool` | Tool interface and helpers |
+| `tool/builtin` | Built-in tools |
+| `tool/mcp` | MCP tool bridge |
+| `runner` | Wires an agent to session storage |
 
 ## Quick Start
 
-### 1. Create an LLM
-
-**OpenAI:**
-
 ```go
-import "github.com/soasurs/adk/model/openai"
+package main
 
-llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
-```
-
-**Google Gemini:**
-
-```go
-import "github.com/soasurs/adk/model/gemini"
-
-llm, err := gemini.New(ctx, os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
-// Or use Vertex AI:
-// llm, err := gemini.NewVertexAI(ctx, "my-project", "us-central1", "gemini-2.0-flash")
-```
-
-**Anthropic Claude:**
-
-```go
-import "github.com/soasurs/adk/model/anthropic"
-
-llm := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-5")
-```
-
-### 2. Build an Agent
-
-```go
 import (
+    "context"
+    "fmt"
+    "os"
+
     "github.com/soasurs/adk/agent/llmagent"
     "github.com/soasurs/adk/model"
-)
-
-agent := llmagent.New(llmagent.Config{
-    Name:         "my-agent",
-    Description:  "A helpful assistant",
-    Model:        llm,
-    Instruction:  "You are a helpful assistant.",
-    Stream:       true, // enable real-time streaming
-})
-```
-
-### 3. Choose a Session Backend
-
-**In-memory** (great for testing or single-process use):
-
-```go
-import "github.com/soasurs/adk/session/memory"
-
-svc := memory.NewSessionService()
-```
-
-**SQLite** (persistent across restarts):
-
-```go
-import (
-    "github.com/jmoiron/sqlx"
-    _ "github.com/mattn/go-sqlite3"
-    "github.com/soasurs/adk/session/database"
-)
-
-db, err := sqlx.Connect("sqlite3", "sessions.db")
-// Initialize schema if not exists
-err = database.InitSchema(ctx, db)
-svc, err := database.NewDatabaseSessionService(db)
-```
-
-### 4. Create a Runner and Run
-
-```go
-import (
+    "github.com/soasurs/adk/model/openai"
     "github.com/soasurs/adk/runner"
+    "github.com/soasurs/adk/session/memory"
 )
 
-r, err := runner.New(agent, svc)
-if err != nil { /* … */ }
+func main() {
+    ctx := context.Background()
 
-ctx := context.Background()
-sessionID := int64(1)
+    llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
+    agent := llmagent.New(llmagent.Config{
+        Name:        "assistant",
+        Description: "A helpful assistant",
+        Model:       llm,
+        Instruction: "You are a helpful assistant.",
+        Stream:      true,
+    })
 
-// Create the session once
-_, _ = svc.CreateSession(ctx, sessionID)
+    sessions := memory.NewMemorySessionService()
+    const sessionID = int64(1)
+    _, _ = sessions.CreateSession(ctx, sessionID)
 
-// Send a user message and iterate over the results
-for event, err := range r.Run(ctx, sessionID, "Hello!") {
-    if err != nil { /* … */ }
-    if event.Partial {
-        // Streaming fragment — display in real-time
-        fmt.Print(event.Message.Content)
-    } else {
-        // Complete message — persist or process
-        fmt.Println(event.Message.Role, event.Message.Content)
+    r, err := runner.New(agent, sessions)
+    if err != nil {
+        panic(err)
+    }
+
+    input := model.Content{Content: "Hello!"}
+    for event, err := range r.Run(ctx, sessionID, input) {
+        if err != nil {
+            panic(err)
+        }
+        if event.Partial {
+            fmt.Print(event.Content.Content)
+            continue
+        }
+        fmt.Printf("\n%s: %s\n", event.Content.Role, event.Content.Content)
     }
 }
 ```
 
----
+## Core Types
 
-## Core Concepts
+### `model.Content`
+
+`Content` is the provider-facing payload carried by events and LLM responses.
+It contains the role, text, multimodal parts, reasoning text, tool calls, and
+tool-call response linkage.
+
+```go
+content := model.Content{
+    Role:    model.RoleUser,
+    Content: "What is in this image?",
+    Parts: []model.ContentPart{
+        {Type: model.ContentPartTypeText, Text: "Describe this image."},
+        {Type: model.ContentPartTypeImageURL, ImageURL: "https://example.com/photo.jpg"},
+    },
+}
+```
+
+### `model.Event`
+
+`Event` is the runtime and session-history unit. Complete events form the
+durable ledger; partial events are only forwarded to the caller for streaming
+display and are not persisted by `Runner`.
+
+```go
+type Event struct {
+    ID           int64
+    SessionID    int64
+    Author       string
+    Content      model.Content
+    FinishReason model.FinishReason
+    Usage        *model.TokenUsage
+    Partial      bool
+    CreatedAt    int64
+    UpdatedAt    int64
+}
+```
+
+### `agent.Agent`
+
+```go
+type Agent interface {
+    Name() string
+    Description() string
+    Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error]
+}
+```
+
+Agents are stateless. The runner loads active events from the session, appends
+the new user event, and passes the full event history into `Run`.
 
 ### `model.LLM`
-
-The central interface every LLM adapter must implement:
 
 ```go
 type LLM interface {
@@ -210,213 +167,99 @@ type LLM interface {
 }
 ```
 
-`GenerateContent` returns a Go iterator. When `stream` is `false`, exactly one
-complete `*LLMResponse` is yielded. When `stream` is `true`, zero or more
-partial responses (streaming chunks) are yielded first, followed by a single
-complete response.
+`LLMRequest.Contents` is projected from event history before calling the
+provider adapter.
 
-`GenerateConfig` lets you tune temperature, reasoning effort, thinking budget,
-and service tier in a provider-agnostic way.
+## Session Storage
 
-### `model.Message`
-
-A single message in a conversation. Key fields:
-
-| Field | Description |
-|---|---|
-| `Role` | `system` / `user` / `assistant` / `tool` |
-| `Content` | Plain-text content |
-| `Parts` | Multi-modal content (text + images) |
-| `ReasoningContent` | Chain-of-thought from reasoning models (informational only) |
-| `ToolCalls` | Tool invocations requested by the assistant |
-| `ToolCallID` | Links a tool-result message back to its call |
-| `Usage` | Token consumption for this generation step |
-
-### `agent.Agent`
+Use memory for tests and ephemeral runs:
 
 ```go
-type Agent interface {
-    Name() string
-    Description() string
-    Run(ctx context.Context, messages []model.Message) iter.Seq2[*model.Event, error]
-}
+svc := memory.NewMemorySessionService()
 ```
 
-`Run` returns a Go iterator that yields each produced event — assistant
-replies, tool results, and intermediate steps — allowing the caller to
-stream output incrementally.
-
-Events carry a `Partial` flag: when `true`, the event is a streaming fragment
-for real-time display; when `false`, it is a complete, persistable message.
-
-### `tool.Tool`
+Use SQLite for durable sessions:
 
 ```go
-type Tool interface {
-    Definition() Definition   // name, description, JSON Schema
-    Run(ctx context.Context, toolCallID string, arguments string) (string, error)
-}
+db, err := sqlx.Connect("sqlite3", "sessions.db")
+if err != nil { /* handle */ }
+
+if err := database.InitSchema(ctx, db); err != nil { /* handle */ }
+svc, err := database.NewDatabaseSessionService(db)
 ```
 
-`LlmAgent` dispatches tool calls automatically during its generation loop.
-
-### Session & Message Compaction
-
-A `Session` holds a conversation's message history. The two storage backends
-both support **soft compaction**: old messages are archived (marked with a
-`CompactedAt` timestamp) rather than deleted.
+The session interface stores events:
 
 ```go
-import "github.com/soasurs/adk/session/compaction"
+events, _ := sess.ListEvents(ctx)
+page, _ := sess.GetEvents(ctx, 50, 0)
+_ = sess.DeleteEvent(ctx, events[0].EventID)
+```
 
-// Build a sliding-window compactor
-cfg := compaction.Config{MaxTokens: 8000, KeepRecentRounds: 3}
-compactor, _ := compaction.NewSlidingWindowCompactor(cfg,
-    func(ctx context.Context, msgs []*message.Message) (string, error) {
-        return summarise(msgs), nil // your summarisation logic
-    },
-)
+## Manual Compaction
 
-// Check whether compaction is needed, then run it
-msgs, _ := sess.ListMessages(ctx)
-if compaction.ShouldCompact(msgs, cfg) {
-    splitID, summaryMsg, _ := compactor(ctx, msgs)
-    if splitID > 0 {
-        _ = sess.CompactMessages(ctx, splitID, summaryMsg)
-    }
+ADK does not automatically summarize or compact history. Applications decide
+when to summarize old events and then persist that state with `CompactEvents`.
+
+```go
+events, _ := sess.ListEvents(ctx)
+
+splitID := events[4].EventID // first event to keep
+summary := &event.Event{
+    EventID:   nextID(),
+    Author:    "compactor",
+    Role:      string(model.RoleSystem),
+    Content:   "Summary of earlier conversation...",
+    CreatedAt: time.Now().UnixMilli(),
+    UpdatedAt: time.Now().UnixMilli(),
 }
 
-// Active messages (post-compaction)
-active, _ := sess.ListMessages(ctx)
+_ = sess.CompactEvents(ctx, splitID, summary)
 ```
 
----
-
-## MCP Tools
-
-Connect any MCP server and expose all its tools to your agent:
-
-```go
-import (
-    "github.com/soasurs/adk/tool/mcp"
-    sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-)
-
-transport := sdkmcp.NewStdioTransport("my-mcp-server", []string{"--flag"}, nil)
-ts := mcp.NewToolSet(transport)
-if err := ts.Connect(ctx); err != nil { /* … */ }
-defer ts.Close()
-
-tools, err := ts.Tools(ctx)
-
-agent := llmagent.New(llmagent.Config{
-    // …
-    Tools: tools,
-})
-```
-
----
+Partial events are never persisted and therefore never need compaction.
 
 ## Agent Composition
 
-### Sequential Agent
-
-Chain multiple agents into a pipeline where each agent sees the output of all
-previous agents:
+Sequential agents pass complete events from each step to the next:
 
 ```go
-import "github.com/soasurs/adk/agent/sequentialagent"
-
 pipeline, err := sequentialagent.New(sequentialagent.Config{
-    Name:        "research-pipeline",
-    Description: "Research, draft, and review",
-    Agents: []agent.Agent{
-        researchAgent,  // Step 1: gather information
-        draftAgent,     // Step 2: write draft
-        reviewAgent,    // Step 3: review and polish
+    Name:   "research-pipeline",
+    Agents: []agent.Agent{researcher, drafter, reviewer},
+})
+```
+
+Parallel agents collect complete events from each branch and merge them:
+
+```go
+fanout, err := parallelagent.New(parallelagent.Config{
+    Name:   "multi-model",
+    Agents: []agent.Agent{gptAgent, claudeAgent, geminiAgent},
+    MergeFunc: func(results []parallelagent.AgentOutput) model.Event {
+        return model.Event{
+            Author: "multi-model",
+            Content: model.Content{
+                Role:    model.RoleAssistant,
+                Content: "merged answer",
+            },
+        }
     },
 })
 ```
 
-### Parallel Agent
-
-Run multiple agents concurrently and merge their outputs:
+## MCP Tools
 
 ```go
-import "github.com/soasurs/adk/agent/parallelagent"
+transport := sdkmcp.NewStdioTransport("my-mcp-server", []string{"--flag"}, nil)
+toolSet := mcp.NewToolSet(transport)
+if err := toolSet.Connect(ctx); err != nil { /* handle */ }
+defer toolSet.Close()
 
-ensemble, err := parallelagent.New(parallelagent.Config{
-    Name:        "multi-model-ensemble",
-    Description: "Get answers from multiple models",
-    Agents: []agent.Agent{
-        gpt4Agent,
-        claudeAgent,
-        geminiAgent,
-    },
-    // Optional: custom merge function
-    MergeFunc: func(results []parallelagent.AgentOutput) model.Message {
-        // Combine outputs from all agents
-    },
-})
+tools, err := toolSet.Tools(ctx)
 ```
 
-### Agent as Tool
-
-Delegate tasks to sub-agents via the LLM's function-calling mechanism:
-
-```go
-import "github.com/soasurs/adk/agent/agentool"
-
-// Wrap an agent as a tool
-calculatorTool := agentool.New(calculatorAgent)
-
-// Give it to another agent
-orchestrator := llmagent.New(llmagent.Config{
-    Name:        "orchestrator",
-    Description: "Delegates calculations",
-    Model:       llm,
-    Tools:       []tool.Tool{calculatorTool},
-    Instruction: "Use the calculator tool for math problems.",
-})
-```
-
----
-
-## Multi-modal Input
-
-Pass images alongside text using `model.ContentPart`:
-
-```go
-msg := model.Message{
-    Role: model.RoleUser,
-    Parts: []model.ContentPart{
-        {Type: model.ContentPartTypeText, Text: "What is in this image?"},
-        {
-            Type:        model.ContentPartTypeImageURL,
-            ImageURL:    "https://example.com/photo.jpg",
-            ImageDetail: model.ImageDetailHigh,
-        },
-    },
-}
-```
-
----
-
-## Dependencies
-
-| Library | Purpose |
-|---|---|
-| `github.com/openai/openai-go/v3` | OpenAI API client |
-| `google.golang.org/genai` | Google Gemini API client |
-| `github.com/anthropics/anthropic-sdk-go` | Anthropic Claude API client |
-| `github.com/modelcontextprotocol/go-sdk` | MCP client |
-| `github.com/google/jsonschema-go` | JSON Schema for tool definitions |
-| `github.com/jmoiron/sqlx` | SQL query helpers |
-| `github.com/mattn/go-sqlite3` | SQLite driver |
-| `github.com/bwmarrin/snowflake` | Distributed ID generation |
-| `github.com/stretchr/testify` | Test assertions |
-
----
+Pass `tools` to `llmagent.Config.Tools`.
 
 ## License
 

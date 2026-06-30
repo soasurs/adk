@@ -1,4 +1,4 @@
-package message
+package event
 
 import (
 	"testing"
@@ -61,14 +61,17 @@ func TestParts_ScanBytes(t *testing.T) {
 
 // TestFromModel_ToModel_Parts verifies that ContentParts survive a full FromModel → ToModel round-trip.
 func TestFromModel_ToModel_Parts(t *testing.T) {
-	original := model.Message{
-		Role: model.RoleUser,
-		Parts: []model.ContentPart{
-			{Type: model.ContentPartTypeText, Text: "describe this"},
-			{
-				Type:        model.ContentPartTypeImageURL,
-				ImageURL:    "https://example.com/cat.jpg",
-				ImageDetail: model.ImageDetailAuto,
+	original := model.Event{
+		Author: "user",
+		Content: model.Content{
+			Role: model.RoleUser,
+			Parts: []model.ContentPart{
+				{Type: model.ContentPartTypeText, Text: "describe this"},
+				{
+					Type:        model.ContentPartTypeImageURL,
+					ImageURL:    "https://example.com/cat.jpg",
+					ImageDetail: model.ImageDetailAuto,
+				},
 			},
 		},
 	}
@@ -77,43 +80,49 @@ func TestFromModel_ToModel_Parts(t *testing.T) {
 	require.Len(t, persisted.Parts, 2)
 
 	restored := persisted.ToModel()
-	require.Len(t, restored.Parts, 2)
-	assert.Equal(t, model.ContentPartTypeText, restored.Parts[0].Type)
-	assert.Equal(t, "describe this", restored.Parts[0].Text)
-	assert.Equal(t, model.ContentPartTypeImageURL, restored.Parts[1].Type)
-	assert.Equal(t, "https://example.com/cat.jpg", restored.Parts[1].ImageURL)
-	assert.Equal(t, model.ImageDetailAuto, restored.Parts[1].ImageDetail)
+	require.Len(t, restored.Content.Parts, 2)
+	assert.Equal(t, model.ContentPartTypeText, restored.Content.Parts[0].Type)
+	assert.Equal(t, "describe this", restored.Content.Parts[0].Text)
+	assert.Equal(t, model.ContentPartTypeImageURL, restored.Content.Parts[1].Type)
+	assert.Equal(t, "https://example.com/cat.jpg", restored.Content.Parts[1].ImageURL)
+	assert.Equal(t, model.ImageDetailAuto, restored.Content.Parts[1].ImageDetail)
 }
 
 // TestFromModel_ToModel_NilParts verifies that a nil Parts field round-trips without panic.
 func TestFromModel_ToModel_NilParts(t *testing.T) {
-	original := model.Message{
-		Role:    model.RoleUser,
-		Content: "plain text",
+	original := model.Event{
+		Author: "user",
+		Content: model.Content{
+			Role:    model.RoleUser,
+			Content: "plain text",
+		},
 	}
 	persisted := FromModel(original)
 	assert.Empty(t, persisted.Parts)
 
 	restored := persisted.ToModel()
-	assert.Equal(t, "plain text", restored.Content)
-	assert.Empty(t, restored.Parts)
+	assert.Equal(t, "plain text", restored.Content.Content)
+	assert.Empty(t, restored.Content.Parts)
 }
 
 func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
-	original := model.Message{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{
-			{
-				ID:               "call-1",
-				Name:             "lookup",
-				Arguments:        `{"query":"weather"}`,
-				ThoughtSignature: []byte{0x01, 0x02, 0xff},
+	original := model.Event{
+		Author: "assistant",
+		Content: model.Content{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID:               "call-1",
+					Name:             "lookup",
+					Arguments:        `{"query":"weather"}`,
+					ThoughtSignature: []byte{0x01, 0x02, 0xff},
+				},
 			},
 		},
 	}
 
 	restored := FromModel(original).ToModel()
 
-	require.Len(t, restored.ToolCalls, 1)
-	assert.Equal(t, original.ToolCalls[0], restored.ToolCalls[0])
+	require.Len(t, restored.Content.ToolCalls, 1)
+	assert.Equal(t, original.Content.ToolCalls[0], restored.Content.ToolCalls[0])
 }
