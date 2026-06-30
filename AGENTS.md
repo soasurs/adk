@@ -21,7 +21,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `agent/parallelagent` | Fan-out to multiple agents concurrently, merge results |
 | `agent/sequentialagent` | Run agents in order, passing output forward |
 | `agent/agentool` | Wrap an `Agent` as a `tool.Tool` for nesting |
-| `model` | Provider-neutral types: `LLM`, `Message`, `Event`, `LLMRequest/Response` |
+| `model` | Provider-neutral types: `LLM`, `Content`, `Event`, `LLMRequest/Response` |
 | `model/openai` | OpenAI / OpenAI-compatible adapter |
 | `model/gemini` | Gemini / Vertex AI adapter |
 | `model/anthropic` | Anthropic adapter |
@@ -29,7 +29,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `runner` | Ties `Agent` + `SessionService` together for multi-turn conversations |
 | `session` | `Session` and `SessionService` interfaces |
 | `session/memory` | In-memory session (tests / ephemeral use) |
-| `session/database` | SQLite-backed session with schema migration |
+| `session/database` | SQL database-backed session with schema migration; SQLite and PostgreSQL are tested |
 | `session/compaction` | `compaction.Config` reference type for manual context management |
 | `session/event` | `event.Event` — persisted form of `model.Event` |
 | `tool` | `Tool` interface and `Definition` |
@@ -73,11 +73,12 @@ go test -v ./...
 
 Tests auto-skip when required vars are absent; optional vars fall back to defaults.
 
-| Provider | Required | Optional |
+| Provider / backend | Required | Optional |
 |---|---|---|
 | OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_REASONING_MODEL` |
 | Gemini / Vertex AI | `GEMINI_API_KEY` | `GEMINI_MODEL`, `GEMINI_THINKING_MODEL`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION`, `VERTEX_AI_MODEL` |
 | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL`, `ANTHROPIC_THINKING_MODEL` |
+| PostgreSQL session/database | `ADK_TEST_POSTGRES_DSN` | — |
 | MCP (Exa) | — | `EXA_API_KEY` |
 
 ## Architecture — Critical Invariants

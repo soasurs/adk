@@ -21,7 +21,7 @@ Go version: `1.26+`
 - Automatic tool-call loop in `llmagent`
 - Sequential and parallel agent composition
 - Agent-as-tool delegation
-- In-memory and SQLite session backends
+- In-memory and SQL database session backends, tested with SQLite and PostgreSQL
 - MCP tool integration
 - Native Go streaming with `iter.Seq2`
 
@@ -47,7 +47,7 @@ go get github.com/soasurs/adk
 | `session` | `Session` and `SessionService` interfaces |
 | `session/event` | Persisted event representation |
 | `session/memory` | In-memory session backend |
-| `session/database` | SQLite-backed session backend |
+| `session/database` | SQL database session backend for SQLite and PostgreSQL |
 | `session/compaction` | Reference config for manual compaction |
 | `tool` | Tool interface and helpers |
 | `tool/builtin` | Built-in tools |
@@ -178,10 +178,27 @@ Use memory for tests and ephemeral runs:
 svc := memory.NewMemorySessionService()
 ```
 
-Use SQLite for durable sessions:
+Use the database backend for durable sessions. It accepts an application-owned
+`*sqlx.DB`; SQLite and PostgreSQL are covered by the test suite. Applications
+must import the driver they use.
+
+SQLite:
 
 ```go
 db, err := sqlx.Connect("sqlite3", "sessions.db")
+if err != nil { /* handle */ }
+
+if err := database.InitSchema(ctx, db); err != nil { /* handle */ }
+svc, err := database.NewDatabaseSessionService(db)
+```
+
+For `:memory:` SQLite databases in tests, use `db.SetMaxOpenConns(1)` or a
+shared-cache DSN so all operations see the same in-memory database.
+
+PostgreSQL:
+
+```go
+db, err := sqlx.Connect("pgx", os.Getenv("ADK_POSTGRES_DSN"))
 if err != nil { /* handle */ }
 
 if err := database.InitSchema(ctx, db); err != nil { /* handle */ }

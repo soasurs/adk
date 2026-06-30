@@ -12,8 +12,8 @@ import (
 	"github.com/soasurs/adk/internal/snowflake"
 )
 
-func TestDatabaseSessionService_CreateSession(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_CreateSession(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -26,8 +26,8 @@ func TestDatabaseSessionService_CreateSession(t *testing.T) {
 	assert.Equal(t, int64(1), s.GetSessionID())
 }
 
-func TestDatabaseSessionService_CreateSession_Multiple(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_CreateSession_Multiple(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -45,8 +45,8 @@ func TestDatabaseSessionService_CreateSession_Multiple(t *testing.T) {
 	assert.Equal(t, int64(2), s2.GetSessionID())
 }
 
-func TestDatabaseSessionService_GetSession(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_GetSession(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -62,8 +62,8 @@ func TestDatabaseSessionService_GetSession(t *testing.T) {
 	assert.Equal(t, int64(1), s.GetSessionID())
 }
 
-func TestDatabaseSessionService_GetSession_NotFound(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_GetSession_NotFound(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -75,8 +75,8 @@ func TestDatabaseSessionService_GetSession_NotFound(t *testing.T) {
 	assert.Nil(t, s)
 }
 
-func TestDatabaseSessionService_DeleteSession(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_DeleteSession(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -94,8 +94,8 @@ func TestDatabaseSessionService_DeleteSession(t *testing.T) {
 	assert.Nil(t, s)
 }
 
-func TestDatabaseSessionService_DeleteSession_NotFound(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_DeleteSession_NotFound(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -106,8 +106,8 @@ func TestDatabaseSessionService_DeleteSession_NotFound(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestDatabaseSessionService_FullWorkflow(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_FullWorkflow(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db)
@@ -141,8 +141,8 @@ func TestDatabaseSessionService_FullWorkflow(t *testing.T) {
 	assert.Equal(t, int64(2), gotS2AfterDelete.GetSessionID())
 }
 
-func TestDatabaseSessionService_WithSnowflakeID(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_WithSnowflakeID(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	snowflaker, err := snowflake.New()
@@ -171,10 +171,11 @@ func TestDatabaseSessionService_WithSnowflakeID(t *testing.T) {
 	assert.Nil(t, gotSAfterDelete)
 }
 
-func setupTestDBWithPrefix(t *testing.T, prefix string) *sqlx.DB {
+func setupSQLiteTestDBWithPrefix(t *testing.T, prefix string) *sqlx.DB {
 	t.Helper()
 	db, err := sqlx.Connect("sqlite3", ":memory:")
 	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
 
 	err = InitSchema(t.Context(), db, WithTablePrefix(prefix))
 	require.NoError(t, err)
@@ -182,9 +183,9 @@ func setupTestDBWithPrefix(t *testing.T, prefix string) *sqlx.DB {
 	return db
 }
 
-func TestDatabaseSessionService_WithTablePrefix(t *testing.T) {
+func TestSQLite_DatabaseSessionService_WithTablePrefix(t *testing.T) {
 	const prefix = "myapp_"
-	db := setupTestDBWithPrefix(t, prefix)
+	db := setupSQLiteTestDBWithPrefix(t, prefix)
 	defer db.Close()
 
 	service, err := NewDatabaseSessionService(db, WithTablePrefix(prefix))
@@ -209,9 +210,10 @@ func TestDatabaseSessionService_WithTablePrefix(t *testing.T) {
 	assert.Nil(t, gotAfterDelete)
 }
 
-func TestDatabaseSessionService_WithSessionsTable(t *testing.T) {
+func TestSQLite_DatabaseSessionService_WithSessionsTable(t *testing.T) {
 	db, err := sqlx.Connect("sqlite3", ":memory:")
 	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
 	defer db.Close()
 
 	err = InitSchema(t.Context(), db, WithSessionsTable("custom_sessions"))
@@ -226,8 +228,8 @@ func TestDatabaseSessionService_WithSessionsTable(t *testing.T) {
 	assert.Equal(t, int64(42), s.GetSessionID())
 }
 
-func TestDatabaseSessionService_InvalidTableName(t *testing.T) {
-	db := setupTestDB(t)
+func TestSQLite_DatabaseSessionService_InvalidTableName(t *testing.T) {
+	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
 	tests := []struct {

@@ -18,10 +18,9 @@ type migrationTables struct {
 }
 
 // migration describes a single, forward-only schema change.
-// There is no down function by design: this library targets embedded SQLite
-// databases where rollback is handled at the application level (e.g. by
-// shipping the previous binary). Append-only migrations keep the history
-// auditable and the engine simple.
+// There is no down function by design: applications handle rollback at their
+// own release boundary. Append-only migrations keep the history auditable and
+// the engine simple across the supported SQL backends.
 type migration struct {
 	version int
 	up      func(t migrationTables) []string

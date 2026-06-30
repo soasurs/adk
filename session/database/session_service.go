@@ -67,7 +67,9 @@ type databaseSessionService struct {
 	runLocks        *sessionlock.Locker
 }
 
-// NewDatabaseSessionService creates a new database-backed SessionService.
+// NewDatabaseSessionService creates a new SQL database-backed SessionService.
+// The caller owns the *sqlx.DB and its driver configuration. SQLite and
+// PostgreSQL are covered by this package's tests.
 // By default it uses the table names "sessions" and "events".
 // Use Option functions such as WithTablePrefix, WithSessionsTable, or WithEventsTable
 // to customise the table names and avoid conflicts in shared databases.

@@ -146,7 +146,7 @@ func main() {
 	// Example compaction strategies:
 	// - Token-based: Archive when sum of tokens exceeds MaxTokens
 	// - Rounds-based: Keep only the last N conversation rounds
-	// - Time-based: Archive messages older than T hours
+	// - Time-based: Archive events older than T hours
 	// - Hybrid: Combine multiple heuristics
 	compactCfg := compaction.Config{
 		MaxTokens:        7000,

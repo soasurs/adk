@@ -18,7 +18,7 @@ Go 版本：`1.26+`
 - `llmagent` 内置自动 tool-call 循环
 - 支持顺序和并行 Agent 组合
 - 支持将 Agent 包装成 Tool
-- 内存与 SQLite 会话后端
+- 内存与 SQL 数据库会话后端，已覆盖 SQLite 和 PostgreSQL 测试
 - MCP 工具集成
 - 使用 `iter.Seq2` 做原生 Go 流式输出
 
@@ -44,7 +44,7 @@ go get github.com/soasurs/adk
 | `session` | `Session` 与 `SessionService` 接口 |
 | `session/event` | 持久化事件类型 |
 | `session/memory` | 内存会话后端 |
-| `session/database` | SQLite 会话后端 |
+| `session/database` | 支持 SQLite 和 PostgreSQL 的 SQL 数据库会话后端 |
 | `session/compaction` | 手动压缩用的参考配置 |
 | `tool` | Tool 接口与辅助函数 |
 | `tool/builtin` | 内置工具 |
@@ -172,10 +172,26 @@ type LLM interface {
 svc := memory.NewMemorySessionService()
 ```
 
-需要持久化时使用 SQLite：
+需要持久化时可以使用 database 后端。它接收应用自己持有的 `*sqlx.DB`；
+SQLite 和 PostgreSQL 都有测试覆盖。应用需要自行 import 对应 driver。
+
+SQLite：
 
 ```go
 db, err := sqlx.Connect("sqlite3", "sessions.db")
+if err != nil { /* handle */ }
+
+if err := database.InitSchema(ctx, db); err != nil { /* handle */ }
+svc, err := database.NewDatabaseSessionService(db)
+```
+
+测试里如果使用 `:memory:` SQLite，需要设置 `db.SetMaxOpenConns(1)`，或者使用
+shared-cache DSN，确保所有操作看到同一个内存数据库。
+
+PostgreSQL：
+
+```go
+db, err := sqlx.Connect("pgx", os.Getenv("ADK_POSTGRES_DSN"))
 if err != nil { /* handle */ }
 
 if err := database.InitSchema(ctx, db); err != nil { /* handle */ }
