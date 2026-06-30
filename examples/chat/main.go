@@ -25,6 +25,7 @@ import (
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/model/openai"
 	"github.com/soasurs/adk/runner"
+	"github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/compaction"
 	"github.com/soasurs/adk/session/memory"
 	"github.com/soasurs/adk/tool"
@@ -34,7 +35,7 @@ import (
 const (
 	exaMCPEndpoint = "https://mcp.exa.ai/mcp"
 	defaultModel   = "gpt-4o-mini"
-	sessionID      = 1001
+	sessionID      = "chat-session"
 	sepWidth       = 52
 )
 
@@ -122,7 +123,11 @@ func main() {
 
 	// ── 4. Runner + in-memory Session ────────────────────────────────────────
 	sessionSvc := memory.NewMemorySessionService()
-	if _, err := sessionSvc.CreateSession(ctx, sessionID); err != nil {
+	if _, err := sessionSvc.CreateSession(ctx, session.CreateSessionRequest{
+		SessionID: sessionID,
+		AppID:     "examples/chat",
+		UserID:    "local-user",
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "error: create session: %v\n", err)
 		os.Exit(1)
 	}

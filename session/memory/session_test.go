@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/soasurs/adk/internal/snowflake"
+	adksession "github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/event"
 )
 
@@ -19,16 +19,18 @@ func newTestMessage(id int64, content string) *event.Event {
 	}
 }
 
-func TestMemorySession_CreateEvent(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+func newMemorySessionRequest(sessionID string) adksession.CreateSessionRequest {
+	return adksession.CreateSessionRequest{SessionID: sessionID}
+}
 
-	session := NewMemorySession(sessionID)
+func TestMemorySession_CreateEvent(t *testing.T) {
+	sessionID := "session-1"
+
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	msg := newTestMessage(1, "hello")
-	err = session.CreateEvent(ctx, msg)
+	err := session.CreateEvent(ctx, msg)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetEvents(ctx, 10, 0)
@@ -38,11 +40,9 @@ func TestMemorySession_CreateEvent(t *testing.T) {
 }
 
 func TestMemorySession_DeleteEvent(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	msg1 := newTestMessage(1, "hello")
@@ -53,7 +53,7 @@ func TestMemorySession_DeleteEvent(t *testing.T) {
 	session.CreateEvent(ctx, msg2)
 	session.CreateEvent(ctx, msg3)
 
-	err = session.DeleteEvent(ctx, 2)
+	err := session.DeleteEvent(ctx, 2)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetEvents(ctx, 10, 0)
@@ -66,17 +66,15 @@ func TestMemorySession_DeleteEvent(t *testing.T) {
 }
 
 func TestMemorySession_DeleteEvent_NotFound(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	msg := newTestMessage(1, "hello")
 	session.CreateEvent(ctx, msg)
 
-	err = session.DeleteEvent(ctx, 999)
+	err := session.DeleteEvent(ctx, 999)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetEvents(ctx, 10, 0)
@@ -85,11 +83,9 @@ func TestMemorySession_DeleteEvent_NotFound(t *testing.T) {
 }
 
 func TestMemorySession_GetEvents(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	for i := int64(1); i <= 10; i++ {
@@ -125,7 +121,7 @@ func TestMemorySession_GetEvents(t *testing.T) {
 }
 
 func TestMemorySession_GetEvents_StableOrder(t *testing.T) {
-	sess := NewMemorySession(1)
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
 	ctx := t.Context()
 
 	const createdAt = int64(1234)
@@ -145,11 +141,9 @@ func TestMemorySession_GetEvents_StableOrder(t *testing.T) {
 }
 
 func TestMemorySession_CompactEvents(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	msg1 := newTestMessage(1, "hello")
@@ -165,7 +159,7 @@ func TestMemorySession_CompactEvents(t *testing.T) {
 	summaryMsg := newTestMessage(100, "summary")
 
 	// Archive msg1 and msg2; keep msg3 and msg4 as structured messages.
-	err = session.CompactEvents(ctx, 3, summaryMsg)
+	err := session.CompactEvents(ctx, 3, summaryMsg)
 	assert.NoError(t, err)
 
 	// Active history: kept messages + summary appended.
@@ -178,11 +172,9 @@ func TestMemorySession_CompactEvents(t *testing.T) {
 }
 
 func TestMemorySession_CompactEvents_ArchiveAll(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	session.CreateEvent(ctx, newTestMessage(1, "hello"))
@@ -191,7 +183,7 @@ func TestMemorySession_CompactEvents_ArchiveAll(t *testing.T) {
 	summaryMsg := newTestMessage(100, "summary")
 
 	// splitEventID=0 archives everything.
-	err = session.CompactEvents(ctx, 0, summaryMsg)
+	err := session.CompactEvents(ctx, 0, summaryMsg)
 	assert.NoError(t, err)
 
 	msgs, err := session.ListEvents(ctx)
@@ -201,17 +193,15 @@ func TestMemorySession_CompactEvents_ArchiveAll(t *testing.T) {
 }
 
 func TestMemorySession_CompactEvents_Empty(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	summaryMsg := newTestMessage(100, "summary")
 
 	// Compacting an empty session (splitEventID=0) just inserts the summary.
-	err = session.CompactEvents(ctx, 0, summaryMsg)
+	err := session.CompactEvents(ctx, 0, summaryMsg)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetEvents(ctx, 10, 0)
@@ -222,11 +212,9 @@ func TestMemorySession_CompactEvents_Empty(t *testing.T) {
 }
 
 func TestMemorySession_ListEvents(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	sess := NewMemorySession(sessionID)
+	sess := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	for i := int64(1); i <= 5; i++ {
@@ -239,18 +227,16 @@ func TestMemorySession_ListEvents(t *testing.T) {
 }
 
 func TestMemorySession_CompactEvents_MultipleRounds(t *testing.T) {
-	snowflaker, err := snowflake.New()
-	assert.Nil(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
-	sess := NewMemorySession(sessionID)
+	sess := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
 	sess.CreateEvent(ctx, newTestMessage(1, "a"))
 	sess.CreateEvent(ctx, newTestMessage(2, "b"))
 
 	// First compaction: archive all (splitEventID=0), insert summary1.
-	err = sess.CompactEvents(ctx, 0, newTestMessage(10, "summary1"))
+	err := sess.CompactEvents(ctx, 0, newTestMessage(10, "summary1"))
 	assert.NoError(t, err)
 
 	sess.CreateEvent(ctx, newTestMessage(3, "c"))

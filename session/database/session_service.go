@@ -98,21 +98,21 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 	return svc, nil
 }
 
-func (ss *databaseSessionService) LockSession(ctx context.Context, sessionID int64) (func(), error) {
+func (ss *databaseSessionService) LockSession(ctx context.Context, sessionID string) (func(), error) {
 	return ss.runLocks.Lock(ctx, sessionID)
 }
 
-func (ss *databaseSessionService) CreateSession(ctx context.Context, sessionID int64) (session.Session, error) {
-	return newDatabaseSession(ctx, ss.db, sessionID, ss.q)
+func (ss *databaseSessionService) CreateSession(ctx context.Context, req session.CreateSessionRequest) (session.Session, error) {
+	return newDatabaseSession(ctx, ss.db, req, ss.q)
 }
 
-func (ss *databaseSessionService) DeleteSession(ctx context.Context, sessionID int64) error {
+func (ss *databaseSessionService) DeleteSession(ctx context.Context, sessionID string) error {
 	now := time.Now()
 	_, err := ss.db.ExecContext(ctx, ss.q.deleteSession, now.UnixMilli(), sessionID, 0)
 	return err
 }
 
-func (ss *databaseSessionService) GetSession(ctx context.Context, sessionID int64) (session.Session, error) {
+func (ss *databaseSessionService) GetSession(ctx context.Context, sessionID string) (session.Session, error) {
 	s := new(databaseSession)
 	err := ss.db.GetContext(ctx, s, ss.q.getSession, sessionID, 0)
 	if err != nil {

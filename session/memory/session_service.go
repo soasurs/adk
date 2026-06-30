@@ -22,19 +22,19 @@ func NewMemorySessionService() session.SessionService {
 	}
 }
 
-func (ss *memorySessionService) LockSession(ctx context.Context, sessionID int64) (func(), error) {
+func (ss *memorySessionService) LockSession(ctx context.Context, sessionID string) (func(), error) {
 	return ss.runLocks.Lock(ctx, sessionID)
 }
 
-func (ss *memorySessionService) CreateSession(ctx context.Context, sessionID int64) (session.Session, error) {
+func (ss *memorySessionService) CreateSession(ctx context.Context, req session.CreateSessionRequest) (session.Session, error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	session := NewMemorySession(sessionID)
+	session := NewMemorySession(req)
 	ss.sessions = append(ss.sessions, session)
 	return session, nil
 }
 
-func (ss *memorySessionService) DeleteSession(ctx context.Context, sessionID int64) error {
+func (ss *memorySessionService) DeleteSession(ctx context.Context, sessionID string) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	for i := 0; i < len(ss.sessions); i++ {
@@ -46,7 +46,7 @@ func (ss *memorySessionService) DeleteSession(ctx context.Context, sessionID int
 	return nil
 }
 
-func (ss *memorySessionService) GetSession(ctx context.Context, sessionID int64) (session.Session, error) {
+func (ss *memorySessionService) GetSession(ctx context.Context, sessionID string) (session.Session, error) {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 	i := slices.IndexFunc(ss.sessions, func(e session.Session) bool { return e.GetSessionID() == sessionID })

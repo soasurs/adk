@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/soasurs/adk/internal/snowflake"
+	adksession "github.com/soasurs/adk/session"
 )
 
 func TestSQLite_DatabaseSessionService_CreateSession(t *testing.T) {
@@ -20,10 +20,16 @@ func TestSQLite_DatabaseSessionService_CreateSession(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s, err := service.CreateSession(ctx, 1)
+	s, err := service.CreateSession(ctx, adksession.CreateSessionRequest{
+		SessionID: "session-1",
+		AppID:     "chat",
+		UserID:    "user-1",
+	})
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
-	assert.Equal(t, int64(1), s.GetSessionID())
+	assert.Equal(t, "session-1", s.GetSessionID())
+	assert.Equal(t, "chat", s.GetAppID())
+	assert.Equal(t, "user-1", s.GetUserID())
 }
 
 func TestSQLite_DatabaseSessionService_CreateSession_Multiple(t *testing.T) {
@@ -34,15 +40,15 @@ func TestSQLite_DatabaseSessionService_CreateSession_Multiple(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s1, err := service.CreateSession(ctx, 1)
+	s1, err := service.CreateSession(ctx, newTestSessionRequest("session-1"))
 	assert.NoError(t, err)
 	assert.NotNil(t, s1)
-	assert.Equal(t, int64(1), s1.GetSessionID())
+	assert.Equal(t, "session-1", s1.GetSessionID())
 
-	s2, err := service.CreateSession(ctx, 2)
+	s2, err := service.CreateSession(ctx, newTestSessionRequest("session-2"))
 	assert.NoError(t, err)
 	assert.NotNil(t, s2)
-	assert.Equal(t, int64(2), s2.GetSessionID())
+	assert.Equal(t, "session-2", s2.GetSessionID())
 }
 
 func TestSQLite_DatabaseSessionService_GetSession(t *testing.T) {
@@ -53,13 +59,19 @@ func TestSQLite_DatabaseSessionService_GetSession(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	_, err = service.CreateSession(ctx, 1)
+	_, err = service.CreateSession(ctx, adksession.CreateSessionRequest{
+		SessionID: "session-1",
+		AppID:     "chat",
+		UserID:    "user-1",
+	})
 	assert.NoError(t, err)
 
-	s, err := service.GetSession(ctx, 1)
+	s, err := service.GetSession(ctx, "session-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
-	assert.Equal(t, int64(1), s.GetSessionID())
+	assert.Equal(t, "session-1", s.GetSessionID())
+	assert.Equal(t, "chat", s.GetAppID())
+	assert.Equal(t, "user-1", s.GetUserID())
 }
 
 func TestSQLite_DatabaseSessionService_GetSession_NotFound(t *testing.T) {
@@ -70,7 +82,7 @@ func TestSQLite_DatabaseSessionService_GetSession_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s, err := service.GetSession(ctx, 999)
+	s, err := service.GetSession(ctx, "missing")
 	assert.NoError(t, err)
 	assert.Nil(t, s)
 }
@@ -83,13 +95,13 @@ func TestSQLite_DatabaseSessionService_DeleteSession(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	_, err = service.CreateSession(ctx, 1)
+	_, err = service.CreateSession(ctx, newTestSessionRequest("session-1"))
 	assert.NoError(t, err)
 
-	err = service.DeleteSession(ctx, 1)
+	err = service.DeleteSession(ctx, "session-1")
 	assert.NoError(t, err)
 
-	s, err := service.GetSession(ctx, 1)
+	s, err := service.GetSession(ctx, "session-1")
 	assert.NoError(t, err)
 	assert.Nil(t, s)
 }
@@ -102,7 +114,7 @@ func TestSQLite_DatabaseSessionService_DeleteSession_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	err = service.DeleteSession(ctx, 999)
+	err = service.DeleteSession(ctx, "missing")
 	assert.NoError(t, err)
 }
 
@@ -114,46 +126,44 @@ func TestSQLite_DatabaseSessionService_FullWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s1, err := service.CreateSession(ctx, 1)
+	s1, err := service.CreateSession(ctx, newTestSessionRequest("session-1"))
 	assert.NoError(t, err)
 
-	s2, err := service.CreateSession(ctx, 2)
+	s2, err := service.CreateSession(ctx, newTestSessionRequest("session-2"))
 	assert.NoError(t, err)
 
-	gotS1, err := service.GetSession(ctx, 1)
+	gotS1, err := service.GetSession(ctx, "session-1")
 	assert.NoError(t, err)
 	assert.Equal(t, s1.GetSessionID(), gotS1.GetSessionID())
 
-	gotS2, err := service.GetSession(ctx, 2)
+	gotS2, err := service.GetSession(ctx, "session-2")
 	assert.NoError(t, err)
 	assert.Equal(t, s2.GetSessionID(), gotS2.GetSessionID())
 
-	err = service.DeleteSession(ctx, 1)
+	err = service.DeleteSession(ctx, "session-1")
 	assert.NoError(t, err)
 
-	gotS1AfterDelete, err := service.GetSession(ctx, 1)
+	gotS1AfterDelete, err := service.GetSession(ctx, "session-1")
 	assert.NoError(t, err)
 	assert.Nil(t, gotS1AfterDelete)
 
-	gotS2AfterDelete, err := service.GetSession(ctx, 2)
+	gotS2AfterDelete, err := service.GetSession(ctx, "session-2")
 	assert.NoError(t, err)
 	assert.NotNil(t, gotS2AfterDelete)
-	assert.Equal(t, int64(2), gotS2AfterDelete.GetSessionID())
+	assert.Equal(t, "session-2", gotS2AfterDelete.GetSessionID())
 }
 
-func TestSQLite_DatabaseSessionService_WithSnowflakeID(t *testing.T) {
+func TestSQLite_DatabaseSessionService_WithStringID(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-external-1"
 
 	service, err := NewDatabaseSessionService(db)
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s, err := service.CreateSession(ctx, sessionID)
+	s, err := service.CreateSession(ctx, newTestSessionRequest(sessionID))
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
 	assert.Equal(t, sessionID, s.GetSessionID())
@@ -192,20 +202,20 @@ func TestSQLite_DatabaseSessionService_WithTablePrefix(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s, err := service.CreateSession(ctx, 1)
+	s, err := service.CreateSession(ctx, newTestSessionRequest("session-1"))
 	require.NoError(t, err)
 	require.NotNil(t, s)
-	assert.Equal(t, int64(1), s.GetSessionID())
+	assert.Equal(t, "session-1", s.GetSessionID())
 
-	got, err := service.GetSession(ctx, 1)
+	got, err := service.GetSession(ctx, "session-1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, int64(1), got.GetSessionID())
+	assert.Equal(t, "session-1", got.GetSessionID())
 
-	err = service.DeleteSession(ctx, 1)
+	err = service.DeleteSession(ctx, "session-1")
 	assert.NoError(t, err)
 
-	gotAfterDelete, err := service.GetSession(ctx, 1)
+	gotAfterDelete, err := service.GetSession(ctx, "session-1")
 	assert.NoError(t, err)
 	assert.Nil(t, gotAfterDelete)
 }
@@ -223,9 +233,9 @@ func TestSQLite_DatabaseSessionService_WithSessionsTable(t *testing.T) {
 	require.NoError(t, err)
 	ctx := t.Context()
 
-	s, err := service.CreateSession(ctx, 42)
+	s, err := service.CreateSession(ctx, newTestSessionRequest("session-42"))
 	require.NoError(t, err)
-	assert.Equal(t, int64(42), s.GetSessionID())
+	assert.Equal(t, "session-42", s.GetSessionID())
 }
 
 func TestSQLite_DatabaseSessionService_InvalidTableName(t *testing.T) {

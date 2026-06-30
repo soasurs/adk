@@ -229,7 +229,7 @@ type Event struct {
 	// event has not been persisted yet.
 	ID int64
 	// SessionID identifies the session that owns this event when persisted.
-	SessionID int64
+	SessionID string
 	// Author identifies the producer of the event, for example "user" or an
 	// agent name. It is display metadata and is not forwarded to the LLM.
 	Author string

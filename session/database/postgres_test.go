@@ -61,9 +61,9 @@ func newPostgresFixture(t *testing.T) *postgresFixture {
 	return f
 }
 
-func (f *postgresFixture) createSession(t *testing.T, sessionID int64) session.Session {
+func (f *postgresFixture) createSession(t *testing.T, sessionID string) session.Session {
 	t.Helper()
-	sess, err := f.service.CreateSession(t.Context(), sessionID)
+	sess, err := f.service.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: sessionID})
 	require.NoError(t, err)
 	return sess
 }
@@ -101,7 +101,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 		assert.Equal(t, []int{1}, versions)
 	})
 
-	t.Run("creates bigint columns", func(t *testing.T) {
+	t.Run("creates expected column types", func(t *testing.T) {
 		f := newPostgresFixture(t)
 
 		var rows []struct {
@@ -127,7 +127,6 @@ func TestPostgres_InitSchema(t *testing.T) {
 		}
 		for _, name := range []string{
 			"event_id",
-			"session_id",
 			"prompt_tokens",
 			"completion_tokens",
 			"total_tokens",
@@ -138,6 +137,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 		} {
 			assert.Equal(t, "bigint", columns[name], name)
 		}
+		assert.Equal(t, "text", columns["session_id"])
 	})
 
 	t.Run("supports custom table names", func(t *testing.T) {
@@ -160,65 +160,71 @@ func TestPostgres_InitSchema(t *testing.T) {
 		require.NoError(t, InitSchema(t.Context(), db, opts...))
 		service, err := NewDatabaseSessionService(db, opts...)
 		require.NoError(t, err)
-		_, err = service.CreateSession(t.Context(), 1)
+		_, err = service.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: "session-1"})
 		require.NoError(t, err)
 	})
 }
 
 func TestPostgres_DatabaseSessionService_CreateSession(t *testing.T) {
-	t.Run("creates and returns a 64 bit session id", func(t *testing.T) {
+	t.Run("creates and returns an application-provided session id", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		const sessionID = int64(5_000_000_000)
+		const sessionID = "external-session-1"
 
-		sess, err := f.service.CreateSession(t.Context(), sessionID)
+		sess, err := f.service.CreateSession(t.Context(), session.CreateSessionRequest{
+			SessionID: sessionID,
+			AppID:     "chat",
+			UserID:    "user-1",
+		})
 		require.NoError(t, err)
 		assert.Equal(t, sessionID, sess.GetSessionID())
+		assert.Equal(t, "chat", sess.GetAppID())
+		assert.Equal(t, "user-1", sess.GetUserID())
 	})
 
 	t.Run("rejects a duplicate session id", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		_, err := f.service.CreateSession(t.Context(), 1)
+		_, err := f.service.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: "session-1"})
 		require.NoError(t, err)
 
-		_, err = f.service.CreateSession(t.Context(), 1)
+		_, err = f.service.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: "session-1"})
 		assert.Error(t, err)
 	})
 
 	t.Run("creates independent sessions", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		first := f.createSession(t, 1)
-		second := f.createSession(t, 2)
+		first := f.createSession(t, "session-1")
+		second := f.createSession(t, "session-2")
 
-		assert.Equal(t, int64(1), first.GetSessionID())
-		assert.Equal(t, int64(2), second.GetSessionID())
+		assert.Equal(t, "session-1", first.GetSessionID())
+		assert.Equal(t, "session-2", second.GetSessionID())
 	})
 }
 
 func TestPostgres_DatabaseSessionService_GetSession(t *testing.T) {
 	t.Run("returns an existing session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		f.createSession(t, 1)
+		f.createSession(t, "session-1")
 
-		sess, err := f.service.GetSession(t.Context(), 1)
+		sess, err := f.service.GetSession(t.Context(), "session-1")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
-		assert.Equal(t, int64(1), sess.GetSessionID())
+		assert.Equal(t, "session-1", sess.GetSessionID())
 	})
 
 	t.Run("returns nil for a missing session", func(t *testing.T) {
 		f := newPostgresFixture(t)
 
-		sess, err := f.service.GetSession(t.Context(), 999)
+		sess, err := f.service.GetSession(t.Context(), "missing")
 		require.NoError(t, err)
 		assert.Nil(t, sess)
 	})
 
 	t.Run("returns nil for a deleted session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		f.createSession(t, 1)
-		require.NoError(t, f.service.DeleteSession(t.Context(), 1))
+		f.createSession(t, "session-1")
+		require.NoError(t, f.service.DeleteSession(t.Context(), "session-1"))
 
-		sess, err := f.service.GetSession(t.Context(), 1)
+		sess, err := f.service.GetSession(t.Context(), "session-1")
 		require.NoError(t, err)
 		assert.Nil(t, sess)
 	})
@@ -227,16 +233,16 @@ func TestPostgres_DatabaseSessionService_GetSession(t *testing.T) {
 func TestPostgres_DatabaseSessionService_DeleteSession(t *testing.T) {
 	t.Run("soft deletes an existing session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		f.createSession(t, 1)
+		f.createSession(t, "session-1")
 
-		require.NoError(t, f.service.DeleteSession(t.Context(), 1))
+		require.NoError(t, f.service.DeleteSession(t.Context(), "session-1"))
 
 		var deletedAt int64
 		err := f.db.GetContext(
 			t.Context(),
 			&deletedAt,
 			"SELECT deleted_at FROM "+f.prefix+"sessions WHERE session_id = $1",
-			1,
+			"session-1",
 		)
 		require.NoError(t, err)
 		assert.Positive(t, deletedAt)
@@ -244,27 +250,27 @@ func TestPostgres_DatabaseSessionService_DeleteSession(t *testing.T) {
 
 	t.Run("is a no-op for a missing session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		assert.NoError(t, f.service.DeleteSession(t.Context(), 999))
+		assert.NoError(t, f.service.DeleteSession(t.Context(), "missing"))
 	})
 
 	t.Run("does not delete another session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		f.createSession(t, 1)
-		f.createSession(t, 2)
+		f.createSession(t, "session-1")
+		f.createSession(t, "session-2")
 
-		require.NoError(t, f.service.DeleteSession(t.Context(), 1))
+		require.NoError(t, f.service.DeleteSession(t.Context(), "session-1"))
 
-		sess, err := f.service.GetSession(t.Context(), 2)
+		sess, err := f.service.GetSession(t.Context(), "session-2")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
-		assert.Equal(t, int64(2), sess.GetSessionID())
+		assert.Equal(t, "session-2", sess.GetSessionID())
 	})
 }
 
 func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 	t.Run("round trips every persisted field", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		ev := &event.Event{
 			EventID: 5_000_000_001,
 			Author:  "researcher",
@@ -301,7 +307,7 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 		require.Len(t, events, 1)
 
 		got := events[0]
-		assert.Equal(t, int64(1), got.SessionID)
+		assert.Equal(t, "session-1", got.SessionID)
 		assert.Equal(t, ev.EventID, got.EventID)
 		assert.Equal(t, ev.Author, got.Author)
 		assert.Equal(t, ev.Role, got.Role)
@@ -319,7 +325,7 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 
 	t.Run("rejects a duplicate event id", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 
 		err := sess.CreateEvent(t.Context(), postgresEvent(1, "duplicate"))
@@ -328,19 +334,19 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 
 	t.Run("assigns the owning session id", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 42)
+		sess := f.createSession(t, "session-42")
 		ev := postgresEvent(1, "event")
-		ev.SessionID = 999
+		ev.SessionID = "wrong-session"
 
 		require.NoError(t, sess.CreateEvent(t.Context(), ev))
-		assert.Equal(t, int64(42), ev.SessionID)
+		assert.Equal(t, "session-42", ev.SessionID)
 	})
 }
 
 func TestPostgres_DatabaseSession_DeleteEvent(t *testing.T) {
 	t.Run("hides the deleted event", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
 
@@ -352,7 +358,7 @@ func TestPostgres_DatabaseSession_DeleteEvent(t *testing.T) {
 
 	t.Run("sets deleted_at instead of removing the row", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "event")))
 
 		require.NoError(t, sess.DeleteEvent(t.Context(), 1))
@@ -370,7 +376,7 @@ func TestPostgres_DatabaseSession_DeleteEvent(t *testing.T) {
 
 	t.Run("is a no-op for a missing event", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		assert.NoError(t, sess.DeleteEvent(t.Context(), 999))
 	})
 }
@@ -378,7 +384,7 @@ func TestPostgres_DatabaseSession_DeleteEvent(t *testing.T) {
 func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 	t.Run("applies limit and offset", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		for id := int64(1); id <= 6; id++ {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
@@ -406,7 +412,7 @@ func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 
 	t.Run("uses event id to break timestamp ties", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		for _, id := range []int64{3, 1, 2} {
 			ev := postgresEvent(id, "event")
 			ev.CreatedAt = 1000
@@ -420,7 +426,7 @@ func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 
 	t.Run("excludes deleted and compacted events", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		for id := int64(1); id <= 4; id++ {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
@@ -434,8 +440,8 @@ func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 
 	t.Run("isolates sessions", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		first := f.createSession(t, 1)
-		second := f.createSession(t, 2)
+		first := f.createSession(t, "session-1")
+		second := f.createSession(t, "session-2")
 		require.NoError(t, first.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, second.CreateEvent(t.Context(), postgresEvent(2, "second")))
 
@@ -451,7 +457,7 @@ func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 func TestPostgres_DatabaseSession_ListEvents(t *testing.T) {
 	t.Run("returns every active event", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		for id := int64(1); id <= 5; id++ {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
@@ -463,7 +469,7 @@ func TestPostgres_DatabaseSession_ListEvents(t *testing.T) {
 
 	t.Run("returns an empty slice for an empty session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 
 		events, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
@@ -475,7 +481,7 @@ func TestPostgres_DatabaseSession_ListEvents(t *testing.T) {
 func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 	t.Run("archives events before the split point", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		for id := int64(1); id <= 4; id++ {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
@@ -493,7 +499,7 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 
 	t.Run("archives all events when split id is zero", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
 
@@ -506,7 +512,7 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 
 	t.Run("inserts a summary into an empty session", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 
 		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(10, "summary")))
 
@@ -517,7 +523,7 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 
 	t.Run("supports repeated compaction", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(10, "summary one")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
@@ -530,7 +536,7 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 
 	t.Run("rolls back archival when summary insertion fails", func(t *testing.T) {
 		f := newPostgresFixture(t)
-		sess := f.createSession(t, 1)
+		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
 

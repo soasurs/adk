@@ -6,8 +6,15 @@ import (
 	"github.com/soasurs/adk/session/event"
 )
 
+// Session stores the durable event ledger and ownership metadata for one
+// conversation thread.
 type Session interface {
-	GetSessionID() int64
+	// GetSessionID returns the application-provided session identifier.
+	GetSessionID() string
+	// GetAppID returns the application or tenant that owns the session.
+	GetAppID() string
+	// GetUserID returns the end user that owns the session.
+	GetUserID() string
 	CreateEvent(ctx context.Context, event *event.Event) error
 	// GetEvents returns a paginated slice of active (non-compacted, non-deleted) events
 	// sorted by created_at ASC.

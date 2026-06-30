@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/soasurs/adk/internal/snowflake"
 	"github.com/soasurs/adk/model"
+	adksession "github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/event"
 )
 
@@ -35,16 +35,18 @@ func newTestEvent(id int64, content string) *event.Event {
 	}
 }
 
+func newTestSessionRequest(sessionID string) adksession.CreateSessionRequest {
+	return adksession.CreateSessionRequest{SessionID: sessionID}
+}
+
 func TestSQLite_DatabaseSession_CreateEvent(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 	require.NotNil(t, session)
 
@@ -62,12 +64,10 @@ func TestSQLite_DatabaseSession_DeleteEvent(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	ev1 := newTestEvent(1, "hello")
@@ -94,12 +94,10 @@ func TestSQLite_DatabaseSession_GetEvents(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	for i := int64(1); i <= 10; i++ {
@@ -139,7 +137,7 @@ func TestSQLite_DatabaseSession_GetEvents_StableOrder(t *testing.T) {
 	defer db.Close()
 
 	ctx := t.Context()
-	sess, err := NewDatabaseSession(ctx, db, 1)
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
 	require.NoError(t, err)
 
 	const createdAt = int64(1234)
@@ -164,7 +162,7 @@ func TestSQLite_DatabaseSession_ToolCallThoughtSignature_RoundTrip(t *testing.T)
 	defer db.Close()
 
 	ctx := t.Context()
-	sess, err := NewDatabaseSession(ctx, db, 1)
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
 	require.NoError(t, err)
 
 	ev := newTestEvent(1, "")
@@ -190,12 +188,10 @@ func TestSQLite_DatabaseSession_CompactEvents(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	ev1 := newTestEvent(1, "hello")
@@ -229,12 +225,10 @@ func TestSQLite_DatabaseSession_CompactEvents_ArchiveAll(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	require.NoError(t, session.CreateEvent(ctx, newTestEvent(1, "hello")))
@@ -256,12 +250,10 @@ func TestSQLite_DatabaseSession_CompactEvents_Empty(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	summaryEvent := newTestEvent(100, "summary")
@@ -281,12 +273,10 @@ func TestSQLite_DatabaseSession_ListEvents(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	for i := int64(1); i <= 5; i++ {
@@ -303,9 +293,9 @@ func TestSQLite_DatabaseSession_IsolatesEventsBySession(t *testing.T) {
 	defer db.Close()
 
 	ctx := t.Context()
-	s1, err := NewDatabaseSession(ctx, db, 1)
+	s1, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
 	require.NoError(t, err)
-	s2, err := NewDatabaseSession(ctx, db, 2)
+	s2, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-2"))
 	require.NoError(t, err)
 
 	require.NoError(t, s1.CreateEvent(ctx, newTestEvent(1, "session one")))
@@ -314,13 +304,13 @@ func TestSQLite_DatabaseSession_IsolatesEventsBySession(t *testing.T) {
 	evs1, err := s1.ListEvents(ctx)
 	require.NoError(t, err)
 	require.Len(t, evs1, 1)
-	assert.Equal(t, int64(1), evs1[0].SessionID)
+	assert.Equal(t, "session-1", evs1[0].SessionID)
 	assert.Equal(t, "session one", evs1[0].Content)
 
 	evs2, err := s2.ListEvents(ctx)
 	require.NoError(t, err)
 	require.Len(t, evs2, 1)
-	assert.Equal(t, int64(2), evs2[0].SessionID)
+	assert.Equal(t, "session-2", evs2[0].SessionID)
 	assert.Equal(t, "session two", evs2[0].Content)
 }
 
@@ -328,12 +318,10 @@ func TestSQLite_DatabaseSession_CompactEvents_MultipleRounds(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	sess, err := NewDatabaseSession(ctx, db, sessionID)
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	require.NoError(t, sess.CreateEvent(ctx, newTestEvent(1, "a")))
@@ -360,15 +348,29 @@ func TestSQLite_DatabaseSession_GetSessionID(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	session, err := NewDatabaseSession(ctx, db, sessionID)
+	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	assert.Equal(t, sessionID, session.GetSessionID())
+}
+
+func TestSQLite_DatabaseSession_GetAppAndUserID(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	session, err := NewDatabaseSession(ctx, db, adksession.CreateSessionRequest{
+		SessionID: "session-1",
+		AppID:     "chat",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "chat", session.GetAppID())
+	assert.Equal(t, "user-1", session.GetUserID())
 }
 
 // TestSQLite_DatabaseSession_Parts_RoundTrip verifies that ContentParts are written to the
@@ -377,12 +379,10 @@ func TestSQLite_DatabaseSession_Parts_RoundTrip(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
-	snowflaker, err := snowflake.New()
-	require.NoError(t, err)
-	sessionID := snowflaker.Generate().Int64()
+	sessionID := "session-1"
 
 	ctx := t.Context()
-	sess, err := NewDatabaseSession(ctx, db, sessionID)
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
 	parts := event.Parts{

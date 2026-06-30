@@ -16,17 +16,17 @@ type entry struct {
 // sessions to proceed independently.
 type Locker struct {
 	mu      sync.Mutex
-	entries map[int64]*entry
+	entries map[string]*entry
 }
 
 // New creates an empty keyed Locker.
 func New() *Locker {
-	return &Locker{entries: make(map[int64]*entry)}
+	return &Locker{entries: make(map[string]*entry)}
 }
 
 // Lock acquires the lock for key. Waiting stops when ctx is canceled.
 // The returned unlock function is safe to call more than once.
-func (l *Locker) Lock(ctx context.Context, key int64) (func(), error) {
+func (l *Locker) Lock(ctx context.Context, key string) (func(), error) {
 	l.mu.Lock()
 	e := l.entries[key]
 	if e == nil {
@@ -64,7 +64,7 @@ func (l *Locker) Lock(ctx context.Context, key int64) (func(), error) {
 	}, nil
 }
 
-func (l *Locker) releaseRef(key int64, e *entry) {
+func (l *Locker) releaseRef(key string, e *entry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e.refs--

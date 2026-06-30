@@ -68,7 +68,7 @@ func errorAgent(err error) *mockAgent {
 }
 
 // collectRun drains all complete events from runner.Run into a message slice.
-func collectRun(t *testing.T, r *Runner, sessionID int64, input model.Content) ([]model.Content, error) {
+func collectRun(t *testing.T, r *Runner, sessionID string, input model.Content) ([]model.Content, error) {
 	t.Helper()
 	var msgs []model.Content
 	for event, err := range r.Run(t.Context(), sessionID, input) {
@@ -87,12 +87,16 @@ func collectRun(t *testing.T, r *Runner, sessionID int64, input model.Content) (
 // ---------------------------------------------------------------------------
 
 // newRunnerWithSession creates a Runner backed by an in-memory session service
-// and pre-creates a session for sessionID 1.
-func newRunnerWithSession(t *testing.T, a *mockAgent) (*Runner, int64) {
+// and pre-creates a session.
+func newRunnerWithSession(t *testing.T, a *mockAgent) (*Runner, string) {
 	t.Helper()
-	const sessionID = int64(1)
+	const sessionID = "session-1"
 	svc := memorysession.NewMemorySessionService()
-	_, err := svc.CreateSession(t.Context(), sessionID)
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{
+		SessionID: sessionID,
+		AppID:     "runner-test",
+		UserID:    "user-1",
+	})
 	require.NoError(t, err)
 
 	r, err := New(a, svc)
@@ -216,7 +220,7 @@ func TestRunner_Run_MessagesPersistedToSession(t *testing.T) {
 func TestRunner_Run_GetSessionError(t *testing.T) {
 	a := staticAgent()
 
-	// Create a runner with a session service that has no session for ID 999.
+	// Create a runner with a session service that has no session.
 	svc := memorysession.NewMemorySessionService()
 	r, err := New(a, svc)
 	require.NoError(t, err)
@@ -226,7 +230,7 @@ func TestRunner_Run_GetSessionError(t *testing.T) {
 	errSvc := &errSessionService{err: errors.New("db unavailable")}
 	r.session = errSvc
 
-	msgs, runErr := collectRun(t, r, 1, model.Content{Content: "hello"})
+	msgs, runErr := collectRun(t, r, "session-1", model.Content{Content: "hello"})
 	assert.Error(t, runErr)
 	assert.Empty(t, msgs)
 }
@@ -365,18 +369,20 @@ type errSessionService struct {
 	err error
 }
 
-func (e *errSessionService) CreateSession(_ context.Context, _ int64) (session.Session, error) {
+func (e *errSessionService) CreateSession(_ context.Context, _ session.CreateSessionRequest) (session.Session, error) {
 	return nil, e.err
 }
-func (e *errSessionService) DeleteSession(_ context.Context, _ int64) error { return e.err }
-func (e *errSessionService) GetSession(_ context.Context, _ int64) (session.Session, error) {
+func (e *errSessionService) DeleteSession(_ context.Context, _ string) error { return e.err }
+func (e *errSessionService) GetSession(_ context.Context, _ string) (session.Session, error) {
 	return nil, e.err
 }
 
 // errSession satisfies session.Session for errSessionService (never actually used).
 type errSession struct{}
 
-func (s *errSession) GetSessionID() int64 { return 0 }
+func (s *errSession) GetSessionID() string { return "" }
+func (s *errSession) GetAppID() string     { return "" }
+func (s *errSession) GetUserID() string    { return "" }
 func (s *errSession) CreateEvent(_ context.Context, _ *event.Event) error {
 	return errors.New("errSession")
 }
@@ -417,9 +423,9 @@ func TestRunner_Run_WithCompaction(t *testing.T) {
 		},
 	}
 
-	const sessionID = int64(42)
+	const sessionID = "session-42"
 	svc := memorysession.NewMemorySessionService()
-	_, err := svc.CreateSession(t.Context(), sessionID)
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: sessionID})
 	require.NoError(t, err)
 
 	r, err := New(agentWithUsage, svc)
@@ -479,12 +485,12 @@ func TestRunner_Run_SessionNotFound(t *testing.T) {
 	r, err := New(a, svc)
 	require.NoError(t, err)
 
-	msgs, runErr := collectRun(t, r, 999, model.Content{Content: "hello"})
+	msgs, runErr := collectRun(t, r, "missing", model.Content{Content: "hello"})
 	assert.Error(t, runErr)
 	assert.ErrorIs(t, runErr, ErrSessionNotFound)
 	var notFoundErr *SessionNotFoundError
 	require.True(t, errors.As(runErr, &notFoundErr))
-	assert.Equal(t, int64(999), notFoundErr.SessionID)
+	assert.Equal(t, "missing", notFoundErr.SessionID)
 	assert.Contains(t, runErr.Error(), "not found")
 	assert.Empty(t, msgs)
 }
@@ -509,9 +515,9 @@ func TestRunner_Run_SameSessionSerializesTurns(t *testing.T) {
 		},
 	}
 
-	const sessionID = int64(1)
+	const sessionID = "session-1"
 	svc := memorysession.NewMemorySessionService()
-	_, err := svc.CreateSession(t.Context(), sessionID)
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: sessionID})
 	require.NoError(t, err)
 	r, err := New(a, svc)
 	require.NoError(t, err)

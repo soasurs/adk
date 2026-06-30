@@ -27,11 +27,13 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 		createSession: `
 			INSERT INTO ` + sessionsTable + ` (
 				session_id,
+				app_id,
+				user_id,
 				created_at,
 				updated_at,
 				deleted_at
 			)
-			VALUES ($1, $2, $3, $4)
+			VALUES ($1, $2, $3, $4, $5, $6)
 		`,
 		getSession: `
 			SELECT *
@@ -151,7 +153,9 @@ func migrationV1SQL(t migrationTables) []string {
 	return []string{
 		`
 			CREATE TABLE IF NOT EXISTS ` + t.sessions + ` (
-				session_id BIGINT PRIMARY KEY,
+				session_id TEXT PRIMARY KEY,
+				app_id     TEXT   NOT NULL DEFAULT '',
+				user_id    TEXT   NOT NULL DEFAULT '',
 				created_at BIGINT NOT NULL,
 				updated_at BIGINT NOT NULL,
 				deleted_at BIGINT NOT NULL
@@ -160,7 +164,7 @@ func migrationV1SQL(t migrationTables) []string {
 		`
 			CREATE TABLE IF NOT EXISTS ` + t.events + ` (
 				event_id          BIGINT PRIMARY KEY,
-				session_id        BIGINT NOT NULL,
+				session_id        TEXT   NOT NULL,
 				author            TEXT    NOT NULL DEFAULT '',
 				role              TEXT    NOT NULL DEFAULT '',
 				text              TEXT    NOT NULL DEFAULT '',

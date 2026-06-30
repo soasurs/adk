@@ -65,6 +65,7 @@ import (
     "github.com/soasurs/adk/model"
     "github.com/soasurs/adk/model/openai"
     "github.com/soasurs/adk/runner"
+    "github.com/soasurs/adk/session"
     "github.com/soasurs/adk/session/memory"
 )
 
@@ -81,8 +82,12 @@ func main() {
     })
 
     sessions := memory.NewMemorySessionService()
-    const sessionID = int64(1)
-    _, _ = sessions.CreateSession(ctx, sessionID)
+    const sessionID = "session-1"
+    _, _ = sessions.CreateSession(ctx, session.CreateSessionRequest{
+        SessionID: sessionID,
+        AppID:     "quickstart",
+        UserID:    "user-1",
+    })
 
     r, err := runner.New(agent, sessions)
     if err != nil {
@@ -129,7 +134,7 @@ content := model.Content{
 ```go
 type Event struct {
     ID           int64
-    SessionID    int64
+    SessionID    string
     Author       string
     Content      model.Content
     FinishReason model.FinishReason
@@ -170,6 +175,17 @@ type LLM interface {
 
 ```go
 svc := memory.NewMemorySessionService()
+```
+
+创建 session 时需要传入应用侧提供的 `SessionID`，以及应用和用户归属信息：
+
+```go
+sessionID := "session-123"
+sess, err := svc.CreateSession(ctx, session.CreateSessionRequest{
+    SessionID: sessionID,
+    AppID:     "my-app",
+    UserID:    "user-123",
+})
 ```
 
 需要持久化时可以使用 database 后端。它接收应用自己持有的 `*sqlx.DB`；

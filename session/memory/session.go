@@ -13,19 +13,31 @@ import (
 
 type memorySession struct {
 	mu        sync.RWMutex
-	sessionID int64
+	sessionID string
+	appID     string
+	userID    string
 	events    []*event.Event // all events: active (compacted_at=0, deleted_at=0) + archived
 }
 
-func NewMemorySession(sessionID int64) session.Session {
+func NewMemorySession(req session.CreateSessionRequest) session.Session {
 	return &memorySession{
-		sessionID: sessionID,
+		sessionID: req.SessionID,
+		appID:     req.AppID,
+		userID:    req.UserID,
 		events:    make([]*event.Event, 0),
 	}
 }
 
-func (s *memorySession) GetSessionID() int64 {
+func (s *memorySession) GetSessionID() string {
 	return s.sessionID
+}
+
+func (s *memorySession) GetAppID() string {
+	return s.appID
+}
+
+func (s *memorySession) GetUserID() string {
+	return s.userID
 }
 
 func (s *memorySession) CreateEvent(ctx context.Context, ev *event.Event) error {

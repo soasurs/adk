@@ -83,7 +83,7 @@ func (tl *ToolCalls) Scan(src any) error {
 // Event represents a persisted conversation event.
 type Event struct {
 	EventID          int64     `json:"event_id" db:"event_id"`
-	SessionID        int64     `json:"session_id" db:"session_id"`
+	SessionID        string    `json:"session_id" db:"session_id"`
 	Author           string    `json:"author" db:"author"`
 	Role             string    `json:"role" db:"role"`
 	Content          string    `json:"content" db:"text"`

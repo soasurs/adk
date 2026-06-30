@@ -13,7 +13,9 @@ import (
 type databaseSession struct {
 	db        *sqlx.DB `json:"-"`
 	q         *queries `json:"-"`
-	SessionID int64    `json:"session_id" db:"session_id"`
+	SessionID string   `json:"session_id" db:"session_id"`
+	AppID     string   `json:"app_id" db:"app_id"`
+	UserID    string   `json:"user_id" db:"user_id"`
 	CreatedAt int64    `json:"created_at" db:"created_at"`
 	UpdatedAt int64    `json:"updated_at" db:"updated_at"`
 	DeletedAt int64    `json:"deleted_at" db:"deleted_at"`
@@ -25,22 +27,38 @@ type databaseSession struct {
 // names via Option functions and integrates with InitSchema. NewDatabaseSession
 // is retained for simple single-tenant use cases where the default table names
 // are acceptable.
-func NewDatabaseSession(ctx context.Context, db *sqlx.DB, sessionID int64) (session.Session, error) {
-	return newDatabaseSession(ctx, db, sessionID, defaultQueries)
+func NewDatabaseSession(ctx context.Context, db *sqlx.DB, req session.CreateSessionRequest) (session.Session, error) {
+	return newDatabaseSession(ctx, db, req, defaultQueries)
 }
 
-func newDatabaseSession(ctx context.Context, db *sqlx.DB, sessionID int64, q *queries) (session.Session, error) {
-	s := &databaseSession{db: db, q: q, SessionID: sessionID, CreatedAt: time.Now().UnixMilli()}
-	_, err := db.ExecContext(ctx, q.createSession, s.SessionID, s.CreatedAt, s.UpdatedAt, s.DeletedAt)
+func newDatabaseSession(ctx context.Context, db *sqlx.DB, req session.CreateSessionRequest, q *queries) (session.Session, error) {
+	s := &databaseSession{
+		db:        db,
+		q:         q,
+		SessionID: req.SessionID,
+		AppID:     req.AppID,
+		UserID:    req.UserID,
+		CreatedAt: time.Now().UnixMilli(),
+	}
+	_, err := db.ExecContext(ctx, q.createSession, s.SessionID, s.AppID, s.UserID, s.CreatedAt, s.UpdatedAt, s.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *databaseSession) GetSessionID() int64 {
+func (s *databaseSession) GetSessionID() string {
 	return s.SessionID
 }
+
+func (s *databaseSession) GetAppID() string {
+	return s.AppID
+}
+
+func (s *databaseSession) GetUserID() string {
+	return s.UserID
+}
+
 func (s *databaseSession) CreateEvent(ctx context.Context, ev *event.Event) error {
 	ev.SessionID = s.SessionID
 	_, err := s.db.ExecContext(

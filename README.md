@@ -68,6 +68,7 @@ import (
     "github.com/soasurs/adk/model"
     "github.com/soasurs/adk/model/openai"
     "github.com/soasurs/adk/runner"
+    "github.com/soasurs/adk/session"
     "github.com/soasurs/adk/session/memory"
 )
 
@@ -84,8 +85,12 @@ func main() {
     })
 
     sessions := memory.NewMemorySessionService()
-    const sessionID = int64(1)
-    _, _ = sessions.CreateSession(ctx, sessionID)
+    const sessionID = "session-1"
+    _, _ = sessions.CreateSession(ctx, session.CreateSessionRequest{
+        SessionID: sessionID,
+        AppID:     "quickstart",
+        UserID:    "user-1",
+    })
 
     r, err := runner.New(agent, sessions)
     if err != nil {
@@ -134,7 +139,7 @@ display and are not persisted by `Runner`.
 ```go
 type Event struct {
     ID           int64
-    SessionID    int64
+    SessionID    string
     Author       string
     Content      model.Content
     FinishReason model.FinishReason
@@ -176,6 +181,18 @@ Use memory for tests and ephemeral runs:
 
 ```go
 svc := memory.NewMemorySessionService()
+```
+
+Sessions are created with an application-provided `SessionID` plus application
+and user ownership metadata:
+
+```go
+sessionID := "session-123"
+sess, err := svc.CreateSession(ctx, session.CreateSessionRequest{
+    SessionID: sessionID,
+    AppID:     "my-app",
+    UserID:    "user-123",
+})
 ```
 
 Use the database backend for durable sessions. It accepts an application-owned

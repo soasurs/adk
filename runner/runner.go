@@ -45,7 +45,7 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 //
 // userInput must contain the user's input content (via Text or Parts).
 // Its Role is always set to RoleUser by the runner.
-func (r *Runner) Run(ctx context.Context, sessionID int64, userInput model.Content) iter.Seq2[*model.Event, error] {
+func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Content) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
 		if locker, ok := r.session.(session.RunLocker); ok {
 			unlock, err := locker.LockSession(ctx, sessionID)
