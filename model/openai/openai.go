@@ -20,8 +20,62 @@ import (
 // ChatCompletion implements model.LLM using the OpenAI Chat Completions API.
 type ChatCompletion struct {
 	client    goopenai.Client
+	baseURL   string
 	modelName string
 	retryCfg  retry.Config
+	provider  providerOptions
+}
+
+type providerOptions struct {
+	thinkingParam                    thinkingParam
+	includeAssistantReasoningContent bool
+	explicit                         bool
+}
+
+type thinkingParam int
+
+const (
+	thinkingParamEnableThinking thinkingParam = iota
+	thinkingParamDeepSeek
+)
+
+func detectProviderOptions(baseURL, modelName string) providerOptions {
+	if isDeepSeekCompatible(baseURL, modelName) {
+		return deepSeekProviderOptions()
+	}
+	return providerOptions{thinkingParam: thinkingParamEnableThinking}
+}
+
+func deepSeekProviderOptions() providerOptions {
+	return providerOptions{
+		thinkingParam:                    thinkingParamDeepSeek,
+		includeAssistantReasoningContent: true,
+	}
+}
+
+func isDeepSeekCompatible(baseURL, modelName string) bool {
+	baseURL = strings.ToLower(baseURL)
+	modelName = strings.ToLower(modelName)
+	return strings.Contains(baseURL, "deepseek") || strings.HasPrefix(modelName, "deepseek-")
+}
+
+// Option configures a ChatCompletion instance.
+type Option func(*ChatCompletion)
+
+// WithDeepSeekCompatibility configures ChatCompletion for DeepSeek's
+// OpenAI-compatible Chat Completions API.
+func WithDeepSeekCompatibility() Option {
+	return func(c *ChatCompletion) {
+		c.provider = deepSeekProviderOptions()
+		c.provider.explicit = true
+	}
+}
+
+// WithRetryConfig sets the retry behavior for transient API errors.
+func WithRetryConfig(cfg retry.Config) Option {
+	return func(c *ChatCompletion) {
+		c.retryCfg = cfg
+	}
 }
 
 // New creates a new ChatCompletion instance.
@@ -30,20 +84,37 @@ type ChatCompletion struct {
 // retryCfg is optional; when provided it enables automatic retry with
 // exponential backoff on transient errors (rate limits, 5xx, network issues).
 func New(apiKey, baseURL, modelName string, retryCfg ...retry.Config) *ChatCompletion {
+	c := newChatCompletion(apiKey, baseURL, modelName)
+	if len(retryCfg) > 0 {
+		c.retryCfg = retryCfg[0]
+	}
+	return c
+}
+
+// NewWithOptions creates a new ChatCompletion instance with explicit provider
+// compatibility and retry options.
+func NewWithOptions(apiKey, baseURL, modelName string, opts ...Option) *ChatCompletion {
+	c := newChatCompletion(apiKey, baseURL, modelName)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+	return c
+}
+
+func newChatCompletion(apiKey, baseURL, modelName string) *ChatCompletion {
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	cc := &ChatCompletion{
+	return &ChatCompletion{
 		client:    goopenai.NewClient(opts...),
+		baseURL:   baseURL,
 		modelName: modelName,
+		retryCfg:  retry.DefaultConfig(),
+		provider:  detectProviderOptions(baseURL, modelName),
 	}
-	if len(retryCfg) > 0 {
-		cc.retryCfg = retryCfg[0]
-	} else {
-		cc.retryCfg = retry.DefaultConfig()
-	}
-	return cc
 }
 
 // Name returns the model identifier.
@@ -59,7 +130,9 @@ func (c *ChatCompletion) Name() string {
 // provided at construction time.
 func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg *model.GenerateConfig, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, err := convertMessages(req.Contents)
+		provider := c.providerOptions(req.Model)
+
+		messages, err := convertMessagesWithOptions(req.Contents, provider)
 		if err != nil {
 			yield(nil, fmt.Errorf("openai: convert messages: %w", err))
 			return
@@ -85,7 +158,7 @@ func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequ
 
 		var reqOpts []option.RequestOption
 		if cfg != nil {
-			applyConfig(&params, cfg, &reqOpts)
+			applyConfigWithOptions(&params, cfg, &reqOpts, provider)
 		}
 
 		for resp, err := range retry.Seq2(ctx, c.retryCfg,
@@ -99,6 +172,13 @@ func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequ
 			}
 		}
 	}
+}
+
+func (c *ChatCompletion) providerOptions(modelName string) providerOptions {
+	if c.provider.explicit {
+		return c.provider
+	}
+	return detectProviderOptions(c.baseURL, modelName)
 }
 
 // callAPI performs a single (non-retried) call to the OpenAI API and returns
@@ -245,9 +325,13 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 
 // convertMessages maps model.Content slice to openai ChatCompletionMessageParamUnion slice.
 func convertMessages(msgs []model.Content) ([]goopenai.ChatCompletionMessageParamUnion, error) {
+	return convertMessagesWithOptions(msgs, providerOptions{})
+}
+
+func convertMessagesWithOptions(msgs []model.Content, opts providerOptions) ([]goopenai.ChatCompletionMessageParamUnion, error) {
 	result := make([]goopenai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
-		p, err := convertMessage(m)
+		p, err := convertMessageWithOptions(m, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -257,6 +341,10 @@ func convertMessages(msgs []model.Content) ([]goopenai.ChatCompletionMessagePara
 }
 
 func convertMessage(m model.Content) (goopenai.ChatCompletionMessageParamUnion, error) {
+	return convertMessageWithOptions(m, providerOptions{})
+}
+
+func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.ChatCompletionMessageParamUnion, error) {
 	switch m.Role {
 	case model.RoleSystem:
 		return goopenai.SystemMessage(m.Content), nil
@@ -295,6 +383,11 @@ func convertMessage(m model.Content) (goopenai.ChatCompletionMessageParamUnion, 
 		asst := goopenai.ChatCompletionAssistantMessageParam{}
 		if m.Content != "" {
 			asst.Content.OfString = param.NewOpt(m.Content)
+		}
+		if opts.includeAssistantReasoningContent && m.ReasoningContent != "" {
+			asst.SetExtraFields(map[string]any{
+				"reasoning_content": m.ReasoningContent,
+			})
 		}
 		if len(m.ToolCalls) > 0 {
 			toolCalls := make([]goopenai.ChatCompletionMessageToolCallUnionParam, 0, len(m.ToolCalls))
@@ -360,6 +453,10 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 // optionally appends extra request options (e.g. enable_thinking for compatible
 // providers that do not use reasoning_effort).
 func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption) {
+	applyConfigWithOptions(p, cfg, opts, providerOptions{})
+}
+
+func applyConfigWithOptions(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption, provider providerOptions) {
 	if cfg.MaxTokens > 0 {
 		p.MaxCompletionTokens = param.NewOpt(cfg.MaxTokens)
 	}
@@ -367,16 +464,28 @@ func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig,
 		p.Temperature = param.NewOpt(cfg.Temperature)
 	}
 	if cfg.ReasoningEffort != "" {
-		p.ReasoningEffort = shared.ReasoningEffort(cfg.ReasoningEffort)
-	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking {
+		if provider.thinkingParam == thinkingParamDeepSeek && cfg.ReasoningEffort == model.ReasoningEffortNone {
+			*opts = append(*opts, option.WithJSONSet("thinking.type", "disabled"))
+		} else {
+			p.ReasoningEffort = shared.ReasoningEffort(cfg.ReasoningEffort)
+		}
+	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking && provider.thinkingParam != thinkingParamDeepSeek {
 		// No explicit effort level set but thinking is disabled: map to "none".
 		p.ReasoningEffort = shared.ReasoningEffort(model.ReasoningEffortNone)
 	}
-	// Inject enable_thinking for providers that use a boolean toggle instead of
-	// reasoning_effort (e.g. DeepSeek, Qwen). When ReasoningEffort is already
-	// set we trust the caller used the more specific control and skip this.
+	// Inject the provider-specific thinking toggle only when ReasoningEffort is
+	// not set; an explicit effort is the more specific control.
 	if cfg.EnableThinking != nil && cfg.ReasoningEffort == "" {
-		*opts = append(*opts, option.WithJSONSet("enable_thinking", *cfg.EnableThinking))
+		switch provider.thinkingParam {
+		case thinkingParamDeepSeek:
+			thinkingType := "disabled"
+			if *cfg.EnableThinking {
+				thinkingType = "enabled"
+			}
+			*opts = append(*opts, option.WithJSONSet("thinking.type", thinkingType))
+		default:
+			*opts = append(*opts, option.WithJSONSet("enable_thinking", *cfg.EnableThinking))
+		}
 	}
 	if cfg.ServiceTier != "" {
 		p.ServiceTier = goopenai.ChatCompletionNewParamsServiceTier(cfg.ServiceTier)

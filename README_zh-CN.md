@@ -12,7 +12,7 @@ Go 版本：`1.26+`
 
 ## 特性
 
-- 提供商无关的 LLM 接口，支持 OpenAI、Gemini、Anthropic 适配器
+- 提供商无关的 LLM 接口，支持 OpenAI、DeepSeek、Gemini、Anthropic 适配器
 - Event-first 会话历史：完整事件会持久化，partial 事件只用于流式展示
 - 无状态 Agent，由有状态 `runner.Runner` 协调
 - `llmagent` 内置自动 tool-call 循环
@@ -39,6 +39,7 @@ go get github.com/soasurs/adk
 | `agent/agentool` | 将 Agent 包装成 Tool |
 | `model` | 提供商无关的 LLM、Content、Event 类型 |
 | `model/openai` | OpenAI 兼容适配器 |
+| `model/deepseek` | DeepSeek 适配器 |
 | `model/gemini` | Gemini 和 Vertex AI 适配器 |
 | `model/anthropic` | Anthropic 适配器 |
 | `session` | `Session` 与 `SessionService` 接口 |

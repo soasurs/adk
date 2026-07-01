@@ -178,8 +178,9 @@ type Content struct {
 	Parts []ContentPart
 	// ReasoningContent holds the model's internal chain-of-thought output, when
 	// returned by reasoning models (e.g. DeepSeek-R1, o-series via compatible
-	// providers). It is informational only and is not forwarded to the LLM on
-	// subsequent turns.
+	// providers). Most adapters treat it as informational only; providers that
+	// require it for continuity, such as DeepSeek thinking-mode tool calls, may
+	// forward it on subsequent turns.
 	ReasoningContent string
 	// ToolCalls is populated when Role is RoleAssistant and the model requests tool invocations.
 	ToolCalls []ToolCall

@@ -15,7 +15,7 @@ Go version: `1.26+`
 
 ## Features
 
-- Provider-neutral LLM interface for OpenAI, Gemini, and Anthropic adapters
+- Provider-neutral LLM interface for OpenAI, DeepSeek, Gemini, and Anthropic adapters
 - Event-first session history: complete events are persisted, partial events are transient
 - Stateless agents coordinated by a stateful `runner.Runner`
 - Automatic tool-call loop in `llmagent`
@@ -42,6 +42,7 @@ go get github.com/soasurs/adk
 | `agent/agentool` | Wrap an agent as a tool |
 | `model` | Provider-neutral LLM, content, and event types |
 | `model/openai` | OpenAI-compatible adapter |
+| `model/deepseek` | DeepSeek adapter |
 | `model/gemini` | Gemini and Vertex AI adapter |
 | `model/anthropic` | Anthropic adapter |
 | `session` | `Session` and `SessionService` interfaces |

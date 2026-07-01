@@ -23,6 +23,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `agent/agentool` | Wrap an `Agent` as a `tool.Tool` for nesting |
 | `model` | Provider-neutral types: `LLM`, `Content`, `Event`, `LLMRequest/Response` |
 | `model/openai` | OpenAI / OpenAI-compatible adapter |
+| `model/deepseek` | DeepSeek adapter |
 | `model/gemini` | Gemini / Vertex AI adapter |
 | `model/anthropic` | Anthropic adapter |
 | `model/retry` | `retry.Seq2` — exponential-backoff wrapper for `iter.Seq2` |
@@ -76,6 +77,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 | Provider / backend | Required | Optional |
 |---|---|---|
 | OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_REASONING_MODEL` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` |
 | Gemini / Vertex AI | `GEMINI_API_KEY` | `GEMINI_MODEL`, `GEMINI_THINKING_MODEL`, `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION`, `VERTEX_AI_MODEL` |
 | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL`, `ANTHROPIC_THINKING_MODEL` |
 | PostgreSQL session/database | `ADK_TEST_POSTGRES_DSN` | — |
