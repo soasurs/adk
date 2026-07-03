@@ -114,8 +114,13 @@ func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
 		}
 	}`)
 
-	llm := NewWithBaseURL("test-key", server.URL, ModelV4Pro, retry.Config{MaxAttempts: 1})
-	enableThinking := false
+	llm := NewWithBaseURLOptions(
+		"test-key",
+		server.URL,
+		ModelV4Pro,
+		WithRetryConfig(retry.Config{MaxAttempts: 1}),
+		WithThinkingEnabled(false),
+	)
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Contents: []model.Content{
@@ -130,7 +135,7 @@ func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
 			{Role: model.RoleTool, ToolCallID: "call_1", Content: "sunny"},
 			{Role: model.RoleUser, Content: "final answer please"},
 		},
-	}, &model.GenerateConfig{EnableThinking: &enableThinking})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)

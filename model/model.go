@@ -41,61 +41,16 @@ const (
 	FinishReasonContentFilter FinishReason = "content_filter"
 )
 
-// ReasoningEffort controls how much reasoning the model performs.
-type ReasoningEffort string
-
-const (
-	ReasoningEffortNone    ReasoningEffort = "none"
-	ReasoningEffortMinimal ReasoningEffort = "minimal"
-	ReasoningEffortLow     ReasoningEffort = "low"
-	ReasoningEffortMedium  ReasoningEffort = "medium"
-	ReasoningEffortHigh    ReasoningEffort = "high"
-	ReasoningEffortXhigh   ReasoningEffort = "xhigh"
-)
-
-// ThinkingLevel controls Gemini's thinking depth.
-type ThinkingLevel string
-
-const (
-	ThinkingLevelMinimal ThinkingLevel = "minimal"
-	ThinkingLevelLow     ThinkingLevel = "low"
-	ThinkingLevelMedium  ThinkingLevel = "medium"
-	ThinkingLevelHigh    ThinkingLevel = "high"
-)
-
-// ServiceTier specifies the service tier for processing the request.
-type ServiceTier string
-
-const (
-	ServiceTierAuto     ServiceTier = "auto"
-	ServiceTierDefault  ServiceTier = "default"
-	ServiceTierFlex     ServiceTier = "flex"
-	ServiceTierScale    ServiceTier = "scale"
-	ServiceTierPriority ServiceTier = "priority"
-)
-
-// GenerateConfig holds optional configuration for a generation request.
+// GenerateConfig holds provider-neutral settings for a generation request.
+// Provider-specific options such as reasoning effort, service tier, or thinking
+// controls belong to the corresponding adapter package.
 type GenerateConfig struct {
+	// Temperature controls sampling randomness. A zero value leaves the decision
+	// to the provider.
 	Temperature float64
-	// ReasoningEffort controls OpenAI-style reasoning effort. It is primarily
-	// intended for OpenAI-compatible APIs that expose reasoning_effort.
-	ReasoningEffort ReasoningEffort
-	// ThinkingLevel controls Gemini thinking depth. It is ignored by providers
-	// that do not expose a thinking-level setting.
-	ThinkingLevel ThinkingLevel
-	ServiceTier   ServiceTier
 	// MaxTokens overrides the maximum number of tokens to generate.
 	// A zero value leaves the decision to the provider (which may use its own default).
 	MaxTokens int64
-	// ThinkingBudget overrides Anthropic's token budget for extended thinking.
-	// A positive value enables thinking for Anthropic-compatible APIs even when
-	// EnableThinking is nil. Other providers ignore it unless they happen to
-	// support the same concept.
-	ThinkingBudget int64
-	// EnableThinking explicitly enables or disables the model's internal
-	// reasoning/thinking capability when no more specific provider control is
-	// supplied. A nil value leaves the decision to the provider.
-	EnableThinking *bool
 }
 
 // ContentPartType identifies the modality of a ContentPart.

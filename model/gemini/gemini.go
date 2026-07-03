@@ -17,9 +17,54 @@ import (
 
 // GenerateContent implements model.LLM using the Gemini GenerateContent API.
 type GenerateContent struct {
-	client    *genai.Client
-	modelName string
-	retryCfg  retry.Config
+	client     *genai.Client
+	modelName  string
+	retryCfg   retry.Config
+	generation generationOptions
+}
+
+// ThinkingLevel controls Gemini thinking depth.
+type ThinkingLevel string
+
+const (
+	// ThinkingLevelMinimal requests minimal Gemini thinking depth.
+	ThinkingLevelMinimal ThinkingLevel = "minimal"
+	// ThinkingLevelLow requests low Gemini thinking depth.
+	ThinkingLevelLow ThinkingLevel = "low"
+	// ThinkingLevelMedium requests medium Gemini thinking depth.
+	ThinkingLevelMedium ThinkingLevel = "medium"
+	// ThinkingLevelHigh requests high Gemini thinking depth.
+	ThinkingLevelHigh ThinkingLevel = "high"
+)
+
+type generationOptions struct {
+	thinkingLevel  ThinkingLevel
+	enableThinking *bool
+}
+
+// Option configures a Gemini GenerateContent adapter.
+type Option func(*GenerateContent)
+
+// WithRetryConfig sets the retry behavior for transient API errors.
+func WithRetryConfig(cfg retry.Config) Option {
+	return func(g *GenerateContent) {
+		g.retryCfg = cfg
+	}
+}
+
+// WithThinkingLevel sets Gemini thinking depth for every call.
+func WithThinkingLevel(level ThinkingLevel) Option {
+	return func(g *GenerateContent) {
+		g.generation.thinkingLevel = level
+	}
+}
+
+// WithThinkingEnabled explicitly enables or disables Gemini thinking.
+func WithThinkingEnabled(enabled bool) Option {
+	return func(g *GenerateContent) {
+		g.generation.enableThinking = new(bool)
+		*g.generation.enableThinking = enabled
+	}
 }
 
 // New creates a new GenerateContent instance for the Gemini Developer API.
@@ -28,6 +73,19 @@ type GenerateContent struct {
 // retryCfg is optional; when provided it enables automatic retry with
 // exponential backoff on transient errors (rate limits, 5xx, network issues).
 func New(ctx context.Context, apiKey, modelName string, retryCfg ...retry.Config) (*GenerateContent, error) {
+	gc, err := NewWithOptions(ctx, apiKey, modelName)
+	if err != nil {
+		return nil, err
+	}
+	if len(retryCfg) > 0 {
+		gc.retryCfg = retryCfg[0]
+	}
+	return gc, nil
+}
+
+// NewWithOptions creates a new GenerateContent instance for the Gemini
+// Developer API with explicit adapter options.
+func NewWithOptions(ctx context.Context, apiKey, modelName string, opts ...Option) (*GenerateContent, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -38,11 +96,12 @@ func New(ctx context.Context, apiKey, modelName string, retryCfg ...retry.Config
 	gc := &GenerateContent{
 		client:    client,
 		modelName: modelName,
+		retryCfg:  retry.DefaultConfig(),
 	}
-	if len(retryCfg) > 0 {
-		gc.retryCfg = retryCfg[0]
-	} else {
-		gc.retryCfg = retry.DefaultConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(gc)
+		}
 	}
 	return gc, nil
 }
@@ -56,6 +115,19 @@ func New(ctx context.Context, apiKey, modelName string, retryCfg ...retry.Config
 // retryCfg is optional; when provided it enables automatic retry with
 // exponential backoff on transient errors (rate limits, 5xx, network issues).
 func NewVertexAI(ctx context.Context, project, location, modelName string, retryCfg ...retry.Config) (*GenerateContent, error) {
+	gc, err := NewVertexAIWithOptions(ctx, project, location, modelName)
+	if err != nil {
+		return nil, err
+	}
+	if len(retryCfg) > 0 {
+		gc.retryCfg = retryCfg[0]
+	}
+	return gc, nil
+}
+
+// NewVertexAIWithOptions creates a new GenerateContent instance backed by
+// Google Cloud Vertex AI with explicit adapter options.
+func NewVertexAIWithOptions(ctx context.Context, project, location, modelName string, opts ...Option) (*GenerateContent, error) {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		Backend:  genai.BackendVertexAI,
 		Project:  project,
@@ -67,11 +139,12 @@ func NewVertexAI(ctx context.Context, project, location, modelName string, retry
 	gc := &GenerateContent{
 		client:    client,
 		modelName: modelName,
+		retryCfg:  retry.DefaultConfig(),
 	}
-	if len(retryCfg) > 0 {
-		gc.retryCfg = retryCfg[0]
-	} else {
-		gc.retryCfg = retry.DefaultConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(gc)
+		}
 	}
 	return gc, nil
 }
@@ -105,9 +178,7 @@ func (g *GenerateContent) GenerateContent(ctx context.Context, req *model.LLMReq
 			SystemInstruction: sysInstruction,
 			Tools:             tools,
 		}
-		if cfg != nil {
-			applyConfig(gCfg, cfg)
-		}
+		applyConfig(gCfg, cfg, g.generation)
 
 		for resp, err := range retry.Seq2(ctx, g.retryCfg,
 			func() iter.Seq2[*model.LLMResponse, error] {
@@ -393,37 +464,31 @@ func convertTools(tools []tool.Tool) ([]*genai.Tool, error) {
 	return []*genai.Tool{{FunctionDeclarations: decls}}, nil
 }
 
-// applyConfig transfers GenerateConfig settings into a Gemini GenerateContentConfig.
-func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig) {
-	if cfg.MaxTokens > 0 {
-		gCfg.MaxOutputTokens = int32(cfg.MaxTokens)
-	}
-	if cfg.Temperature != 0 {
-		t := float32(cfg.Temperature)
-		gCfg.Temperature = &t
+// applyConfig transfers common GenerateConfig settings and Gemini adapter
+// options into a Gemini GenerateContentConfig.
+func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig, generation generationOptions) {
+	if cfg != nil {
+		if cfg.MaxTokens > 0 {
+			gCfg.MaxOutputTokens = int32(cfg.MaxTokens)
+		}
+		if cfg.Temperature != 0 {
+			t := float32(cfg.Temperature)
+			gCfg.Temperature = &t
+		}
 	}
 
-	// Map ThinkingLevel / legacy ReasoningEffort / EnableThinking →
-	// Gemini ThinkingConfig.
-	// Priority: ThinkingLevel > ReasoningEffort > EnableThinking.
+	// Map Gemini adapter thinking options. ThinkingLevel is more specific than
+	// the boolean toggle.
 	var thinkCfg *genai.ThinkingConfig
 	switch {
-	case cfg.ThinkingLevel != "":
+	case generation.thinkingLevel != "":
 		thinkCfg = &genai.ThinkingConfig{
 			IncludeThoughts: true,
-			ThinkingLevel:   mapThinkingLevel(cfg.ThinkingLevel),
+			ThinkingLevel:   mapThinkingLevel(generation.thinkingLevel),
 		}
-	case cfg.ReasoningEffort == model.ReasoningEffortNone:
-		zero := int32(0)
-		thinkCfg = &genai.ThinkingConfig{ThinkingBudget: &zero}
-	case cfg.ReasoningEffort != "":
-		thinkCfg = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-			ThinkingLevel:   mapReasoningEffort(cfg.ReasoningEffort),
-		}
-	case cfg.EnableThinking != nil && *cfg.EnableThinking:
+	case generation.enableThinking != nil && *generation.enableThinking:
 		thinkCfg = &genai.ThinkingConfig{IncludeThoughts: true}
-	case cfg.EnableThinking != nil && !*cfg.EnableThinking:
+	case generation.enableThinking != nil && !*generation.enableThinking:
 		zero := int32(0)
 		thinkCfg = &genai.ThinkingConfig{ThinkingBudget: &zero}
 	}
@@ -432,32 +497,16 @@ func applyConfig(gCfg *genai.GenerateContentConfig, cfg *model.GenerateConfig) {
 	}
 }
 
-// mapThinkingLevel maps the provider-agnostic Gemini ThinkingLevel to the SDK enum.
-func mapThinkingLevel(level model.ThinkingLevel) genai.ThinkingLevel {
+// mapThinkingLevel maps the Gemini ThinkingLevel to the SDK enum.
+func mapThinkingLevel(level ThinkingLevel) genai.ThinkingLevel {
 	switch level {
-	case model.ThinkingLevelMinimal:
+	case ThinkingLevelMinimal:
 		return genai.ThinkingLevelMinimal
-	case model.ThinkingLevelLow:
+	case ThinkingLevelLow:
 		return genai.ThinkingLevelLow
-	case model.ThinkingLevelMedium:
+	case ThinkingLevelMedium:
 		return genai.ThinkingLevelMedium
-	case model.ThinkingLevelHigh:
-		return genai.ThinkingLevelHigh
-	default:
-		return ""
-	}
-}
-
-// mapReasoningEffort maps the legacy provider-agnostic ReasoningEffort to a Gemini ThinkingLevel.
-func mapReasoningEffort(effort model.ReasoningEffort) genai.ThinkingLevel {
-	switch effort {
-	case model.ReasoningEffortMinimal:
-		return genai.ThinkingLevelMinimal
-	case model.ReasoningEffortLow:
-		return genai.ThinkingLevelLow
-	case model.ReasoningEffortMedium:
-		return genai.ThinkingLevelMedium
-	case model.ReasoningEffortHigh, model.ReasoningEffortXhigh:
+	case ThinkingLevelHigh:
 		return genai.ThinkingLevelHigh
 	default:
 		return ""

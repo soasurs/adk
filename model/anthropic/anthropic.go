@@ -25,9 +25,41 @@ const defaultThinkingBudget = 3000
 
 // Model implements model.LLM using the Anthropic Messages API.
 type Model struct {
-	client    goanthropic.Client
-	modelName string
-	retryCfg  retry.Config
+	client     goanthropic.Client
+	modelName  string
+	retryCfg   retry.Config
+	generation generationOptions
+}
+
+type generationOptions struct {
+	enableThinking *bool
+	thinkingBudget int64
+}
+
+// Option configures an Anthropic Model.
+type Option func(*Model)
+
+// WithRetryConfig sets the retry behavior for transient API errors.
+func WithRetryConfig(cfg retry.Config) Option {
+	return func(m *Model) {
+		m.retryCfg = cfg
+	}
+}
+
+// WithThinkingEnabled explicitly enables or disables Anthropic extended thinking.
+func WithThinkingEnabled(enabled bool) Option {
+	return func(m *Model) {
+		m.generation.enableThinking = new(bool)
+		*m.generation.enableThinking = enabled
+	}
+}
+
+// WithThinkingBudget sets the token budget for Anthropic extended thinking.
+// A positive budget enables thinking even when WithThinkingEnabled is not set.
+func WithThinkingBudget(tokens int64) Option {
+	return func(m *Model) {
+		m.generation.thinkingBudget = tokens
+	}
 }
 
 // New creates a new Model instance.
@@ -36,17 +68,31 @@ type Model struct {
 // retryCfg is optional; when provided it enables automatic retry with
 // exponential backoff on transient errors (rate limits, 5xx, network issues).
 func New(apiKey, modelName string, retryCfg ...retry.Config) *Model {
-	client := goanthropic.NewClient(option.WithAPIKey(apiKey))
-	m := &Model{
-		client:    client,
-		modelName: modelName,
-	}
+	m := newModel(apiKey, modelName)
 	if len(retryCfg) > 0 {
 		m.retryCfg = retryCfg[0]
-	} else {
-		m.retryCfg = retry.DefaultConfig()
 	}
 	return m
+}
+
+// NewWithOptions creates a new Model instance with explicit adapter options.
+func NewWithOptions(apiKey, modelName string, opts ...Option) *Model {
+	m := newModel(apiKey, modelName)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	return m
+}
+
+func newModel(apiKey, modelName string) *Model {
+	client := goanthropic.NewClient(option.WithAPIKey(apiKey))
+	return &Model{
+		client:    client,
+		modelName: modelName,
+		retryCfg:  retry.DefaultConfig(),
+	}
 }
 
 // Name returns the model identifier.
@@ -89,9 +135,7 @@ func (m *Model) GenerateContent(ctx context.Context, req *model.LLMRequest, cfg 
 			params.Tools = tools
 		}
 
-		if cfg != nil {
-			applyConfig(&params, cfg)
-		}
+		applyConfig(&params, cfg, m.generation)
 
 		for resp, err := range retry.Seq2(ctx, m.retryCfg,
 			func() iter.Seq2[*model.LLMResponse, error] {
@@ -377,20 +421,21 @@ func convertTools(tools []tool.Tool) ([]goanthropic.ToolUnionParam, error) {
 	return result, nil
 }
 
-// applyConfig transfers GenerateConfig settings to MessageNewParams.
-func applyConfig(p *goanthropic.MessageNewParams, cfg *model.GenerateConfig) {
-	if cfg.Temperature != 0 {
+// applyConfig transfers common GenerateConfig settings and Anthropic adapter
+// options to MessageNewParams.
+func applyConfig(p *goanthropic.MessageNewParams, cfg *model.GenerateConfig, generation generationOptions) {
+	if cfg != nil && cfg.Temperature != 0 {
 		p.Temperature = param.NewOpt(cfg.Temperature)
 	}
 
 	// Map Anthropic thinking controls. A positive ThinkingBudget is the most
 	// specific signal and enables thinking even when EnableThinking is nil.
-	if cfg.ThinkingBudget > 0 {
-		p.Thinking = goanthropic.ThinkingConfigParamOfEnabled(cfg.ThinkingBudget)
-	} else if cfg.EnableThinking != nil && *cfg.EnableThinking {
+	if generation.thinkingBudget > 0 {
+		p.Thinking = goanthropic.ThinkingConfigParamOfEnabled(generation.thinkingBudget)
+	} else if generation.enableThinking != nil && *generation.enableThinking {
 		budget := int64(defaultThinkingBudget)
 		p.Thinking = goanthropic.ThinkingConfigParamOfEnabled(budget)
-	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking {
+	} else if generation.enableThinking != nil && !*generation.enableThinking {
 		disabled := goanthropic.NewThinkingConfigDisabledParam()
 		p.Thinking = goanthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
 	}

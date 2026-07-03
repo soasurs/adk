@@ -48,7 +48,7 @@ func newClientFromEnv(t *testing.T) model.LLM {
 
 // newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL — test is skipped when either is absent.
-func newThinkingClientFromEnv(t *testing.T) model.LLM {
+func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
@@ -58,7 +58,7 @@ func newThinkingClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		t.Skip("ANTHROPIC_THINKING_MODEL not set")
 	}
-	return New(apiKey, modelName)
+	return NewWithOptions(apiKey, modelName, opts...)
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ func TestConvertMessages_UnknownRole(t *testing.T) {
 
 func TestApplyConfig_Temperature(t *testing.T) {
 	p := &goanthropic.MessageNewParams{}
-	applyConfig(p, &model.GenerateConfig{Temperature: 0.7})
+	applyConfig(p, &model.GenerateConfig{Temperature: 0.7}, generationOptions{})
 	assert.True(t, p.Temperature.Valid())
 	assert.InDelta(t, 0.7, p.Temperature.Value, 0.001)
 }
@@ -198,7 +198,7 @@ func TestApplyConfig_Temperature(t *testing.T) {
 func TestApplyConfig_EnableThinking(t *testing.T) {
 	tests := []struct {
 		name           string
-		cfg            model.GenerateConfig
+		generation     generationOptions
 		wantEnabled    bool
 		wantDisabled   bool
 		wantNoThinking bool
@@ -206,33 +206,31 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 	}{
 		{
 			name:        "EnableThinking=true → OfEnabled set",
-			cfg:         model.GenerateConfig{EnableThinking: new(true)},
+			generation:  generationOptions{enableThinking: new(true)},
 			wantEnabled: true,
 			wantBudget:  defaultThinkingBudget,
 		},
 		{
-			name: "ThinkingBudget>0 enables thinking without EnableThinking",
-			cfg: model.GenerateConfig{
-				ThinkingBudget: 4096,
-			},
+			name:        "ThinkingBudget>0 enables thinking without EnableThinking",
+			generation:  generationOptions{thinkingBudget: 4096},
 			wantEnabled: true,
 			wantBudget:  4096,
 		},
 		{
 			name:         "EnableThinking=false → OfDisabled set",
-			cfg:          model.GenerateConfig{EnableThinking: new(false)},
+			generation:   generationOptions{enableThinking: new(false)},
 			wantDisabled: true,
 		},
 		{
 			name:           "nil EnableThinking → no ThinkingConfig",
-			cfg:            model.GenerateConfig{},
+			generation:     generationOptions{},
 			wantNoThinking: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &goanthropic.MessageNewParams{}
-			applyConfig(p, &tt.cfg)
+			applyConfig(p, nil, tt.generation)
 			if tt.wantNoThinking {
 				assert.Nil(t, p.Thinking.OfEnabled)
 				assert.Nil(t, p.Thinking.OfDisabled)
@@ -381,14 +379,14 @@ func TestMessages_Generate_WithConfig(t *testing.T) {
 // returns non-empty ReasoningContent when thinking is explicitly enabled.
 // Required env vars: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL
 func TestMessages_Generate_Thinking(t *testing.T) {
-	llm := newThinkingClientFromEnv(t)
+	llm := newThinkingClientFromEnv(t, WithThinkingEnabled(true))
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: new(true)})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -403,7 +401,7 @@ func TestMessages_Generate_Thinking(t *testing.T) {
 // thinking deltas before the complete response with full ReasoningContent.
 // Required env vars: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL
 func TestMessages_Stream_Thinking(t *testing.T) {
-	llm := newThinkingClientFromEnv(t)
+	llm := newThinkingClientFromEnv(t, WithThinkingEnabled(true))
 
 	var partialReasoningBuf strings.Builder
 	var finalResp *model.LLMResponse
@@ -413,7 +411,7 @@ func TestMessages_Stream_Thinking(t *testing.T) {
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 9 * 8? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: new(true)}, true) {
+	}, nil, true) {
 		require.NoError(t, err)
 		if resp.Partial {
 			if resp.Content.ReasoningContent != "" {

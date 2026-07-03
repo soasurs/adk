@@ -170,6 +170,42 @@ type LLM interface {
 
 调用 provider 之前，`LLMRequest.Contents` 会从 event history 投影出来。
 
+### 生成配置
+
+`model.GenerateConfig` 只包含 provider-neutral 的通用控制：
+
+```go
+cfg := &model.GenerateConfig{
+    Temperature: 0.7,
+    MaxTokens:   2048,
+}
+```
+
+Provider-specific 控制放在对应 adapter 包里：
+
+```go
+llm := openai.NewWithOptions(
+    os.Getenv("OPENAI_API_KEY"),
+    "",
+    "gpt-4o-mini",
+    openai.WithReasoningEffort(openai.ReasoningEffortHigh),
+    openai.WithServiceTier(openai.ServiceTierFlex),
+)
+
+geminiLLM, err := gemini.NewWithOptions(
+    ctx,
+    os.Getenv("GEMINI_API_KEY"),
+    "gemini-2.5-pro",
+    gemini.WithThinkingLevel(gemini.ThinkingLevelHigh),
+)
+
+anthropicLLM := anthropic.NewWithOptions(
+    os.Getenv("ANTHROPIC_API_KEY"),
+    "claude-sonnet-4-5",
+    anthropic.WithThinkingBudget(3000),
+)
+```
+
 ## 会话存储
 
 测试或临时运行可以使用内存后端：

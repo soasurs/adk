@@ -19,11 +19,12 @@ import (
 
 // ChatCompletion implements model.LLM using the OpenAI Chat Completions API.
 type ChatCompletion struct {
-	client    goopenai.Client
-	baseURL   string
-	modelName string
-	retryCfg  retry.Config
-	provider  providerOptions
+	client     goopenai.Client
+	baseURL    string
+	modelName  string
+	retryCfg   retry.Config
+	provider   providerOptions
+	generation generationOptions
 }
 
 type providerOptions struct {
@@ -38,6 +39,46 @@ const (
 	thinkingParamEnableThinking thinkingParam = iota
 	thinkingParamDeepSeek
 )
+
+// ReasoningEffort controls OpenAI-compatible reasoning effort.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortNone disables reasoning effort when supported by the provider.
+	ReasoningEffortNone ReasoningEffort = "none"
+	// ReasoningEffortMinimal requests minimal reasoning effort.
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	// ReasoningEffortLow requests low reasoning effort.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortMedium requests medium reasoning effort.
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	// ReasoningEffortHigh requests high reasoning effort.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortXhigh requests extra-high reasoning effort on compatible providers.
+	ReasoningEffortXhigh ReasoningEffort = "xhigh"
+)
+
+// ServiceTier specifies the OpenAI-compatible service tier for a request.
+type ServiceTier string
+
+const (
+	// ServiceTierAuto lets the provider choose the service tier.
+	ServiceTierAuto ServiceTier = "auto"
+	// ServiceTierDefault uses the provider default service tier.
+	ServiceTierDefault ServiceTier = "default"
+	// ServiceTierFlex uses the flex service tier.
+	ServiceTierFlex ServiceTier = "flex"
+	// ServiceTierScale uses the scale service tier.
+	ServiceTierScale ServiceTier = "scale"
+	// ServiceTierPriority uses the priority service tier.
+	ServiceTierPriority ServiceTier = "priority"
+)
+
+type generationOptions struct {
+	reasoningEffort ReasoningEffort
+	serviceTier     ServiceTier
+	enableThinking  *bool
+}
 
 func detectProviderOptions(baseURL, modelName string) providerOptions {
 	if isDeepSeekCompatible(baseURL, modelName) {
@@ -78,6 +119,30 @@ func WithRetryConfig(cfg retry.Config) Option {
 	}
 }
 
+// WithReasoningEffort sets OpenAI-compatible reasoning effort for every call.
+func WithReasoningEffort(effort ReasoningEffort) Option {
+	return func(c *ChatCompletion) {
+		c.generation.reasoningEffort = effort
+	}
+}
+
+// WithServiceTier sets the OpenAI-compatible service tier for every call.
+func WithServiceTier(tier ServiceTier) Option {
+	return func(c *ChatCompletion) {
+		c.generation.serviceTier = tier
+	}
+}
+
+// WithThinkingEnabled explicitly enables or disables provider-specific
+// thinking controls for every call. A disabled value maps to reasoning_effort
+// "none" for providers that do not expose a separate thinking toggle.
+func WithThinkingEnabled(enabled bool) Option {
+	return func(c *ChatCompletion) {
+		c.generation.enableThinking = new(bool)
+		*c.generation.enableThinking = enabled
+	}
+}
+
 // New creates a new ChatCompletion instance.
 // apiKey is required. baseURL is optional; when non-empty it overrides the
 // default OpenAI endpoint, which allows using any OpenAI-compatible provider.
@@ -92,7 +157,7 @@ func New(apiKey, baseURL, modelName string, retryCfg ...retry.Config) *ChatCompl
 }
 
 // NewWithOptions creates a new ChatCompletion instance with explicit provider
-// compatibility and retry options.
+// compatibility, retry, and generation options.
 func NewWithOptions(apiKey, baseURL, modelName string, opts ...Option) *ChatCompletion {
 	c := newChatCompletion(apiKey, baseURL, modelName)
 	for _, opt := range opts {
@@ -158,7 +223,9 @@ func (c *ChatCompletion) GenerateContent(ctx context.Context, req *model.LLMRequ
 
 		var reqOpts []option.RequestOption
 		if cfg != nil {
-			applyConfigWithOptions(&params, cfg, &reqOpts, provider)
+			applyConfigWithOptions(&params, cfg, &reqOpts, provider, c.generation)
+		} else {
+			applyConfigWithOptions(&params, nil, &reqOpts, provider, c.generation)
 		}
 
 		for resp, err := range retry.Seq2(ctx, c.retryCfg,
@@ -453,42 +520,50 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 // optionally appends extra request options (e.g. enable_thinking for compatible
 // providers that do not use reasoning_effort).
 func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption) {
-	applyConfigWithOptions(p, cfg, opts, providerOptions{})
+	applyConfigWithOptions(p, cfg, opts, providerOptions{}, generationOptions{})
 }
 
-func applyConfigWithOptions(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption, provider providerOptions) {
-	if cfg.MaxTokens > 0 {
-		p.MaxCompletionTokens = param.NewOpt(cfg.MaxTokens)
+func applyConfigWithOptions(
+	p *goopenai.ChatCompletionNewParams,
+	cfg *model.GenerateConfig,
+	opts *[]option.RequestOption,
+	provider providerOptions,
+	generation generationOptions,
+) {
+	if cfg != nil {
+		if cfg.MaxTokens > 0 {
+			p.MaxCompletionTokens = param.NewOpt(cfg.MaxTokens)
+		}
+		if cfg.Temperature != 0 {
+			p.Temperature = param.NewOpt(cfg.Temperature)
+		}
 	}
-	if cfg.Temperature != 0 {
-		p.Temperature = param.NewOpt(cfg.Temperature)
-	}
-	if cfg.ReasoningEffort != "" {
-		if provider.thinkingParam == thinkingParamDeepSeek && cfg.ReasoningEffort == model.ReasoningEffortNone {
+	if generation.reasoningEffort != "" {
+		if provider.thinkingParam == thinkingParamDeepSeek && generation.reasoningEffort == ReasoningEffortNone {
 			*opts = append(*opts, option.WithJSONSet("thinking.type", "disabled"))
 		} else {
-			p.ReasoningEffort = shared.ReasoningEffort(cfg.ReasoningEffort)
+			p.ReasoningEffort = shared.ReasoningEffort(generation.reasoningEffort)
 		}
-	} else if cfg.EnableThinking != nil && !*cfg.EnableThinking && provider.thinkingParam != thinkingParamDeepSeek {
+	} else if generation.enableThinking != nil && !*generation.enableThinking && provider.thinkingParam != thinkingParamDeepSeek {
 		// No explicit effort level set but thinking is disabled: map to "none".
-		p.ReasoningEffort = shared.ReasoningEffort(model.ReasoningEffortNone)
+		p.ReasoningEffort = shared.ReasoningEffort(ReasoningEffortNone)
 	}
 	// Inject the provider-specific thinking toggle only when ReasoningEffort is
 	// not set; an explicit effort is the more specific control.
-	if cfg.EnableThinking != nil && cfg.ReasoningEffort == "" {
+	if generation.enableThinking != nil && generation.reasoningEffort == "" {
 		switch provider.thinkingParam {
 		case thinkingParamDeepSeek:
 			thinkingType := "disabled"
-			if *cfg.EnableThinking {
+			if *generation.enableThinking {
 				thinkingType = "enabled"
 			}
 			*opts = append(*opts, option.WithJSONSet("thinking.type", thinkingType))
 		default:
-			*opts = append(*opts, option.WithJSONSet("enable_thinking", *cfg.EnableThinking))
+			*opts = append(*opts, option.WithJSONSet("enable_thinking", *generation.enableThinking))
 		}
 	}
-	if cfg.ServiceTier != "" {
-		p.ServiceTier = goopenai.ChatCompletionNewParamsServiceTier(cfg.ServiceTier)
+	if generation.serviceTier != "" {
+		p.ServiceTier = goopenai.ChatCompletionNewParamsServiceTier(generation.serviceTier)
 	}
 }
 

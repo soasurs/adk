@@ -53,7 +53,7 @@ func newClientFromEnv(t *testing.T) model.LLM {
 // newReasoningClientFromEnv creates a model.LLM for reasoning model tests.
 // Required: OPENAI_API_KEY + OPENAI_REASONING_MODEL — test is skipped when either is absent.
 // Optional: OPENAI_BASE_URL — overrides the default endpoint (e.g. DeepSeek).
-func newReasoningClientFromEnv(t *testing.T) model.LLM {
+func newReasoningClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -64,7 +64,7 @@ func newReasoningClientFromEnv(t *testing.T) model.LLM {
 		t.Skip("OPENAI_REASONING_MODEL not set")
 	}
 	baseURL := os.Getenv("OPENAI_BASE_URL")
-	return New(apiKey, baseURL, modelName)
+	return NewWithOptions(apiKey, baseURL, modelName, opts...)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,39 +144,39 @@ func TestConvertMessage_UnknownRole(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestApplyConfig_EnableThinking verifies the EnableThinking → ReasoningEffort /
-// enable_thinking mapping logic inside applyConfig.
-func TestApplyConfig_EnableThinking(t *testing.T) {
+// TestApplyConfig_ThinkingOptions verifies the WithThinkingEnabled /
+// WithReasoningEffort mapping logic inside applyConfig.
+func TestApplyConfig_ThinkingOptions(t *testing.T) {
 	tests := []struct {
 		name            string
-		cfg             model.GenerateConfig
+		generation      generationOptions
 		wantEffort      shared.ReasoningEffort
 		wantEnableThink *bool // nil means we don't expect the option to be injected
 	}{
 		{
 			name:            "false with no effort → reasoning_effort=none + enable_thinking=false",
-			cfg:             model.GenerateConfig{EnableThinking: new(false)},
-			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortNone),
+			generation:      generationOptions{enableThinking: new(false)},
+			wantEffort:      shared.ReasoningEffort(ReasoningEffortNone),
 			wantEnableThink: new(false),
 		},
 		{
 			name: "false with explicit effort → effort wins, enable_thinking NOT injected",
-			cfg: model.GenerateConfig{
-				EnableThinking:  new(false),
-				ReasoningEffort: model.ReasoningEffortHigh,
+			generation: generationOptions{
+				enableThinking:  new(false),
+				reasoningEffort: ReasoningEffortHigh,
 			},
-			wantEffort:      shared.ReasoningEffort(model.ReasoningEffortHigh),
+			wantEffort:      shared.ReasoningEffort(ReasoningEffortHigh),
 			wantEnableThink: nil, // ReasoningEffort set → skip enable_thinking injection
 		},
 		{
 			name:            "true with no effort → enable_thinking=true injected",
-			cfg:             model.GenerateConfig{EnableThinking: new(true)},
+			generation:      generationOptions{enableThinking: new(true)},
 			wantEffort:      "",
 			wantEnableThink: new(true),
 		},
 		{
 			name:            "nil → nothing injected",
-			cfg:             model.GenerateConfig{},
+			generation:      generationOptions{},
 			wantEffort:      "",
 			wantEnableThink: nil,
 		},
@@ -185,7 +185,7 @@ func TestApplyConfig_EnableThinking(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &goopenai.ChatCompletionNewParams{}
 			var opts []option.RequestOption
-			applyConfig(p, &tt.cfg, &opts)
+			applyConfigWithOptions(p, nil, &opts, providerOptions{}, tt.generation)
 			assert.Equal(t, tt.wantEffort, p.ReasoningEffort)
 			if tt.wantEnableThink == nil {
 				assert.Empty(t, opts, "expected no extra options")
@@ -327,14 +327,14 @@ func TestChatCompletion_Generate_WithConfig(t *testing.T) {
 // Required env vars: OPENAI_API_KEY + OPENAI_REASONING_MODEL
 // Optional env var:  OPENAI_BASE_URL
 func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
-	llm := newReasoningClientFromEnv(t)
+	llm := newReasoningClientFromEnv(t, WithThinkingEnabled(true))
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: new(true)})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -350,14 +350,14 @@ func TestChatCompletion_Generate_EnableThinkingTrue(t *testing.T) {
 // Required env vars: OPENAI_API_KEY + OPENAI_REASONING_MODEL
 // Optional env var:  OPENAI_BASE_URL
 func TestChatCompletion_Generate_EnableThinkingFalse(t *testing.T) {
-	llm := newReasoningClientFromEnv(t)
+	llm := newReasoningClientFromEnv(t, WithThinkingEnabled(false))
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13?"},
 		},
-	}, &model.GenerateConfig{EnableThinking: new(false)})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)

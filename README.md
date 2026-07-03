@@ -176,6 +176,42 @@ type LLM interface {
 `LLMRequest.Contents` is projected from event history before calling the
 provider adapter.
 
+### Generation config
+
+`model.GenerateConfig` contains only provider-neutral controls:
+
+```go
+cfg := &model.GenerateConfig{
+    Temperature: 0.7,
+    MaxTokens:   2048,
+}
+```
+
+Provider-specific controls live in the adapter packages:
+
+```go
+llm := openai.NewWithOptions(
+    os.Getenv("OPENAI_API_KEY"),
+    "",
+    "gpt-4o-mini",
+    openai.WithReasoningEffort(openai.ReasoningEffortHigh),
+    openai.WithServiceTier(openai.ServiceTierFlex),
+)
+
+geminiLLM, err := gemini.NewWithOptions(
+    ctx,
+    os.Getenv("GEMINI_API_KEY"),
+    "gemini-2.5-pro",
+    gemini.WithThinkingLevel(gemini.ThinkingLevelHigh),
+)
+
+anthropicLLM := anthropic.NewWithOptions(
+    os.Getenv("ANTHROPIC_API_KEY"),
+    "claude-sonnet-4-5",
+    anthropic.WithThinkingBudget(3000),
+)
+```
+
 ## Session Storage
 
 Use memory for tests and ephemeral runs:

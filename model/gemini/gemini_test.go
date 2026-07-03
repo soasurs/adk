@@ -74,7 +74,7 @@ func newVertexAIClientFromEnv(t *testing.T) model.LLM {
 
 // newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: GEMINI_API_KEY + GEMINI_THINKING_MODEL — test is skipped when either is absent.
-func newThinkingClientFromEnv(t *testing.T) model.LLM {
+func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -84,7 +84,7 @@ func newThinkingClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		t.Skip("GEMINI_THINKING_MODEL not set")
 	}
-	llm, err := New(t.Context(), apiKey, modelName)
+	llm, err := NewWithOptions(t.Context(), apiKey, modelName, opts...)
 	require.NoError(t, err)
 	return llm
 }
@@ -128,21 +128,20 @@ func TestConvertFinishReason(t *testing.T) {
 	}
 }
 
-func TestMapReasoningEffort(t *testing.T) {
+func TestMapThinkingLevel(t *testing.T) {
 	cases := []struct {
-		input    model.ReasoningEffort
+		input    ThinkingLevel
 		expected genai.ThinkingLevel
 	}{
-		{model.ReasoningEffortMinimal, genai.ThinkingLevelMinimal},
-		{model.ReasoningEffortLow, genai.ThinkingLevelLow},
-		{model.ReasoningEffortMedium, genai.ThinkingLevelMedium},
-		{model.ReasoningEffortHigh, genai.ThinkingLevelHigh},
-		{model.ReasoningEffortXhigh, genai.ThinkingLevelHigh},
-		{model.ReasoningEffort("unknown"), ""},
+		{ThinkingLevelMinimal, genai.ThinkingLevelMinimal},
+		{ThinkingLevelLow, genai.ThinkingLevelLow},
+		{ThinkingLevelMedium, genai.ThinkingLevelMedium},
+		{ThinkingLevelHigh, genai.ThinkingLevelHigh},
+		{ThinkingLevel("unknown"), ""},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.input), func(t *testing.T) {
-			assert.Equal(t, tc.expected, mapReasoningEffort(tc.input))
+			assert.Equal(t, tc.expected, mapThinkingLevel(tc.input))
 		})
 	}
 }
@@ -248,72 +247,49 @@ func TestConvertMessages_UnknownRole(t *testing.T) {
 
 func TestApplyConfig_Temperature(t *testing.T) {
 	gCfg := &genai.GenerateContentConfig{}
-	applyConfig(gCfg, &model.GenerateConfig{Temperature: 0.7})
+	applyConfig(gCfg, &model.GenerateConfig{Temperature: 0.7}, generationOptions{})
 	require.NotNil(t, gCfg.Temperature)
 	assert.InDelta(t, float32(0.7), *gCfg.Temperature, 0.001)
 }
 
-func TestApplyConfig_ReasoningEffort(t *testing.T) {
+func TestApplyConfig_ThinkingOptions(t *testing.T) {
 	tests := []struct {
 		name        string
-		cfg         model.GenerateConfig
+		generation  generationOptions
 		wantLevel   genai.ThinkingLevel
 		wantBudget  *int32
 		wantInclude bool
 	}{
 		{
-			name: "thinking level high → HIGH + IncludeThoughts",
-			cfg: model.GenerateConfig{
-				ThinkingLevel: model.ThinkingLevelHigh,
-			},
+			name:        "thinking level high → HIGH + IncludeThoughts",
+			generation:  generationOptions{thinkingLevel: ThinkingLevelHigh},
 			wantLevel:   genai.ThinkingLevelHigh,
 			wantInclude: true,
 		},
 		{
-			name: "thinking level wins over legacy reasoning effort",
-			cfg: model.GenerateConfig{
-				ThinkingLevel:   model.ThinkingLevelLow,
-				ReasoningEffort: model.ReasoningEffortHigh,
-			},
+			name:        "thinking level wins over boolean toggle",
+			generation:  generationOptions{thinkingLevel: ThinkingLevelLow, enableThinking: new(false)},
 			wantLevel:   genai.ThinkingLevelLow,
 			wantInclude: true,
 		},
 		{
-			name:       "none → budget=0",
-			cfg:        model.GenerateConfig{ReasoningEffort: model.ReasoningEffortNone},
-			wantBudget: func() *int32 { z := int32(0); return &z }(),
-		},
-		{
-			name:        "high → HIGH + IncludeThoughts",
-			cfg:         model.GenerateConfig{ReasoningEffort: model.ReasoningEffortHigh},
-			wantLevel:   genai.ThinkingLevelHigh,
-			wantInclude: true,
-		},
-		{
-			name:        "medium → MEDIUM + IncludeThoughts",
-			cfg:         model.GenerateConfig{ReasoningEffort: model.ReasoningEffortMedium},
-			wantLevel:   genai.ThinkingLevelMedium,
-			wantInclude: true,
-		},
-		{
 			name:        "EnableThinking=true → IncludeThoughts",
-			cfg:         model.GenerateConfig{EnableThinking: new(true)},
+			generation:  generationOptions{enableThinking: new(true)},
 			wantInclude: true,
 		},
 		{
 			name:       "EnableThinking=false → budget=0",
-			cfg:        model.GenerateConfig{EnableThinking: new(false)},
+			generation: generationOptions{enableThinking: new(false)},
 			wantBudget: func() *int32 { z := int32(0); return &z }(),
 		},
 		{
 			name: "nil EnableThinking + no effort → no ThinkingConfig",
-			cfg:  model.GenerateConfig{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gCfg := &genai.GenerateContentConfig{}
-			applyConfig(gCfg, &tt.cfg)
+			applyConfig(gCfg, nil, tt.generation)
 			if tt.wantBudget == nil && !tt.wantInclude && tt.wantLevel == "" {
 				assert.Nil(t, gCfg.ThinkingConfig, "expected no ThinkingConfig")
 				return
@@ -462,14 +438,14 @@ func TestGenerateContent_Generate_WithConfig(t *testing.T) {
 // returns non-empty ReasoningContent when thinking is explicitly enabled.
 // Required env vars: GEMINI_API_KEY + GEMINI_THINKING_MODEL
 func TestGenerateContent_Generate_Thinking(t *testing.T) {
-	llm := newThinkingClientFromEnv(t)
+	llm := newThinkingClientFromEnv(t, WithThinkingEnabled(true))
 
 	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
 		Model: llm.Name(),
 		Contents: []model.Content{
 			{Role: model.RoleUser, Content: "What is 12 * 13? Think step by step."},
 		},
-	}, &model.GenerateConfig{EnableThinking: new(true)})
+	}, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)

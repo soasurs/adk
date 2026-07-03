@@ -20,11 +20,11 @@ const (
 	ModelV4Pro = "deepseek-v4-pro"
 	// ModelChat is DeepSeek's legacy non-thinking compatibility model.
 	//
-	// Deprecated: use ModelV4Flash with EnableThinking=false instead.
+	// Deprecated: use ModelV4Flash with WithThinkingEnabled(false) instead.
 	ModelChat = "deepseek-chat"
 	// ModelReasoner is DeepSeek's legacy thinking compatibility model.
 	//
-	// Deprecated: use ModelV4Flash or ModelV4Pro with thinking enabled instead.
+	// Deprecated: use ModelV4Flash or ModelV4Pro with WithThinkingEnabled(true) instead.
 	ModelReasoner = "deepseek-reasoner"
 )
 
@@ -34,21 +34,48 @@ type ChatCompletion struct {
 	inner *openai.ChatCompletion
 }
 
+// Option configures a DeepSeek ChatCompletion.
+type Option = openai.Option
+
+// WithRetryConfig sets the retry behavior for transient API errors.
+func WithRetryConfig(cfg retry.Config) Option {
+	return openai.WithRetryConfig(cfg)
+}
+
+// WithThinkingEnabled explicitly enables or disables DeepSeek thinking.
+func WithThinkingEnabled(enabled bool) Option {
+	return openai.WithThinkingEnabled(enabled)
+}
+
 // New creates a new DeepSeek ChatCompletion instance using the default
 // DeepSeek OpenAI-compatible API endpoint.
 func New(apiKey, modelName string, retryCfg ...retry.Config) *ChatCompletion {
 	return NewWithBaseURL(apiKey, BaseURL, modelName, retryCfg...)
 }
 
+// NewWithOptions creates a new DeepSeek ChatCompletion instance using the
+// default DeepSeek OpenAI-compatible API endpoint and explicit adapter options.
+func NewWithOptions(apiKey, modelName string, opts ...Option) *ChatCompletion {
+	return NewWithBaseURLOptions(apiKey, BaseURL, modelName, opts...)
+}
+
 // NewWithBaseURL creates a new DeepSeek ChatCompletion instance using a custom
 // OpenAI-compatible base URL, which is useful for proxies and tests.
 func NewWithBaseURL(apiKey, baseURL, modelName string, retryCfg ...retry.Config) *ChatCompletion {
-	opts := []openai.Option{openai.WithDeepSeekCompatibility()}
+	opts := make([]openai.Option, 0, 1)
 	if len(retryCfg) > 0 {
 		opts = append(opts, openai.WithRetryConfig(retryCfg[0]))
 	}
+	return NewWithBaseURLOptions(apiKey, baseURL, modelName, opts...)
+}
+
+// NewWithBaseURLOptions creates a new DeepSeek ChatCompletion instance using a
+// custom OpenAI-compatible base URL and explicit adapter options.
+func NewWithBaseURLOptions(apiKey, baseURL, modelName string, opts ...Option) *ChatCompletion {
+	allOpts := []openai.Option{openai.WithDeepSeekCompatibility()}
+	allOpts = append(allOpts, opts...)
 	return &ChatCompletion{
-		inner: openai.NewWithOptions(apiKey, baseURL, modelName, opts...),
+		inner: openai.NewWithOptions(apiKey, baseURL, modelName, allOpts...),
 	}
 }
 
