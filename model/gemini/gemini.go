@@ -248,11 +248,11 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 					if id == "" {
 						id = fmt.Sprintf("call_%d", idx)
 					}
-					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					argsJSON := marshalToolArgs(part.FunctionCall.Args)
 					toolCalls = append(toolCalls, model.ToolCall{
 						ID:               id,
 						Name:             part.FunctionCall.Name,
-						Arguments:        string(argsJSON),
+						Arguments:        argsJSON,
 						ThoughtSignature: part.ThoughtSignature,
 					})
 				case part.Text != "":
@@ -360,11 +360,16 @@ func convertMessages(msgs []model.Content) ([]*genai.Content, *genai.Content, er
 			var parts []*genai.Part
 			for i < len(msgs) && msgs[i].Role == model.RoleTool {
 				tm := msgs[i]
+				result := tm.ToolResultValue()
+				name := result.Name
+				if name == "" {
+					name = toolCallNames[result.ToolCallID]
+				}
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
-						ID:       tm.ToolCallID,
-						Name:     toolCallNames[tm.ToolCallID],
-						Response: map[string]any{"output": tm.Content},
+						ID:       result.ToolCallID,
+						Name:     name,
+						Response: convertToolResultResponse(result),
 					},
 				})
 				i++
@@ -377,6 +382,36 @@ func convertMessages(msgs []model.Content) ([]*genai.Content, *genai.Content, er
 	}
 
 	return contents, sysInstruction, nil
+}
+
+func convertToolResultResponse(result model.ToolResult) map[string]any {
+	if result.IsError {
+		response := map[string]any{"error": result.Text()}
+		if details, ok := decodeStructuredContent(result.StructuredContent); ok {
+			response["details"] = details
+		}
+		return response
+	}
+	if len(result.StructuredContent) > 0 {
+		if value, ok := decodeStructuredContent(result.StructuredContent); ok {
+			if response, ok := value.(map[string]any); ok {
+				return response
+			}
+			return map[string]any{"result": value}
+		}
+	}
+	return map[string]any{"output": result.Text()}
+}
+
+func decodeStructuredContent(raw json.RawMessage) (any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, false
+	}
+	return value, true
 }
 
 // convertUserParts converts a RoleUser model.Content to a Gemini Part slice.
@@ -418,7 +453,7 @@ func convertAssistantParts(m model.Content) ([]*genai.Part, error) {
 	}
 	for _, tc := range m.ToolCalls {
 		var args map[string]any
-		if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
 			return nil, fmt.Errorf("tool call %q: parse arguments: %w", tc.Name, err)
 		}
 		parts = append(parts, &genai.Part{
@@ -536,11 +571,11 @@ func convertResponse(resp *genai.GenerateContentResponse) *model.LLMResponse {
 				if id == "" {
 					id = fmt.Sprintf("call_%d", idx)
 				}
-				argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+				argsJSON := marshalToolArgs(part.FunctionCall.Args)
 				msg.ToolCalls = append(msg.ToolCalls, model.ToolCall{
 					ID:               id,
 					Name:             part.FunctionCall.Name,
-					Arguments:        string(argsJSON),
+					Arguments:        argsJSON,
 					ThoughtSignature: part.ThoughtSignature,
 				})
 			case part.Text != "":
@@ -573,6 +608,14 @@ func convertResponse(resp *genai.GenerateContentResponse) *model.LLMResponse {
 		FinishReason: finishReason,
 		Usage:        usage,
 	}
+}
+
+func marshalToolArgs(args map[string]any) json.RawMessage {
+	raw, err := json.Marshal(args)
+	if err != nil || len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{}`)
+	}
+	return raw
 }
 
 // convertFinishReason maps a Gemini FinishReason to the provider-agnostic FinishReason.

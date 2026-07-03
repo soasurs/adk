@@ -1,6 +1,7 @@
 package event
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -114,7 +115,7 @@ func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
 				{
 					ID:               "call-1",
 					Name:             "lookup",
-					Arguments:        `{"query":"weather"}`,
+					Arguments:        json.RawMessage(`{"query":"weather"}`),
 					ThoughtSignature: []byte{0x01, 0x02, 0xff},
 				},
 			},
@@ -125,4 +126,28 @@ func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
 
 	require.Len(t, restored.Content.ToolCalls, 1)
 	assert.Equal(t, original.Content.ToolCalls[0], restored.Content.ToolCalls[0])
+}
+
+func TestFromModel_ToModel_ToolResult(t *testing.T) {
+	original := model.Event{
+		Author: "lookup",
+		Content: model.Content{
+			Role:    model.RoleTool,
+			Content: `{"temperature":23}`,
+			ToolResult: &model.ToolResult{
+				ToolCallID:        "call-1",
+				Name:              "lookup",
+				Content:           `{"temperature":23}`,
+				StructuredContent: json.RawMessage(`{"temperature":23}`),
+			},
+		},
+	}
+
+	restored := FromModel(original).ToModel()
+
+	require.NotNil(t, restored.Content.ToolResult)
+	assert.Equal(t, "call-1", restored.Content.ToolResult.ToolCallID)
+	assert.Equal(t, "lookup", restored.Content.ToolResult.Name)
+	assert.JSONEq(t, `{"temperature":23}`, string(restored.Content.ToolResult.StructuredContent))
+	assert.Equal(t, "call-1", restored.Content.ToolCallID)
 }

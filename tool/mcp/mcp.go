@@ -97,26 +97,41 @@ func (t *toolWrapper) Definition() tool.Definition {
 	return t.def
 }
 
-func (t *toolWrapper) Run(ctx context.Context, _ string, arguments string) (string, error) {
+func (t *toolWrapper) Run(ctx context.Context, call tool.Call) (tool.Result, error) {
 	if t.session == nil {
-		return "", fmt.Errorf("mcp call tool %q: %w", t.def.Name, ErrNotConnected)
+		return tool.Result{}, fmt.Errorf("mcp call tool %q: %w", t.def.Name, ErrNotConnected)
 	}
 	var args map[string]any
-	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return "", fmt.Errorf("mcp tool arguments unmarshal: %w", err)
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		return tool.Result{}, fmt.Errorf("mcp tool arguments unmarshal: %w", err)
 	}
 	result, err := t.session.CallTool(ctx, &sdkmcp.CallToolParams{
 		Name:      t.def.Name,
 		Arguments: args,
 	})
 	if err != nil {
-		return "", fmt.Errorf("mcp call tool %q: %w", t.def.Name, err)
+		return tool.Result{}, fmt.Errorf("mcp call tool %q: %w", t.def.Name, err)
 	}
 	text := extractText(result)
-	if result.IsError {
-		return "", fmt.Errorf("mcp tool %q error: %s", t.def.Name, text)
+	var structured json.RawMessage
+	if result.StructuredContent != nil {
+		raw, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			return tool.Result{}, fmt.Errorf("mcp tool %q: marshal structured content: %w", t.def.Name, err)
+		}
+		structured = raw
 	}
-	return text, nil
+	if result.IsError {
+		return tool.Result{
+			Content:           text,
+			StructuredContent: structured,
+			IsError:           true,
+		}, nil
+	}
+	return tool.Result{
+		Content:           text,
+		StructuredContent: structured,
+	}, nil
 }
 
 // extractText collects all TextContent from a CallToolResult and joins them.

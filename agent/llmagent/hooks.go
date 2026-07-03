@@ -57,8 +57,8 @@ type ToolCall struct {
 type ToolCallResult struct {
 	// Event is the tool event that will be appended to the conversation.
 	Event model.Event
-	// Result is the raw successful tool result string.
-	Result string
+	// Result is the raw successful tool result.
+	Result tool.Result
 	// Err is the tool lookup or execution error, if any.
 	Err error
 	// Duration is the wall-clock time spent in the tool invocation.

@@ -341,7 +341,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 				if tc.Function.Name != "" {
 					acc.Name = tc.Function.Name
 				}
-				acc.Arguments += tc.Function.Arguments
+				acc.Arguments = append(acc.Arguments, tc.Function.Arguments...)
 			}
 
 			if choice.FinishReason != "" {
@@ -369,6 +369,9 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			}
 			msg.ToolCalls = make([]model.ToolCall, maxIdx+1)
 			for idx, tc := range toolCallAcc {
+				if len(tc.Arguments) == 0 {
+					tc.Arguments = json.RawMessage(`{}`)
+				}
 				msg.ToolCalls[idx] = *tc
 			}
 		}
@@ -388,11 +391,6 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			Usage:        usage,
 		}, nil)
 	}
-}
-
-// convertMessages maps model.Content slice to openai ChatCompletionMessageParamUnion slice.
-func convertMessages(msgs []model.Content) ([]goopenai.ChatCompletionMessageParamUnion, error) {
-	return convertMessagesWithOptions(msgs, providerOptions{})
 }
 
 func convertMessagesWithOptions(msgs []model.Content, opts providerOptions) ([]goopenai.ChatCompletionMessageParamUnion, error) {
@@ -463,7 +461,7 @@ func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.
 					ID: tc.ID,
 					Function: goopenai.ChatCompletionMessageFunctionToolCallFunctionParam{
 						Name:      tc.Name,
-						Arguments: tc.Arguments,
+						Arguments: toolArgumentsString(tc.Arguments),
 					},
 				}
 				toolCalls = append(toolCalls, goopenai.ChatCompletionMessageToolCallUnionParam{
@@ -475,7 +473,8 @@ func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.
 		return goopenai.ChatCompletionMessageParamUnion{OfAssistant: &asst}, nil
 
 	case model.RoleTool:
-		return goopenai.ToolMessage(m.Content, m.ToolCallID), nil
+		toolResult := m.ToolResultValue()
+		return goopenai.ToolMessage(toolResult.Text(), toolResult.ToolCallID), nil
 
 	default:
 		return goopenai.ChatCompletionMessageParamUnion{}, fmt.Errorf("unknown role: %q", m.Role)
@@ -514,13 +513,6 @@ func convertTools(tools []tool.Tool) ([]goopenai.ChatCompletionToolUnionParam, e
 		})
 	}
 	return result, nil
-}
-
-// applyConfig transfers GenerateConfig settings to ChatCompletionNewParams and
-// optionally appends extra request options (e.g. enable_thinking for compatible
-// providers that do not use reasoning_effort).
-func applyConfig(p *goopenai.ChatCompletionNewParams, cfg *model.GenerateConfig, opts *[]option.RequestOption) {
-	applyConfigWithOptions(p, cfg, opts, providerOptions{}, generationOptions{})
 }
 
 func applyConfigWithOptions(
@@ -592,7 +584,7 @@ func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.Compl
 			msg.ToolCalls = append(msg.ToolCalls, model.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
+				Arguments: toolArgumentsRaw(tc.Function.Arguments),
 			})
 		}
 	}
@@ -606,6 +598,20 @@ func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.Compl
 			TotalTokens:      usage.TotalTokens,
 		},
 	}
+}
+
+func toolArgumentsString(args json.RawMessage) string {
+	if len(args) == 0 {
+		return "{}"
+	}
+	return string(args)
+}
+
+func toolArgumentsRaw(args string) json.RawMessage {
+	if args == "" {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(args)
 }
 
 // convertFinishReason maps OpenAI finish_reason string to model.FinishReason.

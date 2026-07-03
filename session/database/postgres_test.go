@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -289,7 +290,7 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 				{
 					ID:               "call-1",
 					Name:             "lookup",
-					Arguments:        `{"query":"weather"}`,
+					Arguments:        json.RawMessage(`{"query":"weather"}`),
 					ThoughtSignature: []byte{0x01, 0x02, 0xff},
 				},
 			},

@@ -94,10 +94,10 @@ func TestToolSet_Exa(t *testing.T) {
 		args, _ := json.Marshal(map[string]any{
 			"query": "Go programming language",
 		})
-		result, err := searchTool.Run(ctx, "test-call-id", string(args))
+		result, err := searchTool.Run(ctx, tool.Call{ID: "test-call-id", Name: searchTool.Definition().Name, Arguments: args})
 		require.NoError(t, err)
-		assert.NotEmpty(t, result)
-		fmt.Printf("\n[Exa search result]\n%s\n", result)
+		assert.NotEmpty(t, result.Content)
+		fmt.Printf("\n[Exa search result]\n%s\n", result.Content)
 	})
 }
 
@@ -116,7 +116,7 @@ func TestToolWrapper_Run_NotConnected(t *testing.T) {
 		def: tool.Definition{Name: "search"},
 	}
 
-	result, err := tw.Run(t.Context(), "call-1", `{}`)
+	result, err := tw.Run(t.Context(), tool.Call{ID: "call-1", Name: "search", Arguments: []byte("{}")})
 
 	assert.Empty(t, result)
 	require.Error(t, err)

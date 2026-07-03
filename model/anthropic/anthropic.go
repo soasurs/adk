@@ -225,7 +225,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 				if inputJSON := e.Delta.AsInputJSONDelta(); inputJSON.PartialJSON != "" {
 					idx := e.Index
 					if tc, ok := toolCallAcc[idx]; ok {
-						tc.Arguments += inputJSON.PartialJSON
+						tc.Arguments = append(tc.Arguments, inputJSON.PartialJSON...)
 					}
 				}
 
@@ -251,6 +251,9 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 			msg.ToolCalls = make([]model.ToolCall, len(toolCallAcc))
 			for idx, tc := range toolCallAcc {
 				if int(idx) < len(msg.ToolCalls) {
+					if len(tc.Arguments) == 0 {
+						tc.Arguments = json.RawMessage(`{}`)
+					}
 					msg.ToolCalls[idx] = *tc
 				}
 			}
@@ -305,11 +308,15 @@ func convertMessages(msgs []model.Content) ([]goanthropic.MessageParam, []goanth
 			var blocks []goanthropic.ContentBlockParamUnion
 			for i < len(msgs) && msgs[i].Role == model.RoleTool {
 				tm := msgs[i]
+				result := tm.ToolResultValue()
 				toolResult := goanthropic.ToolResultBlockParam{
-					ToolUseID: tm.ToolCallID,
+					ToolUseID: result.ToolCallID,
 					Content: []goanthropic.ToolResultBlockParamContentUnion{
-						{OfText: &goanthropic.TextBlockParam{Text: tm.Content}},
+						{OfText: &goanthropic.TextBlockParam{Text: result.Text()}},
 					},
+				}
+				if result.IsError {
+					toolResult.IsError = goanthropic.Bool(true)
 				}
 				blocks = append(blocks, goanthropic.ContentBlockParamUnion{
 					OfToolResult: &toolResult,
@@ -373,7 +380,7 @@ func convertAssistantBlocks(m model.Content) ([]goanthropic.ContentBlockParamUni
 	}
 	for _, tc := range m.ToolCalls {
 		var input any
-		if err := json.Unmarshal([]byte(tc.Arguments), &input); err != nil {
+		if err := json.Unmarshal(tc.Arguments, &input); err != nil {
 			return nil, fmt.Errorf("tool call %q: parse arguments: %w", tc.Name, err)
 		}
 		toolUseBlock := &goanthropic.ToolUseBlockParam{
@@ -466,7 +473,7 @@ func convertResponse(resp *goanthropic.Message) *model.LLMResponse {
 			msg.ToolCalls = append(msg.ToolCalls, model.ToolCall{
 				ID:        block.ID,
 				Name:      block.Name,
-				Arguments: argsJSON,
+				Arguments: json.RawMessage(argsJSON),
 			})
 		}
 	}

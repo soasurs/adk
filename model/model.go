@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 
 	"github.com/soasurs/adk/tool"
@@ -103,13 +104,41 @@ type ToolCall struct {
 	ID string
 	// Name is the name of the tool to invoke.
 	Name string
-	// Arguments is a JSON-encoded string of the tool's input parameters.
-	Arguments string
+	// Arguments is the raw JSON payload of the tool's input parameters.
+	Arguments json.RawMessage
 	// ThoughtSignature is an opaque token that some providers (e.g. Gemini thinking
 	// models) attach to a function-call part. It must be echoed back verbatim in the
 	// subsequent request so the provider can restore its reasoning context.
 	// Non-Gemini adapters leave this field nil and ignore it on input.
 	ThoughtSignature []byte
+}
+
+// ToolResult represents the result returned for one tool invocation.
+type ToolResult struct {
+	// ToolCallID links this result to the ToolCall.ID it answers.
+	ToolCallID string
+	// Name is the tool name associated with the result.
+	Name string
+	// Content is the plain-text fallback for providers that do not support
+	// structured tool results.
+	Content string
+	// StructuredContent is the raw JSON result returned by the tool.
+	StructuredContent json.RawMessage
+	// IsError reports that the tool result represents an execution failure that
+	// should be returned to the model as a tool response.
+	IsError bool
+}
+
+// Text returns the plain-text form that should be used when a provider does
+// not support structured tool results.
+func (r ToolResult) Text() string {
+	if r.Content != "" {
+		return r.Content
+	}
+	if len(r.StructuredContent) > 0 {
+		return string(r.StructuredContent)
+	}
+	return ""
 }
 
 // TokenUsage holds the token consumption statistics for a single LLM call.
@@ -139,8 +168,31 @@ type Content struct {
 	ReasoningContent string
 	// ToolCalls is populated when Role is RoleAssistant and the model requests tool invocations.
 	ToolCalls []ToolCall
-	// ToolCallID links a RoleTool message back to the ToolCall.ID it is responding to.
+	// ToolResult is populated when Role is RoleTool.
+	ToolResult *ToolResult
+	// ToolCallID links a RoleTool message back to the ToolCall.ID it is
+	// responding to. It is kept as a text fallback for simple callers; when
+	// ToolResult is non-nil, ToolResult.ToolCallID takes precedence.
 	ToolCallID string
+}
+
+// ToolResultValue returns the explicit tool result when present, otherwise it
+// builds one from the legacy RoleTool fallback fields.
+func (c Content) ToolResultValue() ToolResult {
+	if c.ToolResult != nil {
+		result := *c.ToolResult
+		if result.ToolCallID == "" {
+			result.ToolCallID = c.ToolCallID
+		}
+		if result.Content == "" {
+			result.Content = c.Content
+		}
+		return result
+	}
+	return ToolResult{
+		ToolCallID: c.ToolCallID,
+		Content:    c.Content,
+	}
 }
 
 // Choice represents one completion candidate returned by the LLM.

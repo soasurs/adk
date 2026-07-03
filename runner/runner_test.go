@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"sync/atomic"
@@ -129,7 +130,7 @@ func TestRunner_Run_Basic(t *testing.T) {
 func TestRunner_Run_MultipleAgentMessages(t *testing.T) {
 	tool := model.Content{
 		Role:      model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{ID: "tc1", Name: "echo", Arguments: `{"text":"hi"}`}},
+		ToolCalls: []model.ToolCall{{ID: "tc1", Name: "echo", Arguments: json.RawMessage(`{"text":"hi"}`)}},
 	}
 	toolResult := model.Content{Role: model.RoleTool, Content: "hi", ToolCallID: "tc1"}
 	final := model.Content{Role: model.RoleAssistant, Content: "Done."}

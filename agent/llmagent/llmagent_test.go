@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -223,7 +224,7 @@ func TestLlmAgent_MaxIterations(t *testing.T) {
 			Content: model.Content{
 				Role: model.RoleAssistant,
 				ToolCalls: []model.ToolCall{
-					{ID: "c1", Name: "echo", Arguments: `{"message":"hi"}`},
+					{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"message":"hi"}`)},
 				},
 			},
 			FinishReason: model.FinishReasonToolCalls,
@@ -518,7 +519,7 @@ func TestLlmAgent_Reasoning_PassThrough_WithToolCall(t *testing.T) {
 					Role:             model.RoleAssistant,
 					ReasoningContent: "I should use the echo tool to repeat the message.",
 					ToolCalls: []model.ToolCall{
-						{ID: "tc-1", Name: "echo", Arguments: `{"message":"hello"}`},
+						{ID: "tc-1", Name: "echo", Arguments: json.RawMessage(`{"message":"hello"}`)},
 					},
 				},
 				FinishReason: model.FinishReasonToolCalls,
@@ -661,7 +662,7 @@ func TestLlmAgent_Streaming_WithToolCall(t *testing.T) {
 				{
 					Content: model.Content{
 						Role:      model.RoleAssistant,
-						ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "echo", Arguments: `{"message":"streaming"}`}},
+						ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "echo", Arguments: json.RawMessage(`{"message":"streaming"}`)}},
 					},
 					FinishReason: model.FinishReasonToolCalls,
 				},
@@ -775,12 +776,12 @@ func (h *hookAwareTool) Definition() tool.Definition {
 	return tool.Definition{Name: h.name, Description: "hook-aware tool"}
 }
 
-func (h *hookAwareTool) Run(ctx context.Context, _ string, _ string) (string, error) {
+func (h *hookAwareTool) Run(ctx context.Context, _ tool.Call) (tool.Result, error) {
 	h.callCount.Add(1)
 	if h.ctxChecker != nil {
 		h.ctxChecker(ctx)
 	}
-	return h.result, nil
+	return tool.Result{Content: h.result}, nil
 }
 
 // TestLlmAgent_Hooks_ToolCallLifecycle verifies that tool hooks run around
@@ -799,7 +800,7 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			{
 				Content: model.Content{
 					Role:      model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: json.RawMessage(`{}`)}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
@@ -847,7 +848,7 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("after-tool-%d-%d", call.Iteration, call.ToolIndex))
 			mu.Unlock()
-			assert.Equal(t, "tool-result", result.Result)
+			assert.Equal(t, "tool-result", result.Result.Content)
 			assert.NoError(t, result.Err)
 			assert.Equal(t, "tool-result", result.Event.Content.Content)
 			return nil
@@ -887,7 +888,7 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 			{
 				Content: model.Content{
 					Role:      model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: `{}`}},
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "hook-tool", Arguments: json.RawMessage(`{}`)}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
@@ -926,7 +927,7 @@ func TestLlmAgent_MissingTool_UsesTypedError(t *testing.T) {
 			{
 				Content: model.Content{
 					Role:      model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "missing-tool", Arguments: `{}`}},
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "missing-tool", Arguments: json.RawMessage(`{}`)}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
@@ -1013,7 +1014,7 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 			{
 				Content: model.Content{
 					Role:      model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "real-tool", Arguments: `{}`}},
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "real-tool", Arguments: json.RawMessage(`{}`)}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},
@@ -1038,12 +1039,12 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
 			return &ToolCallResult{
 				Event:  model.Event{Content: fakeToolMsg},
-				Result: "injected-result",
+				Result: tool.Result{Content: "injected-result"},
 			}, nil
 		},
 		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
-			assert.Equal(t, "injected-result", result.Result)
+			assert.Equal(t, "injected-result", result.Result.Content)
 			assert.Equal(t, "injected-result", result.Event.Content.Content)
 			return nil
 		},
@@ -1258,10 +1259,10 @@ func (s *slowTool) Definition() tool.Definition {
 	return tool.Definition{Name: s.name, Description: "a slow tool for testing"}
 }
 
-func (s *slowTool) Run(_ context.Context, _ string, _ string) (string, error) {
+func (s *slowTool) Run(_ context.Context, _ tool.Call) (tool.Result, error) {
 	s.callLog.Add(1)
 	time.Sleep(s.delay)
-	return s.result, nil
+	return tool.Result{Content: s.result}, nil
 }
 
 // TestLlmAgent_ParallelToolExecution verifies that multiple tool calls issued
@@ -1283,8 +1284,8 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
-						{ID: "tc-a", Name: "tool-a", Arguments: `{}`},
-						{ID: "tc-b", Name: "tool-b", Arguments: `{}`},
+						{ID: "tc-a", Name: "tool-a", Arguments: json.RawMessage(`{}`)},
+						{ID: "tc-b", Name: "tool-b", Arguments: json.RawMessage(`{}`)},
 					},
 				},
 				FinishReason: model.FinishReasonToolCalls,
@@ -1348,9 +1349,9 @@ func (b *blockingTool) Definition() tool.Definition {
 	return tool.Definition{Name: b.name, Description: "a blocking tool for testing"}
 }
 
-func (b *blockingTool) Run(ctx context.Context, _ string, _ string) (string, error) {
+func (b *blockingTool) Run(ctx context.Context, _ tool.Call) (tool.Result, error) {
 	<-ctx.Done()
-	return "", ctx.Err()
+	return tool.Result{}, ctx.Err()
 }
 
 // TestLlmAgent_ToolTimeout_ExceedsDeadline verifies that when ToolTimeout is set
@@ -1367,7 +1368,7 @@ func TestLlmAgent_ToolTimeout_ExceedsDeadline(t *testing.T) {
 				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
-						{ID: "tc-1", Name: "blocker", Arguments: `{}`},
+						{ID: "tc-1", Name: "blocker", Arguments: json.RawMessage(`{}`)},
 					},
 				},
 				FinishReason: model.FinishReasonToolCalls,
@@ -1420,7 +1421,7 @@ func TestLlmAgent_ToolTimeout_CompletesWithinDeadline(t *testing.T) {
 			{
 				Content: model.Content{
 					Role:      model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "fast", Arguments: `{}`}},
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "fast", Arguments: json.RawMessage(`{}`)}},
 				},
 				FinishReason: model.FinishReasonToolCalls,
 			},

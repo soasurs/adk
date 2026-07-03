@@ -129,7 +129,7 @@ func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
 				Content:          "I should use a tool.",
 				ReasoningContent: "need current data",
 				ToolCalls: []model.ToolCall{
-					{ID: "call_1", Name: "lookup", Arguments: `{"query":"weather"}`},
+					{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"query":"weather"}`)},
 				},
 			},
 			{Role: model.RoleTool, ToolCallID: "call_1", Content: "sunny"},

@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -185,7 +186,7 @@ func TestConvertMessages_Assistant_ToolCalls(t *testing.T) {
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
-				{ID: "call_1", Name: "Echo", Arguments: `{"echo":"hi"}`},
+				{ID: "call_1", Name: "Echo", Arguments: json.RawMessage(`{"echo":"hi"}`)},
 			},
 		},
 	})
@@ -205,7 +206,7 @@ func TestConvertMessages_Tool(t *testing.T) {
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
-				{ID: "call_1", Name: "Echo", Arguments: "{}"},
+				{ID: "call_1", Name: "Echo", Arguments: json.RawMessage("{}")},
 			},
 		},
 		{Role: model.RoleTool, Content: "pong", ToolCallID: "call_1"},
@@ -222,13 +223,70 @@ func TestConvertMessages_Tool(t *testing.T) {
 	assert.Equal(t, "pong", toolContent.Parts[0].FunctionResponse.Response["output"])
 }
 
+func TestConvertMessages_Tool_StructuredResult(t *testing.T) {
+	contents, _, err := convertMessages([]model.Content{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Name: "Weather", Arguments: json.RawMessage("{}")},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolCallID:        "call_1",
+				Name:              "Weather",
+				StructuredContent: json.RawMessage(`{"temperature":23,"condition":"clear"}`),
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 2)
+	response := contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	assert.Equal(t, "call_1", response.ID)
+	assert.Equal(t, "Weather", response.Name)
+	assert.Equal(t, float64(23), response.Response["temperature"])
+	assert.Equal(t, "clear", response.Response["condition"])
+}
+
+func TestConvertMessages_Tool_StructuredErrorResult(t *testing.T) {
+	contents, _, err := convertMessages([]model.Content{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Name: "Weather", Arguments: json.RawMessage("{}")},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolCallID:        "call_1",
+				Name:              "Weather",
+				Content:           "weather service unavailable",
+				StructuredContent: json.RawMessage(`{"code":"unavailable","retry_after":30}`),
+				IsError:           true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents, 2)
+	response := contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	assert.Equal(t, "weather service unavailable", response.Response["error"])
+	details, ok := response.Response["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "unavailable", details["code"])
+	assert.Equal(t, float64(30), details["retry_after"])
+}
+
 func TestConvertMessages_ConsecutiveToolsBatched(t *testing.T) {
 	contents, _, err := convertMessages([]model.Content{
 		{
 			Role: model.RoleAssistant,
 			ToolCalls: []model.ToolCall{
-				{ID: "c1", Name: "Echo", Arguments: "{}"},
-				{ID: "c2", Name: "Echo", Arguments: "{}"},
+				{ID: "c1", Name: "Echo", Arguments: json.RawMessage("{}")},
+				{ID: "c2", Name: "Echo", Arguments: json.RawMessage("{}")},
 			},
 		},
 		{Role: model.RoleTool, Content: "r1", ToolCallID: "c1"},
@@ -399,13 +457,20 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 
 		for _, tc := range resp.Content.ToolCalls {
 			t.Logf("[turn %d] tool_call: %s args=%s", i+1, tc.Name, tc.Arguments)
-			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tool.Call{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
 			require.NoError(t, err)
-			t.Logf("[turn %d] tool_result: %s", i+1, result)
+			t.Logf("[turn %d] tool_result: %s", i+1, result.Content)
 			messages = append(messages, model.Content{
 				Role:       model.RoleTool,
-				Content:    result,
+				Content:    result.Content,
 				ToolCallID: tc.ID,
+				ToolResult: &model.ToolResult{
+					ToolCallID:        tc.ID,
+					Name:              tc.Name,
+					Content:           result.Content,
+					StructuredContent: result.StructuredContent,
+					IsError:           result.IsError,
+				},
 			})
 		}
 	}
@@ -509,12 +574,19 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 
 		require.Equal(t, model.FinishReasonToolCalls, resp.FinishReason)
 		for _, tc := range resp.Content.ToolCalls {
-			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tool.Call{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
 			require.NoError(t, err)
 			messages = append(messages, model.Content{
 				Role:       model.RoleTool,
-				Content:    result,
+				Content:    result.Content,
 				ToolCallID: tc.ID,
+				ToolResult: &model.ToolResult{
+					ToolCallID:        tc.ID,
+					Name:              tc.Name,
+					Content:           result.Content,
+					StructuredContent: result.StructuredContent,
+					IsError:           result.IsError,
+				},
 			})
 		}
 	}

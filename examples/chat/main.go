@@ -226,7 +226,7 @@ func main() {
 						onAgentLine = false
 					}
 					for _, tc := range event.Content.ToolCalls {
-						fmt.Printf("  → %s  %s\n", tc.Name, truncate(tc.Arguments, 60))
+						fmt.Printf("  → %s  %s\n", tc.Name, truncate(string(tc.Arguments), 60))
 					}
 					// Reset for the next LLM call that follows tool results.
 					hadPartials = false

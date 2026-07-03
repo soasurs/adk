@@ -37,10 +37,10 @@ func (e *echo) Definition() tool.Definition {
 	return e.def
 }
 
-func (e *echo) Run(_ context.Context, _ string, arguments string) (string, error) {
+func (e *echo) Run(_ context.Context, call tool.Call) (tool.Result, error) {
 	request := new(echoRequest)
-	if err := json.Unmarshal([]byte(arguments), request); err != nil {
-		return "", err
+	if err := json.Unmarshal(call.Arguments, request); err != nil {
+		return tool.Result{}, err
 	}
-	return request.Request, nil
+	return tool.Result{Content: request.Request}, nil
 }

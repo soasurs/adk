@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -171,7 +172,7 @@ func TestSQLite_DatabaseSession_ToolCallThoughtSignature_RoundTrip(t *testing.T)
 		{
 			ID:               "call-1",
 			Name:             "lookup",
-			Arguments:        `{"query":"weather"}`,
+			Arguments:        json.RawMessage(`{"query":"weather"}`),
 			ThoughtSignature: []byte{0x01, 0x02, 0xff},
 		},
 	}

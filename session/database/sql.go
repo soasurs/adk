@@ -57,6 +57,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 				text,
 				reasoning_text,
 				tool_calls,
+				tool_result,
 				tool_call_id,
 				finish_reason,
 				parts,
@@ -70,7 +71,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14, $15, 0, 0
+				$9, $10, $11, $12, $13, $14, $15, $16, 0, 0
 			)
 		`,
 		deleteEvent: `
@@ -190,6 +191,15 @@ func migrationV1SQL(t migrationTables) []string {
 				compacted_at,
 				created_at
 			)
+		`,
+	}
+}
+
+func migrationV2SQL(t migrationTables) []string {
+	return []string{
+		`
+			ALTER TABLE ` + t.events + `
+			ADD COLUMN tool_result TEXT NOT NULL DEFAULT ''
 		`,
 	}
 }

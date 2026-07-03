@@ -351,16 +351,17 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 
 	if !ok {
 		toolErr := &ToolNotFoundError{Name: tc.Name}
+		result := tool.Result{
+			Content: toolErr.Error(),
+			IsError: true,
+		}
 		event := model.Event{
-			Author: tc.Name,
-			Content: model.Content{
-				Role:       model.RoleTool,
-				ToolCallID: tc.ID,
-				Content:    toolErr.Error(),
-			},
+			Author:  tc.Name,
+			Content: toolResultContent(tc, result),
 		}
 		if err := a.afterToolCall(ctx, call, &ToolCallResult{
 			Event:    event,
+			Result:   result,
 			Err:      toolErr,
 			Duration: time.Since(startedAt),
 		}); err != nil {
@@ -369,17 +370,18 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		return event, nil
 	}
 
-	result, toolErr := t.Run(ctx, tc.ID, tc.Arguments)
-	event := model.Event{
-		Author: t.Definition().Name,
-		Content: model.Content{
-			Role:       model.RoleTool,
-			ToolCallID: tc.ID,
-			Content:    result,
-		},
-	}
+	result, toolErr := t.Run(ctx, tool.Call{
+		ID:        tc.ID,
+		Name:      tc.Name,
+		Arguments: toolCallArguments(tc.Arguments),
+	})
 	if toolErr != nil {
-		event.Content.Content = fmt.Sprintf("error: %s", toolErr.Error())
+		result.Content = fmt.Sprintf("error: %s", toolErr.Error())
+		result.IsError = true
+	}
+	event := model.Event{
+		Author:  t.Definition().Name,
+		Content: toolResultContent(tc, result),
 	}
 	if err := a.afterToolCall(ctx, call, &ToolCallResult{
 		Event:    event,
@@ -390,6 +392,32 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		return model.Event{}, err
 	}
 	return event, nil
+}
+
+func toolCallArguments(args []byte) []byte {
+	if len(args) == 0 {
+		return []byte("{}")
+	}
+	return args
+}
+
+func toolResultContent(tc model.ToolCall, result tool.Result) model.Content {
+	content := result.Content
+	if content == "" && len(result.StructuredContent) > 0 {
+		content = string(result.StructuredContent)
+	}
+	return model.Content{
+		Role:       model.RoleTool,
+		Content:    content,
+		ToolCallID: tc.ID,
+		ToolResult: &model.ToolResult{
+			ToolCallID:        tc.ID,
+			Name:              tc.Name,
+			Content:           content,
+			StructuredContent: result.StructuredContent,
+			IsError:           result.IsError,
+		},
+	}
 }
 
 func (a *LlmAgent) beforeLLMCall(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {

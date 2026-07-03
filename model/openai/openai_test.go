@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -121,7 +122,7 @@ func TestConvertMessage_Assistant_ToolCalls(t *testing.T) {
 	p, err := convertMessage(model.Content{
 		Role: model.RoleAssistant,
 		ToolCalls: []model.ToolCall{
-			{ID: "call_1", Name: "Echo", Arguments: `{"echo":"hi"}`},
+			{ID: "call_1", Name: "Echo", Arguments: json.RawMessage(`{"echo":"hi"}`)},
 		},
 	})
 	require.NoError(t, err)
@@ -287,13 +288,20 @@ func TestChatCompletion_Generate_WithTool(t *testing.T) {
 
 		for _, tc := range resp.Content.ToolCalls {
 			t.Logf("[turn %d] tool_call: %s args=%s", i+1, tc.Name, tc.Arguments)
-			result, err := echo.Run(t.Context(), tc.ID, tc.Arguments)
+			result, err := echo.Run(t.Context(), tool.Call{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
 			require.NoError(t, err)
-			t.Logf("[turn %d] tool_result: %s", i+1, result)
+			t.Logf("[turn %d] tool_result: %s", i+1, result.Content)
 			messages = append(messages, model.Content{
 				Role:       model.RoleTool,
-				Content:    result,
+				Content:    result.Content,
 				ToolCallID: tc.ID,
+				ToolResult: &model.ToolResult{
+					ToolCallID:        tc.ID,
+					Name:              tc.Name,
+					Content:           result.Content,
+					StructuredContent: result.StructuredContent,
+					IsError:           result.IsError,
+				},
 			})
 		}
 	}

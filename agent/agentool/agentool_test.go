@@ -2,6 +2,7 @@ package agentool_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"os"
@@ -88,7 +89,7 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 				Content: model.Content{
 					Role: model.RoleAssistant,
 					ToolCalls: []model.ToolCall{
-						{ID: "tc-1", Name: "math_agent", Arguments: `{"task":"what is 2+2?"}`},
+						{ID: "tc-1", Name: "math_agent", Arguments: json.RawMessage(`{"task":"what is 2+2?"}`)},
 					},
 				},
 				FinishReason: model.FinishReasonToolCalls,
