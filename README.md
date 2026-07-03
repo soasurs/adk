@@ -22,7 +22,7 @@ Go version: `1.26+`
 - Sequential and parallel agent composition
 - Agent-as-tool delegation
 - In-memory and SQL database session backends, tested with SQLite and PostgreSQL
-- MCP tool integration
+- Structured tool calls and results, including MCP tool integration
 - Native Go streaming with `iter.Seq2`
 
 ## Installation
@@ -50,7 +50,7 @@ go get github.com/soasurs/adk
 | `session/memory` | In-memory session backend |
 | `session/database` | SQL database session backend for SQLite and PostgreSQL |
 | `session/compaction` | Reference config for manual compaction |
-| `tool` | Tool interface and helpers |
+| `tool` | Tool interface, structured calls/results, and typed function helpers |
 | `tool/builtin` | Built-in tools |
 | `tool/mcp` | MCP tool bridge |
 | `runner` | Wires an agent to session storage |
@@ -118,7 +118,7 @@ func main() {
 
 `Content` is the provider-facing payload carried by events and LLM responses.
 It contains the role, text, multimodal parts, reasoning text, tool calls, and
-tool-call response linkage.
+structured tool-call response linkage.
 
 ```go
 content := model.Content{
@@ -175,6 +175,58 @@ type LLM interface {
 
 `LLMRequest.Contents` is projected from event history before calling the
 provider adapter.
+
+### `tool.Tool`
+
+Tools receive raw JSON arguments and return provider-neutral results. `Content`
+is the plain-text fallback for providers that only accept text tool responses;
+`StructuredContent` carries the JSON result for providers and storage layers
+that preserve structured tool output.
+
+```go
+type Tool interface {
+    Definition() Definition
+    Run(ctx context.Context, call Call) (Result, error)
+}
+```
+
+For most application tools, wrap a typed Go function with `tool.NewFunc`.
+Input and output JSON Schemas are inferred when not provided explicitly.
+
+```go
+type weatherInput struct {
+    City string `json:"city"`
+}
+
+type weatherOutput struct {
+    City     string `json:"city"`
+    Forecast string `json:"forecast"`
+}
+
+weatherTool, err := tool.NewFunc(tool.Definition{
+    Name:        "weather",
+    Description: "Get a short weather forecast for a city.",
+}, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
+    return weatherOutput{
+        City:     input.City,
+        Forecast: "clear",
+    }, nil
+})
+```
+
+Pass tools to an LLM-backed agent:
+
+```go
+agent := llmagent.New(llmagent.Config{
+    Name:  "assistant",
+    Model: llm,
+    Tools: []tool.Tool{weatherTool},
+})
+```
+
+Use `tool.Result{IsError: true}` for model-visible tool failures. Return a Go
+`error` for SDK, transport, or framework failures that the agent runtime should
+mark as execution failures.
 
 ### Generation config
 

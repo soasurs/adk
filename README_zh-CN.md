@@ -19,7 +19,7 @@ Go 版本：`1.26+`
 - 支持顺序和并行 Agent 组合
 - 支持将 Agent 包装成 Tool
 - 内存与 SQL 数据库会话后端，已覆盖 SQLite 和 PostgreSQL 测试
-- MCP 工具集成
+- 结构化 tool call 和 tool result，包括 MCP 工具集成
 - 使用 `iter.Seq2` 做原生 Go 流式输出
 
 ## 安装
@@ -47,7 +47,7 @@ go get github.com/soasurs/adk
 | `session/memory` | 内存会话后端 |
 | `session/database` | 支持 SQLite 和 PostgreSQL 的 SQL 数据库会话后端 |
 | `session/compaction` | 手动压缩用的参考配置 |
-| `tool` | Tool 接口与辅助函数 |
+| `tool` | Tool 接口、结构化 call/result，以及 typed function 辅助函数 |
 | `tool/builtin` | 内置工具 |
 | `tool/mcp` | MCP 工具桥接 |
 | `runner` | 串联 Agent 与会话存储 |
@@ -114,7 +114,7 @@ func main() {
 ### `model.Content`
 
 `Content` 是 LLM 适配器看到的载荷，包含 role、文本、多模态 parts、推理文本、
-tool calls 以及 tool-call 响应关联。
+tool calls 以及结构化 tool-call 响应关联。
 
 ```go
 content := model.Content{
@@ -169,6 +169,56 @@ type LLM interface {
 ```
 
 调用 provider 之前，`LLMRequest.Contents` 会从 event history 投影出来。
+
+### `tool.Tool`
+
+Tool 接收 raw JSON arguments，并返回 provider-neutral result。`Content` 是给只支持
+文本 tool response 的 provider 使用的纯文本 fallback；`StructuredContent` 保存 JSON
+结果，供支持结构化 tool output 的 provider 和存储层使用。
+
+```go
+type Tool interface {
+    Definition() Definition
+    Run(ctx context.Context, call Call) (Result, error)
+}
+```
+
+大多数应用工具可以用 `tool.NewFunc` 包装 typed Go function。如果没有显式提供
+schema，输入和输出 JSON Schema 会从 Go 类型自动推导。
+
+```go
+type weatherInput struct {
+    City string `json:"city"`
+}
+
+type weatherOutput struct {
+    City     string `json:"city"`
+    Forecast string `json:"forecast"`
+}
+
+weatherTool, err := tool.NewFunc(tool.Definition{
+    Name:        "weather",
+    Description: "Get a short weather forecast for a city.",
+}, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
+    return weatherOutput{
+        City:     input.City,
+        Forecast: "clear",
+    }, nil
+})
+```
+
+将 tools 传给 LLM Agent：
+
+```go
+agent := llmagent.New(llmagent.Config{
+    Name:  "assistant",
+    Model: llm,
+    Tools: []tool.Tool{weatherTool},
+})
+```
+
+面向模型可见的工具失败使用 `tool.Result{IsError: true}`。SDK、transport 或框架
+层面的失败返回 Go `error`，由 agent runtime 标记为执行失败。
 
 ### 生成配置
 

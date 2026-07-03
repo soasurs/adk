@@ -33,7 +33,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `session/database` | SQL database-backed session with schema migration; SQLite and PostgreSQL are tested |
 | `session/compaction` | `compaction.Config` reference type for manual context management |
 | `session/event` | `event.Event` — persisted form of `model.Event` |
-| `tool` | `Tool` interface and `Definition` |
+| `tool` | `Tool` interface, `Definition`, structured `Call`/`Result`, and typed function helpers |
 | `tool/builtin` | Ready-made tools (e.g. code execution) |
 | `tool/mcp` | MCP client tool adapter |
 | `internal/snowflake` | Snowflake ID generator |
@@ -90,6 +90,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Stateless agents** — agents hold no conversation state; all history is supplied by `Runner` via `SessionService` on every call.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.
+- **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; tool outputs use `tool.Result` / `model.ToolResult` with text fallback, structured JSON, and `IsError`. Do not collapse arguments or results back into plain strings except at provider-specific API boundaries.
 - **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactEvents(ctx, splitEventID, summaryEvent)` to archive old events and insert a summary. `splitEventID=0` archives all active events.
 
 ## Coding Style
@@ -108,6 +109,8 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - Functional options (`Option func(*T)`) for `session/database` configuration.
 - `*bool` only for tri-state fields where nil means "provider decides" (`EnableThinking *bool`).
 - Decorator pattern for tool wrappers: `tool.WithTimeout` wraps any `Tool` as a private struct.
+- Prefer `tool.NewFunc[In, Out]` for application tools so input/output schemas are inferred from Go types. Custom tools should implement `Run(ctx, tool.Call) (tool.Result, error)`.
+- Use `tool.Result{IsError: true}` for model-visible tool failures. Reserve Go `error` returns for SDK, transport, parsing, or framework failures that the runtime should turn into execution failures.
 
 ### Naming
 
