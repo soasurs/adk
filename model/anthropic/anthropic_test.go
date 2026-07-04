@@ -3,9 +3,13 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	goanthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +37,7 @@ func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg
 
 // newClientFromEnv creates a model.LLM from environment variables.
 // Required: ANTHROPIC_API_KEY — test is skipped when absent.
+// Optional: ANTHROPIC_BASE_URL — overrides the default Anthropic endpoint.
 // Optional: ANTHROPIC_MODEL — model name; defaults to "claude-haiku-4-5" when absent.
 func newClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
@@ -44,11 +49,12 @@ func newClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		modelName = "claude-haiku-4-5"
 	}
-	return New(apiKey, modelName)
+	return NewWithOptions(apiKey, modelName, optionsFromBaseURL(os.Getenv("ANTHROPIC_BASE_URL"))...)
 }
 
 // newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: ANTHROPIC_API_KEY + ANTHROPIC_THINKING_MODEL — test is skipped when either is absent.
+// Optional: ANTHROPIC_BASE_URL — overrides the default Anthropic endpoint.
 func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -59,7 +65,51 @@ func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	if modelName == "" {
 		t.Skip("ANTHROPIC_THINKING_MODEL not set")
 	}
+	opts = append(optionsFromBaseURL(os.Getenv("ANTHROPIC_BASE_URL")), opts...)
 	return NewWithOptions(apiKey, modelName, opts...)
+}
+
+func optionsFromBaseURL(baseURL string) []Option {
+	if baseURL == "" {
+		return nil
+	}
+	return []Option{WithBaseURL(baseURL)}
+}
+
+type capturedRequest struct {
+	method string
+	path   string
+	body   []byte
+}
+
+func newCaptureServer(t *testing.T, response string) (*httptest.Server, <-chan capturedRequest) {
+	t.Helper()
+	reqCh := make(chan capturedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		select {
+		case reqCh <- capturedRequest{method: r.Method, path: r.URL.Path, body: body}:
+		default:
+			t.Errorf("unexpected extra request")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(response))
+	}))
+	t.Cleanup(server.Close)
+	return server, reqCh
+}
+
+func readCapturedRequest(t *testing.T, reqCh <-chan capturedRequest) capturedRequest {
+	t.Helper()
+	select {
+	case req := <-reqCh:
+		return req
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for request")
+		return capturedRequest{}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +119,45 @@ func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 func TestMessages_Name(t *testing.T) {
 	m := &Model{modelName: "claude-haiku-4-5"}
 	assert.Equal(t, "claude-haiku-4-5", m.Name())
+}
+
+func TestMessages_WithBaseURL(t *testing.T) {
+	server, reqCh := newCaptureServer(t, `{
+		"id": "msg_test",
+		"type": "message",
+		"role": "assistant",
+		"model": "claude-test",
+		"content": [{"type": "text", "text": "ok"}],
+		"stop_reason": "end_turn",
+		"stop_sequence": null,
+		"usage": {
+			"input_tokens": 1,
+			"output_tokens": 1
+		}
+	}`)
+
+	llm := NewWithOptions("test-key", "claude-test", WithBaseURL(server.URL))
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
+		Model: llm.Name(),
+		Contents: []model.Content{
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "ok", resp.Content.Content)
+
+	req := readCapturedRequest(t, reqCh)
+	assert.Equal(t, http.MethodPost, req.method)
+	assert.Equal(t, "/v1/messages", req.path)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(req.body, &payload))
+	assert.Equal(t, "claude-test", payload["model"])
+	messages, ok := payload["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
 }
 
 func TestConvertStopReason(t *testing.T) {

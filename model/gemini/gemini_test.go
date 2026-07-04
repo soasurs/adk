@@ -3,8 +3,12 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +38,7 @@ func callGenerate(ctx context.Context, llm model.LLM, req *model.LLMRequest, cfg
 
 // newClientFromEnv creates a model.LLM from environment variables.
 // Required: GEMINI_API_KEY — test is skipped when absent.
+// Optional: GEMINI_BASE_URL — overrides the default Gemini endpoint.
 // Optional: GEMINI_MODEL — model name; defaults to "gemini-2.0-flash" when absent.
 func newClientFromEnv(t *testing.T) model.LLM {
 	t.Helper()
@@ -45,13 +50,15 @@ func newClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		modelName = "gemini-2.0-flash"
 	}
-	llm, err := New(t.Context(), apiKey, modelName)
+	opts := optionsFromBaseURL(os.Getenv("GEMINI_BASE_URL"))
+	llm, err := NewWithOptions(t.Context(), apiKey, modelName, opts...)
 	require.NoError(t, err)
 	return llm
 }
 
 // newVertexAIClientFromEnv creates a model.LLM backed by Vertex AI from environment variables.
 // Required: VERTEX_AI_PROJECT + VERTEX_AI_LOCATION — test is skipped when either is absent.
+// Optional: VERTEX_AI_BASE_URL — overrides the default Vertex AI endpoint.
 // Optional: VERTEX_AI_MODEL — defaults to "gemini-2.0-flash" when absent.
 // Authentication relies on Application Default Credentials (ADC).
 func newVertexAIClientFromEnv(t *testing.T) model.LLM {
@@ -68,13 +75,15 @@ func newVertexAIClientFromEnv(t *testing.T) model.LLM {
 	if modelName == "" {
 		modelName = "gemini-2.0-flash"
 	}
-	llm, err := NewVertexAI(t.Context(), project, location, modelName)
+	opts := optionsFromBaseURL(os.Getenv("VERTEX_AI_BASE_URL"))
+	llm, err := NewVertexAIWithOptions(t.Context(), project, location, modelName, opts...)
 	require.NoError(t, err)
 	return llm
 }
 
 // newThinkingClientFromEnv creates a model.LLM for thinking model tests.
 // Required: GEMINI_API_KEY + GEMINI_THINKING_MODEL — test is skipped when either is absent.
+// Optional: GEMINI_BASE_URL — overrides the default Gemini endpoint.
 func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	t.Helper()
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -85,9 +94,53 @@ func newThinkingClientFromEnv(t *testing.T, opts ...Option) model.LLM {
 	if modelName == "" {
 		t.Skip("GEMINI_THINKING_MODEL not set")
 	}
+	opts = append(optionsFromBaseURL(os.Getenv("GEMINI_BASE_URL")), opts...)
 	llm, err := NewWithOptions(t.Context(), apiKey, modelName, opts...)
 	require.NoError(t, err)
 	return llm
+}
+
+func optionsFromBaseURL(baseURL string) []Option {
+	if baseURL == "" {
+		return nil
+	}
+	return []Option{WithBaseURL(baseURL)}
+}
+
+type capturedRequest struct {
+	method string
+	path   string
+	body   []byte
+}
+
+func newCaptureServer(t *testing.T, response string) (*httptest.Server, <-chan capturedRequest) {
+	t.Helper()
+	reqCh := make(chan capturedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		select {
+		case reqCh <- capturedRequest{method: r.Method, path: r.URL.Path, body: body}:
+		default:
+			t.Errorf("unexpected extra request")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(response))
+	}))
+	t.Cleanup(server.Close)
+	return server, reqCh
+}
+
+func readCapturedRequest(t *testing.T, reqCh <-chan capturedRequest) capturedRequest {
+	t.Helper()
+	select {
+	case req := <-reqCh:
+		return req
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for request")
+		return capturedRequest{}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +159,55 @@ func TestNewVertexAI_DefaultRetryConfig(t *testing.T) {
 	}
 	require.NotNil(t, llm)
 	assert.Equal(t, retry.DefaultConfig(), llm.retryCfg)
+}
+
+func TestGenerateContent_WithBaseURL(t *testing.T) {
+	server, reqCh := newCaptureServer(t, `{
+		"candidates": [
+			{
+				"content": {
+					"role": "model",
+					"parts": [{"text": "ok"}]
+				},
+				"finishReason": "STOP"
+			}
+		],
+		"usageMetadata": {
+			"promptTokenCount": 1,
+			"candidatesTokenCount": 1,
+			"totalTokenCount": 2
+		}
+	}`)
+
+	llm, err := NewWithOptions(
+		t.Context(),
+		"test-key",
+		"gemini-test",
+		WithBaseURL(server.URL),
+		WithRetryConfig(retry.Config{MaxAttempts: 1}),
+	)
+	require.NoError(t, err)
+
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
+		Model: llm.Name(),
+		Contents: []model.Content{
+			{Role: model.RoleUser, Content: "hello"},
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "ok", resp.Content.Content)
+
+	req := readCapturedRequest(t, reqCh)
+	assert.Equal(t, http.MethodPost, req.method)
+	assert.Equal(t, "/v1beta/models/gemini-test:generateContent", req.path)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(req.body, &payload))
+	contents, ok := payload["contents"].([]any)
+	require.True(t, ok)
+	require.Len(t, contents, 1)
 }
 
 func TestConvertFinishReason(t *testing.T) {

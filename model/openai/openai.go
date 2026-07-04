@@ -396,6 +396,9 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 func convertMessagesWithOptions(msgs []model.Content, opts providerOptions) ([]goopenai.ChatCompletionMessageParamUnion, error) {
 	result := make([]goopenai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
+		if skipMessageForProvider(m, opts) {
+			continue
+		}
 		p, err := convertMessageWithOptions(m, opts)
 		if err != nil {
 			return nil, err
@@ -407,6 +410,20 @@ func convertMessagesWithOptions(msgs []model.Content, opts providerOptions) ([]g
 
 func convertMessage(m model.Content) (goopenai.ChatCompletionMessageParamUnion, error) {
 	return convertMessageWithOptions(m, providerOptions{})
+}
+
+func skipMessageForProvider(m model.Content, opts providerOptions) bool {
+	return opts.thinkingParam == thinkingParamDeepSeek &&
+		m.Role == model.RoleAssistant &&
+		m.Content == "" &&
+		len(m.ToolCalls) == 0 &&
+		m.ReasoningContent != ""
+}
+
+func includeAssistantReasoningContent(m model.Content, opts providerOptions) bool {
+	return opts.includeAssistantReasoningContent &&
+		m.ReasoningContent != "" &&
+		len(m.ToolCalls) > 0
 }
 
 func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.ChatCompletionMessageParamUnion, error) {
@@ -449,7 +466,7 @@ func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.
 		if m.Content != "" {
 			asst.Content.OfString = param.NewOpt(m.Content)
 		}
-		if opts.includeAssistantReasoningContent && m.ReasoningContent != "" {
+		if includeAssistantReasoningContent(m, opts) {
 			asst.SetExtraFields(map[string]any{
 				"reasoning_content": m.ReasoningContent,
 			})

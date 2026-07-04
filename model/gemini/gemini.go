@@ -18,6 +18,7 @@ import (
 // GenerateContent implements model.LLM using the Gemini GenerateContent API.
 type GenerateContent struct {
 	client     *genai.Client
+	baseURL    string
 	modelName  string
 	retryCfg   retry.Config
 	generation generationOptions
@@ -49,6 +50,13 @@ type Option func(*GenerateContent)
 func WithRetryConfig(cfg retry.Config) Option {
 	return func(g *GenerateContent) {
 		g.retryCfg = cfg
+	}
+}
+
+// WithBaseURL overrides the Gemini or Vertex AI API endpoint for this adapter.
+func WithBaseURL(baseURL string) Option {
+	return func(g *GenerateContent) {
+		g.baseURL = baseURL
 	}
 }
 
@@ -86,23 +94,16 @@ func New(ctx context.Context, apiKey, modelName string, retryCfg ...retry.Config
 // NewWithOptions creates a new GenerateContent instance for the Gemini
 // Developer API with explicit adapter options.
 func NewWithOptions(ctx context.Context, apiKey, modelName string, opts ...Option) (*GenerateContent, error) {
+	gc := newGenerateContent(modelName, opts...)
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
-		Backend: genai.BackendGeminiAPI,
+		APIKey:      apiKey,
+		Backend:     genai.BackendGeminiAPI,
+		HTTPOptions: genai.HTTPOptions{BaseURL: gc.baseURL},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create client: %w", err)
 	}
-	gc := &GenerateContent{
-		client:    client,
-		modelName: modelName,
-		retryCfg:  retry.DefaultConfig(),
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(gc)
-		}
-	}
+	gc.client = client
 	return gc, nil
 }
 
@@ -128,16 +129,22 @@ func NewVertexAI(ctx context.Context, project, location, modelName string, retry
 // NewVertexAIWithOptions creates a new GenerateContent instance backed by
 // Google Cloud Vertex AI with explicit adapter options.
 func NewVertexAIWithOptions(ctx context.Context, project, location, modelName string, opts ...Option) (*GenerateContent, error) {
+	gc := newGenerateContent(modelName, opts...)
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Backend:  genai.BackendVertexAI,
-		Project:  project,
-		Location: location,
+		Backend:     genai.BackendVertexAI,
+		Project:     project,
+		Location:    location,
+		HTTPOptions: genai.HTTPOptions{BaseURL: gc.baseURL},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create vertex ai client: %w", err)
 	}
+	gc.client = client
+	return gc, nil
+}
+
+func newGenerateContent(modelName string, opts ...Option) *GenerateContent {
 	gc := &GenerateContent{
-		client:    client,
 		modelName: modelName,
 		retryCfg:  retry.DefaultConfig(),
 	}
@@ -146,7 +153,7 @@ func NewVertexAIWithOptions(ctx context.Context, project, location, modelName st
 			opt(gc)
 		}
 	}
-	return gc, nil
+	return gc
 }
 
 // Name returns the model identifier.
