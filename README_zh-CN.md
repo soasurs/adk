@@ -73,7 +73,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
+    llm := openai.New(os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_BASE_URL"), "gpt-4o-mini")
     agent := llmagent.New(llmagent.Config{
         Name:        "assistant",
         Description: "A helpful assistant",
@@ -231,12 +231,12 @@ cfg := &model.GenerateConfig{
 }
 ```
 
-Provider-specific 控制放在对应 adapter 包里：
+Provider-specific 控制和 endpoint 覆盖放在对应 adapter 包里：
 
 ```go
 llm := openai.NewWithOptions(
     os.Getenv("OPENAI_API_KEY"),
-    "",
+    os.Getenv("OPENAI_BASE_URL"),
     "gpt-4o-mini",
     openai.WithReasoningEffort(openai.ReasoningEffortHigh),
     openai.WithServiceTier(openai.ServiceTierFlex),
@@ -246,15 +246,39 @@ geminiLLM, err := gemini.NewWithOptions(
     ctx,
     os.Getenv("GEMINI_API_KEY"),
     "gemini-2.5-pro",
+    gemini.WithBaseURL(os.Getenv("GEMINI_BASE_URL")),
     gemini.WithThinkingLevel(gemini.ThinkingLevelHigh),
 )
 
 anthropicLLM := anthropic.NewWithOptions(
     os.Getenv("ANTHROPIC_API_KEY"),
     "claude-sonnet-4-5",
+    anthropic.WithBaseURL(os.Getenv("ANTHROPIC_BASE_URL")),
     anthropic.WithThinkingBudget(3000),
 )
 ```
+
+每个 provider 使用自己的 endpoint 配置：`OPENAI_BASE_URL`、
+`DEEPSEEK_BASE_URL`、`GEMINI_BASE_URL`、`VERTEX_AI_BASE_URL` 或
+`ANTHROPIC_BASE_URL`。
+
+### 环境变量
+
+ADK 不会全局读取环境变量。示例和集成测试在构造 adapter 时使用这些变量名：
+
+| 范围 | 必需 | 可选 |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_REASONING_MODEL` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` |
+| Gemini | `GEMINI_API_KEY` | `GEMINI_BASE_URL`, `GEMINI_MODEL`, `GEMINI_THINKING_MODEL` |
+| Vertex AI | `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` | `VERTEX_AI_BASE_URL`, `VERTEX_AI_MODEL` |
+| Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_THINKING_MODEL` |
+| PostgreSQL 示例 | `ADK_POSTGRES_DSN` | — |
+| PostgreSQL 集成测试 | `ADK_TEST_POSTGRES_DSN` | — |
+| Exa MCP 示例 | — | `EXA_API_KEY` |
+
+Vertex AI 认证使用 Application Default Credentials；如果要指定 service
+account key 文件，可以设置 `GOOGLE_APPLICATION_CREDENTIALS`。
 
 ## 会话存储
 

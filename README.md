@@ -76,7 +76,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    llm := openai.New(os.Getenv("OPENAI_API_KEY"), "", "gpt-4o-mini")
+    llm := openai.New(os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_BASE_URL"), "gpt-4o-mini")
     agent := llmagent.New(llmagent.Config{
         Name:        "assistant",
         Description: "A helpful assistant",
@@ -239,12 +239,12 @@ cfg := &model.GenerateConfig{
 }
 ```
 
-Provider-specific controls live in the adapter packages:
+Provider-specific controls and endpoint overrides live in the adapter packages:
 
 ```go
 llm := openai.NewWithOptions(
     os.Getenv("OPENAI_API_KEY"),
-    "",
+    os.Getenv("OPENAI_BASE_URL"),
     "gpt-4o-mini",
     openai.WithReasoningEffort(openai.ReasoningEffortHigh),
     openai.WithServiceTier(openai.ServiceTierFlex),
@@ -254,15 +254,41 @@ geminiLLM, err := gemini.NewWithOptions(
     ctx,
     os.Getenv("GEMINI_API_KEY"),
     "gemini-2.5-pro",
+    gemini.WithBaseURL(os.Getenv("GEMINI_BASE_URL")),
     gemini.WithThinkingLevel(gemini.ThinkingLevelHigh),
 )
 
 anthropicLLM := anthropic.NewWithOptions(
     os.Getenv("ANTHROPIC_API_KEY"),
     "claude-sonnet-4-5",
+    anthropic.WithBaseURL(os.Getenv("ANTHROPIC_BASE_URL")),
     anthropic.WithThinkingBudget(3000),
 )
 ```
+
+Each provider uses its own endpoint setting: `OPENAI_BASE_URL`,
+`DEEPSEEK_BASE_URL`, `GEMINI_BASE_URL`, `VERTEX_AI_BASE_URL`, or
+`ANTHROPIC_BASE_URL`.
+
+### Environment variables
+
+ADK does not read environment variables globally. The examples and integration
+tests use these names when constructing adapters:
+
+| Area | Required | Optional |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_REASONING_MODEL` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` |
+| Gemini | `GEMINI_API_KEY` | `GEMINI_BASE_URL`, `GEMINI_MODEL`, `GEMINI_THINKING_MODEL` |
+| Vertex AI | `VERTEX_AI_PROJECT`, `VERTEX_AI_LOCATION` | `VERTEX_AI_BASE_URL`, `VERTEX_AI_MODEL` |
+| Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_THINKING_MODEL` |
+| PostgreSQL example | `ADK_POSTGRES_DSN` | — |
+| PostgreSQL integration tests | `ADK_TEST_POSTGRES_DSN` | — |
+| Exa MCP example | — | `EXA_API_KEY` |
+
+Vertex AI authentication uses Application Default Credentials; set
+`GOOGLE_APPLICATION_CREDENTIALS` when you want to point ADC at a service account
+key file.
 
 ## Session Storage
 

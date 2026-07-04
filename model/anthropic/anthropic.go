@@ -26,6 +26,7 @@ const defaultThinkingBudget = 3000
 // Model implements model.LLM using the Anthropic Messages API.
 type Model struct {
 	client     goanthropic.Client
+	baseURL    string
 	modelName  string
 	retryCfg   retry.Config
 	generation generationOptions
@@ -43,6 +44,13 @@ type Option func(*Model)
 func WithRetryConfig(cfg retry.Config) Option {
 	return func(m *Model) {
 		m.retryCfg = cfg
+	}
+}
+
+// WithBaseURL overrides the Anthropic API endpoint for this adapter.
+func WithBaseURL(baseURL string) Option {
+	return func(m *Model) {
+		m.baseURL = baseURL
 	}
 }
 
@@ -77,22 +85,26 @@ func New(apiKey, modelName string, retryCfg ...retry.Config) *Model {
 
 // NewWithOptions creates a new Model instance with explicit adapter options.
 func NewWithOptions(apiKey, modelName string, opts ...Option) *Model {
-	m := newModel(apiKey, modelName)
+	return newModel(apiKey, modelName, opts...)
+}
+
+func newModel(apiKey, modelName string, opts ...Option) *Model {
+	m := &Model{
+		modelName: modelName,
+		retryCfg:  retry.DefaultConfig(),
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
 		}
 	}
-	return m
-}
 
-func newModel(apiKey, modelName string) *Model {
-	client := goanthropic.NewClient(option.WithAPIKey(apiKey))
-	return &Model{
-		client:    client,
-		modelName: modelName,
-		retryCfg:  retry.DefaultConfig(),
+	requestOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if m.baseURL != "" {
+		requestOpts = append(requestOpts, option.WithBaseURL(m.baseURL))
 	}
+	m.client = goanthropic.NewClient(requestOpts...)
+	return m
 }
 
 // Name returns the model identifier.

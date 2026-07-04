@@ -82,12 +82,86 @@ func readRequestBody(t *testing.T, bodyCh <-chan []byte) map[string]any {
 	}
 }
 
+func assertNoReasoningOnlyAssistantMessage(t *testing.T, messages []any) {
+	t.Helper()
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		require.True(t, ok)
+		if msg["role"] != "assistant" {
+			continue
+		}
+
+		_, hasReasoningContent := msg["reasoning_content"]
+		_, hasContent := msg["content"]
+		_, hasToolCalls := msg["tool_calls"]
+		assert.False(t, hasReasoningContent && !hasContent && !hasToolCalls)
+	}
+}
+
 // Unit tests (no network required)
 // ---------------------------------------------------------------------------
 
 func TestChatCompletion_Name(t *testing.T) {
 	llm := New("test-key", ModelV4Pro)
 	assert.Equal(t, ModelV4Pro, llm.Name())
+}
+
+func TestChatCompletion_Generate_SkipsReasoningOnlyAssistantHistory(t *testing.T) {
+	server, bodyCh := newCaptureServer(t, `{
+		"id": "chatcmpl_test",
+		"object": "chat.completion",
+		"created": 0,
+		"model": "deepseek-v4-pro",
+		"choices": [
+			{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "ok"
+				},
+				"finish_reason": "stop"
+			}
+		],
+		"usage": {
+			"prompt_tokens": 1,
+			"completion_tokens": 1,
+			"total_tokens": 2
+		}
+	}`)
+
+	llm := NewWithBaseURLOptions(
+		"test-key",
+		server.URL,
+		ModelV4Pro,
+		WithRetryConfig(retry.Config{MaxAttempts: 1}),
+	)
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
+		Model: llm.Name(),
+		Contents: []model.Content{
+			{Role: model.RoleUser, Content: "Hi"},
+			{Role: model.RoleAssistant, ReasoningContent: "thinking only"},
+			{Role: model.RoleUser, Content: "continue"},
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	payload := readRequestBody(t, bodyCh)
+	messages, ok := payload["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 2)
+	assertNoReasoningOnlyAssistantMessage(t, messages)
+
+	first, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "user", first["role"])
+	assert.Equal(t, "Hi", first["content"])
+
+	second, ok := messages[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "user", second["role"])
+	assert.Equal(t, "continue", second["content"])
 }
 
 func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
@@ -154,11 +228,25 @@ func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
 	messages, ok := payload["messages"].([]any)
 	require.True(t, ok)
 	require.Len(t, messages, 3)
+	assertNoReasoningOnlyAssistantMessage(t, messages)
 	assistant, ok := messages[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "assistant", assistant["role"])
 	assert.Equal(t, "need current data", assistant["reasoning_content"])
-	require.Len(t, assistant["tool_calls"], 1)
+
+	toolCalls, ok := assistant["tool_calls"].([]any)
+	require.True(t, ok)
+	require.Len(t, toolCalls, 1)
+	toolCall, ok := toolCalls[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "call_1", toolCall["id"])
+	assert.Equal(t, "function", toolCall["type"])
+	fn, ok := toolCall["function"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "lookup", fn["name"])
+	arguments, ok := fn["arguments"].(string)
+	require.True(t, ok)
+	assert.JSONEq(t, `{"query":"weather"}`, arguments)
 }
 
 // Integration tests (require DEEPSEEK_API_KEY)
