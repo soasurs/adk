@@ -156,6 +156,7 @@ func (tr *ToolResult) Scan(src any) error {
 type Event struct {
 	EventID          int64      `json:"event_id" db:"event_id"`
 	SessionID        string     `json:"session_id" db:"session_id"`
+	TurnID           string     `json:"turn_id" db:"turn_id"`
 	Author           string     `json:"author" db:"author"`
 	Role             string     `json:"role" db:"role"`
 	Content          string     `json:"content" db:"text"`
@@ -190,6 +191,7 @@ func (e *Event) ToModel() model.Event {
 	ev := model.Event{
 		ID:        e.EventID,
 		SessionID: e.SessionID,
+		TurnID:    e.TurnID,
 		Author:    e.Author,
 		Content: model.Content{
 			Role:             model.Role(e.Role),
@@ -261,6 +263,7 @@ func FromModel(e model.Event) *Event {
 	ev := &Event{
 		EventID:          e.ID,
 		SessionID:        e.SessionID,
+		TurnID:           e.TurnID,
 		Author:           e.Author,
 		Role:             string(e.Content.Role),
 		Content:          e.Content.Content,

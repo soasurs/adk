@@ -130,12 +130,15 @@ content := model.Content{
 ### `model.Event`
 
 `Event` 是运行时输出和会话历史的基本单位。完整事件组成持久化账本；partial 事件
-只会转发给调用方做实时展示，不会被 `Runner` 持久化。
+只会转发给调用方做实时展示，不会被 `Runner` 持久化。`TurnID` 会把一次
+`Runner.Run` 调用中的 user event 和所有 agent events 分到同一组；它是关联 ID，
+不是排序键，也不是自动恢复检查点。
 
 ```go
 type Event struct {
     ID           int64
     SessionID    string
+    TurnID       string
     Author       string
     Content      model.Content
     FinishReason model.FinishReason

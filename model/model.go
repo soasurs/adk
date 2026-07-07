@@ -238,6 +238,10 @@ type Event struct {
 	ID int64
 	// SessionID identifies the session that owns this event when persisted.
 	SessionID string
+	// TurnID groups all events produced by one Runner.Run call. It is a
+	// correlation identifier, not an ordering key; event ordering remains
+	// defined by CreatedAt and ID.
+	TurnID string
 	// Author identifies the producer of the event, for example "user" or an
 	// agent name. It is display metadata and is not forwarded to the LLM.
 	Author string

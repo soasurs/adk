@@ -106,6 +106,25 @@ func TestFromModel_ToModel_NilParts(t *testing.T) {
 	assert.Empty(t, restored.Content.Parts)
 }
 
+func TestFromModel_ToModel_TurnID(t *testing.T) {
+	original := model.Event{
+		ID:        123,
+		SessionID: "session-1",
+		TurnID:    "turn-1",
+		Author:    "user",
+		Content: model.Content{
+			Role:    model.RoleUser,
+			Content: "hello",
+		},
+	}
+
+	persisted := FromModel(original)
+	assert.Equal(t, "turn-1", persisted.TurnID)
+
+	restored := persisted.ToModel()
+	assert.Equal(t, "turn-1", restored.TurnID)
+}
+
 func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
 	original := model.Event{
 		Author: "assistant",

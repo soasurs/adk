@@ -99,7 +99,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"SELECT version FROM "+f.prefix+"schema_migrations ORDER BY version",
 		)
 		require.NoError(t, err)
-		assert.Equal(t, []int{1}, versions)
+		assert.Equal(t, []int{1, 2, 3}, versions)
 	})
 
 	t.Run("creates expected column types", func(t *testing.T) {
@@ -139,6 +139,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			assert.Equal(t, "bigint", columns[name], name)
 		}
 		assert.Equal(t, "text", columns["session_id"])
+		assert.Equal(t, "text", columns["turn_id"])
 	})
 
 	t.Run("supports custom table names", func(t *testing.T) {

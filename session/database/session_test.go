@@ -52,6 +52,7 @@ func TestSQLite_DatabaseSession_CreateEvent(t *testing.T) {
 	require.NotNil(t, session)
 
 	ev := newTestEvent(1, "hello")
+	ev.TurnID = "turn-1"
 	err = session.CreateEvent(ctx, ev)
 	assert.NoError(t, err)
 
@@ -59,6 +60,124 @@ func TestSQLite_DatabaseSession_CreateEvent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, evs, 1)
 	assert.Equal(t, int64(1), evs[0].EventID)
+	assert.Equal(t, "turn-1", evs[0].TurnID)
+}
+
+func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
+	db, err := sqlx.Connect("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	tables := migrationTables{
+		sessions:   defaultSessionsTable,
+		events:     defaultEventsTable,
+		migrations: defaultMigrationsTable,
+	}
+	_, err = db.ExecContext(ctx, createMigrationsTableSQL(tables.migrations))
+	require.NoError(t, err)
+	for _, stmt := range migrationV1SQL(tables) {
+		_, err = db.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	_, err = db.ExecContext(ctx, recordMigrationSQL(tables.migrations), 1)
+	require.NoError(t, err)
+	for _, stmt := range migrationV2SQL(tables) {
+		_, err = db.ExecContext(ctx, stmt)
+		require.NoError(t, err)
+	}
+	_, err = db.ExecContext(ctx, recordMigrationSQL(tables.migrations), 2)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(
+		ctx,
+		`
+			INSERT INTO sessions (
+				session_id,
+				app_id,
+				user_id,
+				created_at,
+				updated_at,
+				deleted_at
+			)
+			VALUES ('legacy-session', '', '', 1, 1, 0)
+		`,
+	)
+	require.NoError(t, err)
+	_, err = db.ExecContext(
+		ctx,
+		`
+			INSERT INTO events (
+				event_id,
+				session_id,
+				author,
+				role,
+				text,
+				reasoning_text,
+				tool_calls,
+				tool_result,
+				tool_call_id,
+				finish_reason,
+				parts,
+				prompt_tokens,
+				completion_tokens,
+				total_tokens,
+				created_at,
+				updated_at,
+				compacted_at,
+				deleted_at
+			)
+			VALUES (
+				1,
+				'legacy-session',
+				'user',
+				'user',
+				'legacy',
+				'',
+				'[]',
+				'',
+				'',
+				'',
+				'[]',
+				0,
+				0,
+				0,
+				1,
+				1,
+				0,
+				0
+			)
+		`,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, InitSchema(ctx, db))
+
+	var versions []int
+	err = db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version")
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2, 3}, versions)
+
+	service, err := NewDatabaseSessionService(db)
+	require.NoError(t, err)
+	sess, err := service.GetSession(ctx, "legacy-session")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	events, err := sess.ListEvents(ctx)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "", events[0].TurnID)
+
+	ev := newTestEvent(2, "new")
+	ev.TurnID = "turn-new"
+	require.NoError(t, sess.CreateEvent(ctx, ev))
+
+	events, err = sess.ListEvents(ctx)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, "turn-new", events[1].TurnID)
 }
 
 func TestSQLite_DatabaseSession_DeleteEvent(t *testing.T) {

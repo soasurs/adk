@@ -135,12 +135,15 @@ content := model.Content{
 
 `Event` is the runtime and session-history unit. Complete events form the
 durable ledger; partial events are only forwarded to the caller for streaming
-display and are not persisted by `Runner`.
+display and are not persisted by `Runner`. `TurnID` groups the user event and
+all agent events produced by one `Runner.Run` call; it is a correlation
+identifier, not an ordering key or an automatic resume checkpoint.
 
 ```go
 type Event struct {
     ID           int64
     SessionID    string
+    TurnID       string
     Author       string
     Content      model.Content
     FinishReason model.FinishReason

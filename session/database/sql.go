@@ -52,6 +52,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			INSERT INTO ` + eventsTable + ` (
 				event_id,
 				session_id,
+				turn_id,
 				author,
 				role,
 				text,
@@ -71,7 +72,8 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14, $15, $16, 0, 0
+				$9, $10, $11, $12, $13, $14, $15, $16,
+				$17, 0, 0
 			)
 		`,
 		deleteEvent: `
@@ -200,6 +202,15 @@ func migrationV2SQL(t migrationTables) []string {
 		`
 			ALTER TABLE ` + t.events + `
 			ADD COLUMN tool_result TEXT NOT NULL DEFAULT ''
+		`,
+	}
+}
+
+func migrationV3SQL(t migrationTables) []string {
+	return []string{
+		`
+			ALTER TABLE ` + t.events + `
+			ADD COLUMN turn_id TEXT NOT NULL DEFAULT ''
 		`,
 	}
 }

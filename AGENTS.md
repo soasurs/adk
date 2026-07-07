@@ -88,6 +88,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 
 - **`iter.Seq2[V, error]`** is the universal streaming primitive. Consume with `for v, err := range seq { if err != nil { ... } }`. On error, yield `(nil, err)` and return.
 - **Partial vs complete events** — `Event.Partial=true` fragments are forwarded to the caller for real-time display but **never persisted**. Only `Event.Partial=false` events are saved. Do not break this invariant.
+- **Turn IDs** — `Event.TurnID` groups all events produced by one `Runner.Run` call. It is a correlation identifier, not an ordering key or an automatic resume checkpoint. Older persisted events may have an empty `TurnID`; keep replay compatible.
 - **Stateless agents** — agents hold no conversation state; all history is supplied by `Runner` via `SessionService` on every call.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.

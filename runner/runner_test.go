@@ -359,6 +359,43 @@ func TestRunner_Run_PartialEventsForwarded(t *testing.T) {
 	assert.Equal(t, "Hello", events[2].Content.Content)
 }
 
+func TestRunner_Run_AssignsTurnIDToRunEvents(t *testing.T) {
+	complete := model.Content{Role: model.RoleAssistant, Content: "Hello"}
+	a := streamingAgent([]string{"He", "llo"}, complete)
+	r, sessionID := newRunnerWithSession(t, a)
+
+	var events []*model.Event
+	for event, err := range r.Run(t.Context(), sessionID, model.Content{Content: "hi"}) {
+		require.NoError(t, err)
+		events = append(events, event)
+	}
+	require.Len(t, events, 3)
+
+	turnID := events[0].TurnID
+	require.NotEmpty(t, turnID)
+	for _, event := range events {
+		assert.Equal(t, sessionID, event.SessionID)
+		assert.Equal(t, turnID, event.TurnID)
+	}
+
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	stored, err := sess.GetEvents(t.Context(), 100, 0)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, turnID, stored[0].TurnID)
+	assert.Equal(t, turnID, stored[1].TurnID)
+
+	_, err = collectRun(t, r, sessionID, model.Content{Content: "again"})
+	require.NoError(t, err)
+
+	stored, err = sess.GetEvents(t.Context(), 100, 0)
+	require.NoError(t, err)
+	require.Len(t, stored, 4)
+	assert.NotEqual(t, stored[0].TurnID, stored[2].TurnID)
+	assert.Equal(t, stored[2].TurnID, stored[3].TurnID)
+}
+
 // TestRunner_Run_PartialEventsNotPersisted verifies that partial streaming
 // events are forwarded to the caller but are NOT written to the session;
 // only the complete message is persisted alongside the user event.

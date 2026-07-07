@@ -67,11 +67,13 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 		for _, ev := range persisted {
 			events = append(events, ev.ToModel())
 		}
+		turnID := r.snowflaker.Generate().String()
 
 		// Append and persist the incoming user event.
 		userContent := userInput
 		userContent.Role = model.RoleUser
 		userEvent, err := r.persistEvent(ctx, sess, model.Event{
+			TurnID:  turnID,
 			Author:  "user",
 			Content: userContent,
 		})
@@ -88,6 +90,8 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 				yield(nil, err)
 				return
 			}
+			event.SessionID = sess.GetSessionID()
+			event.TurnID = turnID
 			// Persist only complete events; partial streaming fragments are
 			// forwarded to the caller for real-time display only.
 			if !event.Partial {
