@@ -38,7 +38,7 @@ go get github.com/soasurs/adk
 | `agent/parallelagent` | 并行扇出与合并 |
 | `agent/agentool` | 将 Agent 包装成 Tool |
 | `model` | 提供商无关的 LLM、Content、Event 类型 |
-| `model/openai` | OpenAI 兼容适配器 |
+| `model/openai` | OpenAI Chat Completions、Responses 和兼容适配器 |
 | `model/deepseek` | DeepSeek 适配器 |
 | `model/gemini` | Gemini 和 Vertex AI 适配器 |
 | `model/anthropic` | Anthropic 适配器 |
@@ -263,6 +263,22 @@ anthropicLLM := anthropic.NewWithOptions(
     anthropic.WithThinkingBudget(3000),
 )
 ```
+
+`openai.New` 使用 Chat Completions API，也是 DeepSeek 等 OpenAI-compatible
+provider 的复用路径。要调用 OpenAI Responses API，使用 `openai.NewResponses`：
+
+```go
+llm := openai.NewResponsesWithOptions(
+    os.Getenv("OPENAI_API_KEY"),
+    "",
+    "gpt-5-mini",
+    openai.WithResponsesReasoningEffort(openai.ReasoningEffortLow),
+)
+```
+
+Responses adapter 默认每次请求都发送完整 ADK session history，并设置
+`store=false`，因此状态仍由 `Runner` 和 `SessionService` 管理。如果确实要启用
+OpenAI 侧 response 存储，需要显式使用 `openai.WithResponsesStore(true)`。
 
 每个 provider 使用自己的 endpoint 配置：`OPENAI_BASE_URL`、
 `DEEPSEEK_BASE_URL`、`GEMINI_BASE_URL`、`VERTEX_AI_BASE_URL` 或

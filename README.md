@@ -41,7 +41,7 @@ go get github.com/soasurs/adk
 | `agent/parallelagent` | Parallel fan-out and merge |
 | `agent/agentool` | Wrap an agent as a tool |
 | `model` | Provider-neutral LLM, content, and event types |
-| `model/openai` | OpenAI-compatible adapter |
+| `model/openai` | OpenAI Chat Completions, Responses, and compatible adapter |
 | `model/deepseek` | DeepSeek adapter |
 | `model/gemini` | Gemini and Vertex AI adapter |
 | `model/anthropic` | Anthropic adapter |
@@ -271,6 +271,24 @@ anthropicLLM := anthropic.NewWithOptions(
     anthropic.WithThinkingBudget(3000),
 )
 ```
+
+`openai.New` uses the Chat Completions API and remains the OpenAI-compatible
+path for providers such as DeepSeek. Use `openai.NewResponses` to call OpenAI's
+Responses API:
+
+```go
+llm := openai.NewResponsesWithOptions(
+    os.Getenv("OPENAI_API_KEY"),
+    "",
+    "gpt-5-mini",
+    openai.WithResponsesReasoningEffort(openai.ReasoningEffortLow),
+)
+```
+
+The Responses adapter sends the full ADK session history on each request with
+`store=false` by default, so `Runner` and `SessionService` remain the state
+owners. Enable OpenAI-side response storage explicitly with
+`openai.WithResponsesStore(true)` when that is the intended behavior.
 
 Each provider uses its own endpoint setting: `OPENAI_BASE_URL`,
 `DEEPSEEK_BASE_URL`, `GEMINI_BASE_URL`, `VERTEX_AI_BASE_URL`, or

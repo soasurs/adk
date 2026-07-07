@@ -22,7 +22,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `agent/sequentialagent` | Run agents in order, passing output forward |
 | `agent/agentool` | Wrap an `Agent` as a `tool.Tool` for nesting |
 | `model` | Provider-neutral types: `LLM`, `Content`, `Event`, `LLMRequest/Response` |
-| `model/openai` | OpenAI / OpenAI-compatible adapter |
+| `model/openai` | OpenAI Chat Completions, Responses, and OpenAI-compatible adapter |
 | `model/deepseek` | DeepSeek adapter |
 | `model/gemini` | Gemini / Vertex AI adapter |
 | `model/anthropic` | Anthropic adapter |
@@ -92,6 +92,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.
 - **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; tool outputs use `tool.Result` / `model.ToolResult` with text fallback, structured JSON, and `IsError`. Do not collapse arguments or results back into plain strings except at provider-specific API boundaries.
+- **OpenAI Responses state ownership** — `openai.NewResponses` must keep `store=false` by default and send ADK-provided history statelessly. Only enable OpenAI-managed response storage or conversation state through explicit OpenAI adapter options.
 - **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactEvents(ctx, splitEventID, summaryEvent)` to archive old events and insert a summary. `splitEventID=0` archives all active events.
 
 ## Coding Style
@@ -109,7 +110,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - Constructors return interfaces for agent and session types (`New(...) agent.Agent`). `Runner.New` returns `*Runner` (concrete) because `Runner` adds no interface — this is intentional.
 - Functional options (`Option func(*T)`) for `session/database` configuration.
 - `*bool` only for tri-state fields where nil means "provider decides" (`EnableThinking *bool`).
-- Provider-specific generation controls stay in adapter packages; DeepSeek callers should use `deepseek.WithThinkingEnabled` and `deepseek.WithReasoningEffort` rather than importing `model/openai` options.
+- Provider-specific generation controls stay in adapter packages; OpenAI Responses callers should use `openai.WithResponses...` options, and DeepSeek callers should use `deepseek.WithThinkingEnabled` and `deepseek.WithReasoningEffort` rather than importing Chat-specific `model/openai` options.
 - Decorator pattern for tool wrappers: `tool.WithTimeout` wraps any `Tool` as a private struct.
 - Prefer `tool.NewFunc[In, Out]` for application tools so input/output schemas are inferred from Go types. Custom tools should implement `Run(ctx, tool.Call) (tool.Result, error)`.
 - Use `tool.Result{IsError: true}` for model-visible tool failures. Reserve Go `error` returns for SDK, transport, parsing, or framework failures that the runtime should turn into execution failures.
