@@ -250,6 +250,12 @@ llm := openai.NewWithOptions(
     openai.WithServiceTier(openai.ServiceTierFlex),
 )
 
+deepSeekLLM := deepseek.NewWithOptions(
+    os.Getenv("DEEPSEEK_API_KEY"),
+    deepseek.ModelV4Pro,
+    deepseek.WithReasoningEffort(deepseek.ReasoningEffortMax),
+)
+
 geminiLLM, err := gemini.NewWithOptions(
     ctx,
     os.Getenv("GEMINI_API_KEY"),

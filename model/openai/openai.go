@@ -548,8 +548,8 @@ func applyConfigWithOptions(
 		}
 	}
 	if generation.reasoningEffort != "" {
-		if provider.thinkingParam == thinkingParamDeepSeek && generation.reasoningEffort == ReasoningEffortNone {
-			*opts = append(*opts, option.WithJSONSet("thinking.type", "disabled"))
+		if provider.thinkingParam == thinkingParamDeepSeek {
+			applyDeepSeekReasoningEffort(opts, generation.reasoningEffort)
 		} else {
 			p.ReasoningEffort = shared.ReasoningEffort(generation.reasoningEffort)
 		}
@@ -573,6 +573,26 @@ func applyConfigWithOptions(
 	}
 	if generation.serviceTier != "" {
 		p.ServiceTier = goopenai.ChatCompletionNewParamsServiceTier(generation.serviceTier)
+	}
+}
+
+func applyDeepSeekReasoningEffort(opts *[]option.RequestOption, effort ReasoningEffort) {
+	if effort == ReasoningEffortNone {
+		*opts = append(*opts, option.WithJSONSet("thinking.type", "disabled"))
+		return
+	}
+	*opts = append(*opts, option.WithJSONSet("thinking.type", "enabled"))
+	*opts = append(*opts, option.WithJSONSet("thinking.reasoning_effort", deepSeekReasoningEffort(effort)))
+}
+
+func deepSeekReasoningEffort(effort ReasoningEffort) string {
+	switch effort {
+	case ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh:
+		return string(ReasoningEffortHigh)
+	case ReasoningEffortXhigh, ReasoningEffort("max"):
+		return "max"
+	default:
+		return string(effort)
 	}
 }
 

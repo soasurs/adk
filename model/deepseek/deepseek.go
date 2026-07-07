@@ -37,6 +37,16 @@ type ChatCompletion struct {
 // Option configures a DeepSeek ChatCompletion.
 type Option = openai.Option
 
+// ReasoningEffort controls DeepSeek thinking-mode reasoning effort.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortHigh uses DeepSeek's default reasoning effort.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortMax requests DeepSeek's maximum reasoning effort.
+	ReasoningEffortMax ReasoningEffort = "max"
+)
+
 // WithRetryConfig sets the retry behavior for transient API errors.
 func WithRetryConfig(cfg retry.Config) Option {
 	return openai.WithRetryConfig(cfg)
@@ -45,6 +55,11 @@ func WithRetryConfig(cfg retry.Config) Option {
 // WithThinkingEnabled explicitly enables or disables DeepSeek thinking.
 func WithThinkingEnabled(enabled bool) Option {
 	return openai.WithThinkingEnabled(enabled)
+}
+
+// WithReasoningEffort sets DeepSeek thinking-mode reasoning effort.
+func WithReasoningEffort(effort ReasoningEffort) Option {
+	return openai.WithReasoningEffort(openai.ReasoningEffort(effort))
 }
 
 // New creates a new DeepSeek ChatCompletion instance using the default

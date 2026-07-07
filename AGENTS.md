@@ -109,6 +109,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - Constructors return interfaces for agent and session types (`New(...) agent.Agent`). `Runner.New` returns `*Runner` (concrete) because `Runner` adds no interface — this is intentional.
 - Functional options (`Option func(*T)`) for `session/database` configuration.
 - `*bool` only for tri-state fields where nil means "provider decides" (`EnableThinking *bool`).
+- Provider-specific generation controls stay in adapter packages; DeepSeek callers should use `deepseek.WithThinkingEnabled` and `deepseek.WithReasoningEffort` rather than importing `model/openai` options.
 - Decorator pattern for tool wrappers: `tool.WithTimeout` wraps any `Tool` as a private struct.
 - Prefer `tool.NewFunc[In, Out]` for application tools so input/output schemas are inferred from Go types. Custom tools should implement `Run(ctx, tool.Call) (tool.Result, error)`.
 - Use `tool.Result{IsError: true}` for model-visible tool failures. Reserve Go `error` returns for SDK, transport, parsing, or framework failures that the runtime should turn into execution failures.

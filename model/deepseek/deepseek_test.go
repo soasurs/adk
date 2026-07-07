@@ -249,6 +249,57 @@ func TestChatCompletion_Generate_DeepSeekRequestShape(t *testing.T) {
 	assert.JSONEq(t, `{"query":"weather"}`, arguments)
 }
 
+func TestChatCompletion_Generate_DeepSeekReasoningEffort(t *testing.T) {
+	server, bodyCh := newCaptureServer(t, `{
+		"id": "chatcmpl_test",
+		"object": "chat.completion",
+		"created": 0,
+		"model": "deepseek-v4-pro",
+		"choices": [
+			{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "ok"
+				},
+				"finish_reason": "stop"
+			}
+		],
+		"usage": {
+			"prompt_tokens": 1,
+			"completion_tokens": 1,
+			"total_tokens": 2
+		}
+	}`)
+
+	llm := NewWithBaseURLOptions(
+		"test-key",
+		server.URL,
+		ModelV4Pro,
+		WithRetryConfig(retry.Config{MaxAttempts: 1}),
+		WithThinkingEnabled(false),
+		WithReasoningEffort(ReasoningEffortMax),
+	)
+	resp, err := callGenerate(t.Context(), llm, &model.LLMRequest{
+		Model: llm.Name(),
+		Contents: []model.Content{
+			{Role: model.RoleUser, Content: "think harder"},
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	payload := readRequestBody(t, bodyCh)
+	assert.NotContains(t, payload, "enable_thinking")
+	assert.NotContains(t, payload, "reasoning_effort")
+
+	thinking, ok := payload["thinking"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "enabled", thinking["type"])
+	assert.Equal(t, "max", thinking["reasoning_effort"])
+}
+
 // Integration tests (require DEEPSEEK_API_KEY)
 // ---------------------------------------------------------------------------
 
