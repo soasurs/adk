@@ -24,6 +24,7 @@ Go version: `1.26+`
 - In-memory and SQL database session backends, tested with SQLite and PostgreSQL
 - Structured tool calls and results, including MCP tool integration
 - Native Go streaming with `iter.Seq2`
+- Span-oriented tracing with `slog` and OpenTelemetry adapters
 
 ## Installation
 
@@ -53,6 +54,8 @@ go get github.com/soasurs/adk
 | `tool` | Tool interface, structured calls/results, and typed function helpers |
 | `tool/builtin` | Built-in tools |
 | `tool/mcp` | MCP tool bridge |
+| `trace` | Span-oriented tracing interfaces and `slog` tracer |
+| `trace/otel` | OpenTelemetry tracing adapter |
 | `runner` | Wires an agent to session storage |
 
 ## Quick Start
@@ -436,6 +439,60 @@ tools, err := toolSet.Tools(ctx)
 ```
 
 Pass `tools` to `llmagent.Config.Tools`.
+
+## Tracing
+
+ADK exposes span-oriented tracing for runtime operations. The core SDK defines
+a small `trace.Tracer` interface, and `Runner` propagates the active span context
+through session storage, agents, LLM calls, and tool calls.
+
+Use `slog` for local debugging:
+
+```go
+logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+r, err := runner.New(
+    agent,
+    sessions,
+    runner.WithTracer(trace.NewSlogTracer(logger)),
+)
+```
+
+Use OpenTelemetry when your application has configured a global
+`TracerProvider`:
+
+```go
+import adkotel "github.com/soasurs/adk/trace/otel"
+
+r, err := runner.New(
+    agent,
+    sessions,
+    runner.WithTracer(adkotel.NewTracer()),
+)
+```
+
+The OTel adapter creates internal spans such as:
+
+- `adk.runner.run`
+- `adk.runner.lock`
+- `adk.session.load`
+- `adk.session.persist_event`
+- `adk.agent.run`
+- `adk.llm.iteration`
+- `adk.llm.call`
+- `adk.tool.call`
+
+Each model-requested tool invocation gets its own `adk.tool.call` span. When a
+model response requests multiple tools, those spans appear as parallel children
+under the same `adk.llm.iteration` span. Streaming partial deltas are not emitted
+as individual spans; the final LLM span records `adk.partial_responses`.
+
+By default, the OTel adapter does not attach `session_id`, `app_id`, or
+`user_id` attributes. Enable them explicitly when your telemetry backend is
+allowed to receive those identifiers:
+
+```go
+tracer := adkotel.NewTracer(adkotel.WithSensitiveAttributes(true))
+```
 
 ## License
 

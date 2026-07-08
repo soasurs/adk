@@ -95,6 +95,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; tool outputs use `tool.Result` / `model.ToolResult` with text fallback, structured JSON, and `IsError`. Do not collapse arguments or results back into plain strings except at provider-specific API boundaries.
 - **OpenAI Responses state ownership** — `openai.NewResponses` must keep `store=false` by default and send ADK-provided history statelessly. Only enable OpenAI-managed response storage or conversation state through explicit OpenAI adapter options.
 - **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactEvents(ctx, splitEventID, summaryEvent)` to archive old events and insert a summary. `splitEventID=0` archives all active events.
+- **Tracing is observational** — `trace.Tracer` spans are side-channel observability and must not change execution semantics. Keep OTel exporter/SDK setup application-owned, preserve span context propagation through Runner → Agent → LLM/tool calls, and do not attach session/user/app identifiers to OTel spans unless the caller explicitly enables sensitive attributes.
 
 ## Coding Style
 

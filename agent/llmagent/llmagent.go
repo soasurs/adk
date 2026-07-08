@@ -12,6 +12,7 @@ import (
 	"github.com/soasurs/adk/agent"
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/tool"
+	adktrace "github.com/soasurs/adk/trace"
 )
 
 // Config holds the configuration for an LLM-backed agent.
@@ -188,8 +189,25 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 		iteration := 0
 		for {
 			iteration++
+			iterationCtx, iterationSpan := adktrace.Start(ctx, adktrace.Event{
+				Kind:      adktrace.KindLLMIteration,
+				AgentName: a.Name(),
+				Model:     req.Model,
+				Iteration: iteration,
+				Stream:    a.config.Stream,
+			})
+			iterationEnd := adktrace.Event{
+				Kind:      adktrace.KindLLMIteration,
+				AgentName: a.Name(),
+				Model:     req.Model,
+				Iteration: iteration,
+				Stream:    a.config.Stream,
+			}
 			if a.config.MaxIterations > 0 && iteration > a.config.MaxIterations {
-				yield(nil, &MaxIterationsError{MaxIterations: a.config.MaxIterations})
+				err := &MaxIterationsError{MaxIterations: a.config.MaxIterations}
+				iterationEnd.Err = err
+				iterationSpan.End(iterationCtx, iterationEnd)
+				yield(nil, err)
 				return
 			}
 			call := &LLMCall{
@@ -199,8 +217,28 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				GenerateConfig: a.config.GenerateConfig,
 				Stream:         a.config.Stream,
 			}
-			skipResp, err := a.beforeLLMCall(ctx, call)
+			llmCtx, llmSpan := adktrace.Start(iterationCtx, adktrace.Event{
+				Kind:      adktrace.KindLLMCall,
+				AgentName: a.Name(),
+				Model:     req.Model,
+				Iteration: iteration,
+				Stream:    a.config.Stream,
+			})
+			llmStartedAt := time.Now()
+			llmEnd := adktrace.Event{
+				Kind:      adktrace.KindLLMCall,
+				AgentName: a.Name(),
+				Model:     req.Model,
+				Iteration: iteration,
+				Stream:    a.config.Stream,
+			}
+			skipResp, err := a.beforeLLMCall(llmCtx, call)
 			if err != nil {
+				llmEnd.Err = err
+				llmEnd.Duration = time.Since(llmStartedAt)
+				llmSpan.End(llmCtx, llmEnd)
+				iterationEnd.Err = err
+				iterationSpan.End(iterationCtx, iterationEnd)
 				yield(nil, err)
 				return
 			}
@@ -213,8 +251,9 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			startedAt := time.Now()
 			if skipResp != nil {
 				completeResp = skipResp
+				llmEnd.Attributes = map[string]any{"skipped": true}
 			} else {
-				for resp, err := range a.config.Model.GenerateContent(ctx, req, a.config.GenerateConfig, a.config.Stream) {
+				for resp, err := range a.config.Model.GenerateContent(llmCtx, req, a.config.GenerateConfig, a.config.Stream) {
 					if err != nil {
 						llmErr = err
 						break
@@ -232,27 +271,48 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				}
 			}
 
-			if err := a.afterLLMCall(ctx, call, &LLMCallResult{
+			duration := time.Since(startedAt)
+			llmEnd.Duration = time.Since(llmStartedAt)
+			llmEnd.Err = llmErr
+			llmEnd.PartialResponses = partialResponses
+			llmEnd.StoppedEarly = stoppedEarly
+			if completeResp != nil {
+				llmEnd.FinishReason = completeResp.FinishReason
+				addUsageToTraceEvent(&llmEnd, completeResp.Usage)
+				iterationEnd.FinishReason = completeResp.FinishReason
+				addUsageToTraceEvent(&iterationEnd, completeResp.Usage)
+			}
+			if err := a.afterLLMCall(llmCtx, call, &LLMCallResult{
 				Response:         completeResp,
 				Err:              llmErr,
 				PartialResponses: partialResponses,
-				Duration:         time.Since(startedAt),
+				Duration:         duration,
 				StoppedEarly:     stoppedEarly,
 			}); err != nil {
+				llmEnd.Err = err
+				llmSpan.End(llmCtx, llmEnd)
+				iterationEnd.Err = err
+				iterationSpan.End(iterationCtx, iterationEnd)
 				yield(nil, err)
 				return
 			}
+			llmSpan.End(llmCtx, llmEnd)
 
 			if llmErr != nil {
+				iterationEnd.Err = llmErr
+				iterationSpan.End(iterationCtx, iterationEnd)
 				yield(nil, llmErr)
 				return
 			}
 
 			if stoppedEarly {
+				iterationEnd.StoppedEarly = true
+				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
 
 			if completeResp == nil {
+				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
 
@@ -265,11 +325,14 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 
 			// Yield the complete assistant event (may contain tool_calls).
 			if !yield(&completeEvent, nil) {
+				iterationEnd.StoppedEarly = true
+				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
 
 			// No tool calls — generation is complete.
 			if completeResp.FinishReason != model.FinishReasonToolCalls {
+				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
 
@@ -277,7 +340,7 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			req.Contents = append(req.Contents, completeResp.Content)
 
 			// Execute all tool calls in parallel, preserving original order.
-			toolCtx, cancelTools := context.WithCancel(ctx)
+			toolCtx, cancelTools := context.WithCancel(iterationCtx)
 			toolEvents := make([]model.Event, len(completeResp.Content.ToolCalls))
 			toolErrs := make([]error, len(completeResp.Content.ToolCalls))
 			var wg sync.WaitGroup
@@ -299,6 +362,8 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 
 			for _, err := range toolErrs {
 				if err != nil {
+					iterationEnd.Err = err
+					iterationSpan.End(iterationCtx, iterationEnd)
 					yield(nil, err)
 					return
 				}
@@ -306,16 +371,49 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 
 			for _, toolEvent := range toolEvents {
 				if !yield(&toolEvent, nil) {
+					iterationEnd.StoppedEarly = true
+					iterationSpan.End(iterationCtx, iterationEnd)
 					return
 				}
 				req.Contents = append(req.Contents, toolEvent.Content)
 			}
+			iterationSpan.End(iterationCtx, iterationEnd)
 		}
 	}
 }
 
 // runToolCall executes a single tool call and returns the resulting tool event.
-func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc model.ToolCall) (model.Event, error) {
+func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc model.ToolCall) (event model.Event, err error) {
+	ctx, toolSpan := adktrace.Start(ctx, adktrace.Event{
+		Kind:       adktrace.KindToolCall,
+		AgentName:  a.Name(),
+		Iteration:  iteration,
+		ToolName:   tc.Name,
+		ToolCallID: tc.ID,
+		ToolIndex:  toolIndex,
+	})
+	toolEnd := adktrace.Event{
+		Kind:       adktrace.KindToolCall,
+		AgentName:  a.Name(),
+		Iteration:  iteration,
+		ToolName:   tc.Name,
+		ToolCallID: tc.ID,
+		ToolIndex:  toolIndex,
+	}
+	defer func() {
+		if event.Content.Role != "" {
+			toolEnd.EventAuthor = event.Author
+			toolEnd.EventRole = event.Content.Role
+			if event.Content.ToolResult != nil {
+				toolEnd.IsError = event.Content.ToolResult.IsError
+			}
+		}
+		if err != nil {
+			toolEnd.Err = err
+		}
+		toolSpan.End(ctx, toolEnd)
+	}()
+
 	if a.config.ToolTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, a.config.ToolTimeout)
@@ -343,6 +441,9 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 
 	startedAt := time.Now()
 	if skipResult != nil {
+		toolEnd.Attributes = map[string]any{"skipped": true}
+		toolEnd.Duration = time.Since(startedAt)
+		toolEnd.IsError = skipResult.Result.IsError
 		if err := a.afterToolCall(ctx, call, skipResult); err != nil {
 			return model.Event{}, err
 		}
@@ -367,6 +468,9 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		}); err != nil {
 			return model.Event{}, err
 		}
+		toolEnd.Duration = time.Since(startedAt)
+		toolEnd.Err = toolErr
+		toolEnd.IsError = true
 		return event, nil
 	}
 
@@ -379,7 +483,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		result.Content = fmt.Sprintf("error: %s", toolErr.Error())
 		result.IsError = true
 	}
-	event := model.Event{
+	event = model.Event{
 		Author:  t.Definition().Name,
 		Content: toolResultContent(tc, result),
 	}
@@ -391,6 +495,9 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 	}); err != nil {
 		return model.Event{}, err
 	}
+	toolEnd.Duration = time.Since(startedAt)
+	toolEnd.Err = toolErr
+	toolEnd.IsError = result.IsError
 	return event, nil
 }
 
@@ -399,6 +506,15 @@ func toolCallArguments(args []byte) []byte {
 		return []byte("{}")
 	}
 	return args
+}
+
+func addUsageToTraceEvent(event *adktrace.Event, usage *model.TokenUsage) {
+	if usage == nil {
+		return
+	}
+	event.PromptTokens = usage.PromptTokens
+	event.CompletionTokens = usage.CompletionTokens
+	event.TotalTokens = usage.TotalTokens
 }
 
 func toolResultContent(tc model.ToolCall, result tool.Result) model.Content {

@@ -15,6 +15,7 @@ import (
 	"github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/event"
 	memorysession "github.com/soasurs/adk/session/memory"
+	adktrace "github.com/soasurs/adk/trace"
 )
 
 // ---------------------------------------------------------------------------
@@ -105,6 +106,49 @@ func newRunnerWithSession(t *testing.T, a *mockAgent) (*Runner, string) {
 	return r, sessionID
 }
 
+type recordedSpan struct {
+	kind  adktrace.Kind
+	event adktrace.Event
+}
+
+type recordingTracer struct {
+	starts []adktrace.Event
+	ends   []recordedSpan
+}
+
+func (t *recordingTracer) Start(ctx context.Context, event adktrace.Event) (context.Context, adktrace.Span) {
+	t.starts = append(t.starts, event)
+	return ctx, &recordingSpan{tracer: t, kind: event.Kind}
+}
+
+type recordingSpan struct {
+	tracer *recordingTracer
+	kind   adktrace.Kind
+}
+
+func (s *recordingSpan) AddEvent(context.Context, adktrace.Event) {}
+
+func (s *recordingSpan) End(_ context.Context, event adktrace.Event) {
+	s.tracer.ends = append(s.tracer.ends, recordedSpan{kind: s.kind, event: event})
+}
+
+func startedKinds(tracer *recordingTracer) []adktrace.Kind {
+	kinds := make([]adktrace.Kind, len(tracer.starts))
+	for i, event := range tracer.starts {
+		kinds[i] = event.Kind
+	}
+	return kinds
+}
+
+func endedSpan(tracer *recordingTracer, kind adktrace.Kind) (adktrace.Event, bool) {
+	for _, span := range tracer.ends {
+		if span.kind == kind {
+			return span.event, true
+		}
+	}
+	return adktrace.Event{}, false
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -123,6 +167,59 @@ func TestRunner_Run_Basic(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
 	assert.Equal(t, "pong", msgs[0].Content)
+}
+
+func TestRunner_Run_Tracing(t *testing.T) {
+	tracer := new(recordingTracer)
+	a := &mockAgent{
+		name:        "trace-agent",
+		description: "checks trace context",
+		runFunc: func(ctx context.Context, _ []model.Event) iter.Seq2[*model.Event, error] {
+			info, ok := adktrace.RunInfoFromContext(ctx)
+			require.True(t, ok)
+			assert.NotEmpty(t, info.RunID)
+			assert.NotEmpty(t, info.TurnID)
+			assert.Equal(t, "session-1", info.SessionID)
+			assert.Equal(t, "runner-test", info.AppID)
+			assert.Equal(t, "user-1", info.UserID)
+			return func(yield func(*model.Event, error) bool) {
+				yield(&model.Event{
+					Author: "trace-agent",
+					Content: model.Content{
+						Role:    model.RoleAssistant,
+						Content: "pong",
+					},
+				}, nil)
+			}
+		},
+	}
+	const sessionID = "session-1"
+	svc := memorysession.NewMemorySessionService()
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{
+		SessionID: sessionID,
+		AppID:     "runner-test",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+	r, err := New(a, svc, WithTracer(tracer))
+	require.NoError(t, err)
+
+	_, err = collectRun(t, r, sessionID, model.Content{Content: "ping"})
+	require.NoError(t, err)
+
+	kinds := startedKinds(tracer)
+	assert.Contains(t, kinds, adktrace.KindRunnerRun)
+	assert.Contains(t, kinds, adktrace.KindRunnerLock)
+	assert.Contains(t, kinds, adktrace.KindSessionLoad)
+	assert.Contains(t, kinds, adktrace.KindEventPersist)
+	assert.Contains(t, kinds, adktrace.KindAgentRun)
+
+	runEnd, ok := endedSpan(tracer, adktrace.KindRunnerRun)
+	require.True(t, ok)
+	assert.NotEmpty(t, runEnd.RunID)
+	assert.NotEmpty(t, runEnd.TurnID)
+	assert.Equal(t, sessionID, runEnd.SessionID)
+	assert.NoError(t, runEnd.Err)
 }
 
 // TestRunner_Run_MultipleAgentMessages verifies that all messages yielded by
