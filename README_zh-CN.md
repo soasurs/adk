@@ -21,6 +21,7 @@ Go 版本：`1.26+`
 - 内存与 SQL 数据库会话后端，已覆盖 SQLite 和 PostgreSQL 测试
 - 结构化 tool call 和 tool result，包括 MCP 工具集成
 - 使用 `iter.Seq2` 做原生 Go 流式输出
+- 面向 span 的 tracing，支持 `slog` 和 OpenTelemetry 适配器
 
 ## 安装
 
@@ -50,6 +51,8 @@ go get github.com/soasurs/adk
 | `tool` | Tool 接口、结构化 call/result，以及 typed function 辅助函数 |
 | `tool/builtin` | 内置工具 |
 | `tool/mcp` | MCP 工具桥接 |
+| `trace` | 面向 span 的 tracing 接口和 `slog` tracer |
+| `trace/otel` | OpenTelemetry tracing 适配器 |
 | `runner` | 串联 Agent 与会话存储 |
 
 ## 快速开始
@@ -422,6 +425,58 @@ tools, err := toolSet.Tools(ctx)
 ```
 
 把 `tools` 传入 `llmagent.Config.Tools` 即可。
+
+## Tracing
+
+ADK 提供面向 span 的运行时 tracing。核心 SDK 定义了很小的
+`trace.Tracer` 接口，`Runner` 会把 active span context 继续传给 session
+存储、agents、LLM 调用和 tool 调用。
+
+本地调试可以使用 `slog`：
+
+```go
+logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+r, err := runner.New(
+    agent,
+    sessions,
+    runner.WithTracer(trace.NewSlogTracer(logger)),
+)
+```
+
+如果应用已经配置了全局 OpenTelemetry `TracerProvider`，可以使用 OTel 适配器：
+
+```go
+import adkotel "github.com/soasurs/adk/trace/otel"
+
+r, err := runner.New(
+    agent,
+    sessions,
+    runner.WithTracer(adkotel.NewTracer()),
+)
+```
+
+OTel 适配器会创建这些 internal spans：
+
+- `adk.runner.run`
+- `adk.runner.lock`
+- `adk.session.load`
+- `adk.session.persist_event`
+- `adk.agent.run`
+- `adk.llm.iteration`
+- `adk.llm.call`
+- `adk.tool.call`
+
+每个模型请求的 tool invocation 都会有自己的 `adk.tool.call` span。如果一次模型
+响应里请求了多个 tools，这些 spans 会作为同一个 `adk.llm.iteration` 的并列
+children 出现。Streaming partial delta 默认不会逐条生成 span；最终 LLM span 会
+记录 `adk.partial_responses`。
+
+默认情况下，OTel 适配器不会把 `session_id`、`app_id`、`user_id` 写入 span
+attributes。只有当你的 telemetry 后端允许接收这些标识时才显式开启：
+
+```go
+tracer := adkotel.NewTracer(adkotel.WithSensitiveAttributes(true))
+```
 
 ## 许可证
 

@@ -12,6 +12,7 @@ import (
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/session"
 	sessionevent "github.com/soasurs/adk/session/event"
+	adktrace "github.com/soasurs/adk/trace"
 )
 
 // Runner coordinates a stateless Agent with a SessionService. It loads
@@ -21,19 +22,25 @@ type Runner struct {
 	agent      agent.Agent
 	session    session.SessionService
 	snowflaker *snowflake.Node
+	tracer     adktrace.Tracer
 }
 
 // New creates a Runner backed by the given agent and session service.
-func New(a agent.Agent, s session.SessionService) (*Runner, error) {
+func New(a agent.Agent, s session.SessionService, opts ...Option) (*Runner, error) {
 	node, err := snowflaker.New()
 	if err != nil {
 		return nil, err
 	}
-	return &Runner{
+	r := &Runner{
 		agent:      a,
 		session:    s,
 		snowflaker: node,
-	}, nil
+		tracer:     adktrace.DiscardTracer{},
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r, nil
 }
 
 // Run handles one user turn. It fetches the session history, appends the user
@@ -47,18 +54,48 @@ func New(a agent.Agent, s session.SessionService) (*Runner, error) {
 // Its Role is always set to RoleUser by the runner.
 func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Content) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
+		info := adktrace.RunInfo{
+			RunID:     r.snowflaker.Generate().String(),
+			TurnID:    r.snowflaker.Generate().String(),
+			SessionID: sessionID,
+		}
+		ctx = adktrace.ContextWithTracer(ctx, r.tracer)
+		ctx = adktrace.ContextWithRunInfo(ctx, info)
+		ctx, runSpan := adktrace.Start(ctx, adktrace.Event{
+			Kind:      adktrace.KindRunnerRun,
+			SessionID: sessionID,
+		})
+		runEnd := adktrace.Event{Kind: adktrace.KindRunnerRun}.WithRunInfo(info)
+		defer func() {
+			runSpan.End(ctx, runEnd.WithRunInfo(info))
+		}()
+
 		sess, unlock, err := r.getSessionForRun(ctx, sessionID)
 		if err != nil {
+			runEnd.Err = err
 			yield(nil, err)
 			return
 		}
 		if unlock != nil {
 			defer unlock()
 		}
+		info.AppID = sess.GetAppID()
+		info.UserID = sess.GetUserID()
+		ctx = adktrace.ContextWithRunInfo(ctx, info)
+		runEnd = runEnd.WithRunInfo(info)
 
 		// Load all previous active events from the session.
-		persisted, err := sess.ListEvents(ctx)
+		loadCtx, loadSpan := adktrace.Start(ctx, adktrace.Event{
+			Kind: adktrace.KindSessionLoad,
+		})
+		persisted, err := sess.ListEvents(loadCtx)
+		loadSpan.End(loadCtx, adktrace.Event{
+			Kind:       adktrace.KindSessionLoad,
+			EventCount: len(persisted),
+			Err:        err,
+		})
 		if err != nil {
+			runEnd.Err = err
 			yield(nil, err)
 			return
 		}
@@ -67,17 +104,17 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 		for _, ev := range persisted {
 			events = append(events, ev.ToModel())
 		}
-		turnID := r.snowflaker.Generate().String()
 
 		// Append and persist the incoming user event.
 		userContent := userInput
 		userContent.Role = model.RoleUser
 		userEvent, err := r.persistEvent(ctx, sess, model.Event{
-			TurnID:  turnID,
+			TurnID:  info.TurnID,
 			Author:  "user",
 			Content: userContent,
 		})
 		if err != nil {
+			runEnd.Err = err
 			yield(nil, err)
 			return
 		}
@@ -85,24 +122,42 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 
 		// Run the agent, forwarding every event to the caller.
 		// Only complete events (Partial=false) are persisted to the session.
-		for event, err := range r.agent.Run(ctx, events) {
+		agentCtx, agentSpan := adktrace.Start(ctx, adktrace.Event{
+			Kind:      adktrace.KindAgentRun,
+			AgentName: r.agent.Name(),
+		})
+		agentEnd := adktrace.Event{
+			Kind:      adktrace.KindAgentRun,
+			AgentName: r.agent.Name(),
+		}
+		defer func() {
+			agentSpan.End(agentCtx, agentEnd)
+		}()
+
+		for event, err := range r.agent.Run(agentCtx, events) {
 			if err != nil {
+				agentEnd.Err = err
+				runEnd.Err = err
 				yield(nil, err)
 				return
 			}
 			event.SessionID = sess.GetSessionID()
-			event.TurnID = turnID
+			event.TurnID = info.TurnID
 			// Persist only complete events; partial streaming fragments are
 			// forwarded to the caller for real-time display only.
 			if !event.Partial {
 				persistedEvent, err := r.persistEvent(ctx, sess, *event)
 				if err != nil {
+					agentEnd.Err = err
+					runEnd.Err = err
 					yield(nil, err)
 					return
 				}
 				event = &persistedEvent
 			}
 			if !yield(event, nil) {
+				agentEnd.StoppedEarly = true
+				runEnd.StoppedEarly = true
 				return
 			}
 		}
@@ -139,7 +194,20 @@ func (r *Runner) getSessionWithScopedLock(
 		}
 
 		key := runLockKey(sess)
-		unlock, err := locker.LockRun(ctx, key)
+		lockCtx, lockSpan := adktrace.Start(ctx, adktrace.Event{
+			Kind:      adktrace.KindRunnerLock,
+			SessionID: key.SessionID,
+			AppID:     key.AppID,
+			UserID:    key.UserID,
+		})
+		unlock, err := locker.LockRun(lockCtx, key)
+		lockSpan.End(lockCtx, adktrace.Event{
+			Kind:      adktrace.KindRunnerLock,
+			SessionID: key.SessionID,
+			AppID:     key.AppID,
+			UserID:    key.UserID,
+			Err:       err,
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -178,5 +246,21 @@ func (r *Runner) persistEvent(ctx context.Context, sess session.Session, ev mode
 	ev.CreatedAt = now
 	ev.UpdatedAt = now
 	stored := sessionevent.FromModel(ev)
-	return ev, sess.CreateEvent(ctx, stored)
+	persistCtx, persistSpan := adktrace.Start(ctx, adktrace.Event{
+		Kind:        adktrace.KindEventPersist,
+		EventID:     ev.ID,
+		EventAuthor: ev.Author,
+		EventRole:   ev.Content.Role,
+		Partial:     ev.Partial,
+	})
+	err := sess.CreateEvent(persistCtx, stored)
+	persistSpan.End(persistCtx, adktrace.Event{
+		Kind:        adktrace.KindEventPersist,
+		EventID:     ev.ID,
+		EventAuthor: ev.Author,
+		EventRole:   ev.Content.Role,
+		Partial:     ev.Partial,
+		Err:         err,
+	})
+	return ev, err
 }

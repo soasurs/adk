@@ -19,6 +19,7 @@ import (
 	"github.com/soasurs/adk/model/openai"
 	"github.com/soasurs/adk/tool"
 	"github.com/soasurs/adk/tool/builtin"
+	adktrace "github.com/soasurs/adk/trace"
 )
 
 // newLLMFromEnv creates a model.LLM from environment variables.
@@ -133,13 +134,23 @@ func logMessage(t *testing.T, idx int, m model.Content) {
 // Partial streaming events are consumed silently.
 func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Content) ([]model.Content, error) {
 	t.Helper()
+	return collectMessagesWithContext(t, t.Context(), agent, messages)
+}
+
+func collectMessagesWithContext(
+	t *testing.T,
+	ctx context.Context,
+	agent *LlmAgent,
+	messages []model.Content,
+) ([]model.Content, error) {
+	t.Helper()
 	t.Log("  --- input ---")
 	for i, m := range messages {
 		logMessage(t, i, m)
 	}
 	t.Log("  --- output ---")
 	var collected []model.Content
-	for event, err := range agent.Run(t.Context(), model.EventsFromContents(messages)) {
+	for event, err := range agent.Run(ctx, model.EventsFromContents(messages)) {
 		if err != nil {
 			return collected, err
 		}
@@ -150,6 +161,56 @@ func collectMessages(t *testing.T, agent *LlmAgent, messages []model.Content) ([
 		collected = append(collected, event.Content)
 	}
 	return collected, nil
+}
+
+type recordedTraceSpan struct {
+	kind  adktrace.Kind
+	event adktrace.Event
+}
+
+type recordingTraceTracer struct {
+	mu     sync.Mutex
+	starts []adktrace.Event
+	ends   []recordedTraceSpan
+}
+
+func (t *recordingTraceTracer) Start(ctx context.Context, event adktrace.Event) (context.Context, adktrace.Span) {
+	t.mu.Lock()
+	t.starts = append(t.starts, event)
+	t.mu.Unlock()
+	return ctx, &recordingTraceSpan{tracer: t, kind: event.Kind}
+}
+
+type recordingTraceSpan struct {
+	tracer *recordingTraceTracer
+	kind   adktrace.Kind
+}
+
+func (s *recordingTraceSpan) AddEvent(context.Context, adktrace.Event) {}
+
+func (s *recordingTraceSpan) End(_ context.Context, event adktrace.Event) {
+	s.tracer.mu.Lock()
+	defer s.tracer.mu.Unlock()
+	s.tracer.ends = append(s.tracer.ends, recordedTraceSpan{kind: s.kind, event: event})
+}
+
+func traceStarts(tracer *recordingTraceTracer) []adktrace.Event {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	starts := make([]adktrace.Event, len(tracer.starts))
+	copy(starts, tracer.starts)
+	return starts
+}
+
+func traceEndByKind(tracer *recordingTraceTracer, kind adktrace.Kind) (adktrace.Event, bool) {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	for _, span := range tracer.ends {
+		if span.kind == kind {
+			return span.event, true
+		}
+	}
+	return adktrace.Event{}, false
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +274,136 @@ func TestNew_InvalidConfigPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		New(Config{})
 	})
+}
+
+func TestLlmAgent_Tracing_LLMCallLifecycle(t *testing.T) {
+	tracer := new(recordingTraceTracer)
+	mock := &mockLLM{
+		name: "mock-trace",
+		responses: []*model.LLMResponse{
+			{
+				Content:      model.Content{Role: model.RoleAssistant, Content: "pong"},
+				FinishReason: model.FinishReasonStop,
+				Usage: &model.TokenUsage{
+					PromptTokens:     3,
+					CompletionTokens: 4,
+					TotalTokens:      7,
+				},
+			},
+		},
+	}
+	a := New(Config{Name: "trace-agent", Model: mock}).(*LlmAgent)
+	ctx := adktrace.ContextWithTracer(t.Context(), tracer)
+
+	msgs, err := collectMessagesWithContext(t, ctx, a, []model.Content{
+		{Role: model.RoleUser, Content: "ping"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	starts := traceStarts(tracer)
+	assert.Contains(t, starts, adktrace.Event{
+		Kind:      adktrace.KindLLMIteration,
+		AgentName: "trace-agent",
+		Model:     "mock-trace",
+		Iteration: 1,
+	})
+	assert.Contains(t, starts, adktrace.Event{
+		Kind:      adktrace.KindLLMCall,
+		AgentName: "trace-agent",
+		Model:     "mock-trace",
+		Iteration: 1,
+	})
+
+	llmEnd, ok := traceEndByKind(tracer, adktrace.KindLLMCall)
+	require.True(t, ok)
+	assert.Equal(t, model.FinishReasonStop, llmEnd.FinishReason)
+	assert.Equal(t, int64(3), llmEnd.PromptTokens)
+	assert.Equal(t, int64(4), llmEnd.CompletionTokens)
+	assert.Equal(t, int64(7), llmEnd.TotalTokens)
+	assert.NoError(t, llmEnd.Err)
+}
+
+func TestLlmAgent_Tracing_StreamingPartialCount(t *testing.T) {
+	tracer := new(recordingTraceTracer)
+	mock := &streamingMockLLM{
+		name: "mock-stream-trace",
+		calls: [][]*model.LLMResponse{
+			{
+				{Content: model.Content{Role: model.RoleAssistant, Content: "po"}, Partial: true},
+				{Content: model.Content{Role: model.RoleAssistant, Content: "ng"}, Partial: true},
+				{
+					Content:      model.Content{Role: model.RoleAssistant, Content: "pong"},
+					FinishReason: model.FinishReasonStop,
+				},
+			},
+		},
+	}
+	a := New(Config{Name: "stream-trace-agent", Model: mock, Stream: true}).(*LlmAgent)
+	ctx := adktrace.ContextWithTracer(t.Context(), tracer)
+
+	_, err := collectMessagesWithContext(t, ctx, a, []model.Content{
+		{Role: model.RoleUser, Content: "ping"},
+	})
+
+	require.NoError(t, err)
+	llmEnd, ok := traceEndByKind(tracer, adktrace.KindLLMCall)
+	require.True(t, ok)
+	assert.Equal(t, 2, llmEnd.PartialResponses)
+	assert.True(t, llmEnd.Stream)
+}
+
+func TestLlmAgent_Tracing_ToolCallSpan(t *testing.T) {
+	tracer := new(recordingTraceTracer)
+	echoTool, err := builtin.NewEchoTool()
+	require.NoError(t, err)
+	mock := &mockLLM{
+		name: "mock-tool-trace",
+		responses: []*model.LLMResponse{
+			{
+				Content: model.Content{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-1", Name: "Echo", Arguments: json.RawMessage(`{"echo":"hello"}`)},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{
+				Content:      model.Content{Role: model.RoleAssistant, Content: "done"},
+				FinishReason: model.FinishReasonStop,
+			},
+		},
+	}
+	a := New(Config{
+		Name:  "tool-trace-agent",
+		Model: mock,
+		Tools: []tool.Tool{echoTool},
+	}).(*LlmAgent)
+	ctx := adktrace.ContextWithTracer(t.Context(), tracer)
+
+	_, err = collectMessagesWithContext(t, ctx, a, []model.Content{
+		{Role: model.RoleUser, Content: "run echo"},
+	})
+
+	require.NoError(t, err)
+	var toolStart *adktrace.Event
+	for _, event := range traceStarts(tracer) {
+		if event.Kind == adktrace.KindToolCall {
+			toolStart = &event
+			break
+		}
+	}
+	require.NotNil(t, toolStart)
+	assert.Equal(t, "Echo", toolStart.ToolName)
+	assert.Equal(t, "tc-1", toolStart.ToolCallID)
+	assert.Equal(t, 0, toolStart.ToolIndex)
+
+	toolEnd, ok := traceEndByKind(tracer, adktrace.KindToolCall)
+	require.True(t, ok)
+	assert.Equal(t, model.RoleTool, toolEnd.EventRole)
+	assert.False(t, toolEnd.IsError)
+	assert.NoError(t, toolEnd.Err)
 }
 
 // TestLlmAgent_MaxIterations verifies that Run yields an error once the
