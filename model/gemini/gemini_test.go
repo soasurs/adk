@@ -210,6 +210,37 @@ func TestGenerateContent_WithBaseURL(t *testing.T) {
 	require.Len(t, contents, 1)
 }
 
+func TestTokenUsageFromGemini_Details(t *testing.T) {
+	usage := tokenUsageFromGemini(&genai.GenerateContentResponseUsageMetadata{
+		CachedContentTokenCount: 3,
+		CandidatesTokenCount:    4,
+		PromptTokenCount:        10,
+		ThoughtsTokenCount:      5,
+		ToolUsePromptTokenCount: 2,
+		TotalTokenCount:         21,
+		PromptTokensDetails: []*genai.ModalityTokenCount{
+			{Modality: genai.MediaModalityAudio, TokenCount: 6},
+			{Modality: genai.MediaModalityText, TokenCount: 7},
+		},
+		CandidatesTokensDetails: []*genai.ModalityTokenCount{
+			{Modality: genai.MediaModalityAudio, TokenCount: 8},
+		},
+	})
+
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(10), usage.PromptTokens)
+	assert.Equal(t, int64(4), usage.CompletionTokens)
+	assert.Equal(t, int64(21), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(5), usage.Details.ReasoningTokens)
+	assert.Equal(t, int64(2), usage.Details.ToolUsePromptTokens)
+	assert.Equal(t, int64(6), usage.Details.AudioPromptTokens)
+	assert.Equal(t, int64(8), usage.Details.AudioCompletionTokens)
+
+	assert.Nil(t, tokenUsageFromGemini(nil))
+}
+
 func TestConvertFinishReason(t *testing.T) {
 	cases := []struct {
 		input    genai.FinishReason

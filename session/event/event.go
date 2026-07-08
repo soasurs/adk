@@ -152,25 +152,81 @@ func (tr *ToolResult) Scan(src any) error {
 	return json.Unmarshal([]byte(s), tr)
 }
 
+// UsageDetails serializes model.TokenUsageDetails to/from JSON for database storage.
+type UsageDetails model.TokenUsageDetails
+
+// Value implements driver.Valuer so UsageDetails can be written as JSON.
+func (d UsageDetails) Value() (driver.Value, error) {
+	if d.isZero() {
+		return "", nil
+	}
+	details := model.TokenUsageDetails(d)
+	b, err := json.Marshal(details)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// Scan implements sql.Scanner so UsageDetails can be read from a JSON string.
+func (d *UsageDetails) Scan(src any) error {
+	if src == nil {
+		*d = UsageDetails{}
+		return nil
+	}
+	var s string
+	switch v := src.(type) {
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("event: unsupported UsageDetails source type: %T", src)
+	}
+	if s == "" {
+		*d = UsageDetails{}
+		return nil
+	}
+	var details model.TokenUsageDetails
+	if err := json.Unmarshal([]byte(s), &details); err != nil {
+		return err
+	}
+	*d = UsageDetails(details)
+	return nil
+}
+
+func (d UsageDetails) toModel() *model.TokenUsageDetails {
+	if d.isZero() {
+		return nil
+	}
+	details := model.TokenUsageDetails(d)
+	return &details
+}
+
+func (d UsageDetails) isZero() bool {
+	return model.TokenUsageDetails(d).IsZero()
+}
+
 // Event represents a persisted conversation event.
 type Event struct {
-	EventID          int64      `json:"event_id" db:"event_id"`
-	SessionID        string     `json:"session_id" db:"session_id"`
-	TurnID           string     `json:"turn_id" db:"turn_id"`
-	Author           string     `json:"author" db:"author"`
-	Role             string     `json:"role" db:"role"`
-	Content          string     `json:"content" db:"text"`
-	Parts            Parts      `json:"parts" db:"parts"`
-	ReasoningContent string     `json:"reasoning_content" db:"reasoning_text"`
-	ToolCalls        ToolCalls  `json:"tool_calls" db:"tool_calls"`
-	ToolResult       ToolResult `json:"tool_result" db:"tool_result"`
-	ToolCallID       string     `json:"tool_call_id" db:"tool_call_id"`
-	FinishReason     string     `json:"finish_reason" db:"finish_reason"`
-	PromptTokens     int64      `json:"prompt_tokens" db:"prompt_tokens"`
-	CompletionTokens int64      `json:"completion_tokens" db:"completion_tokens"`
-	TotalTokens      int64      `json:"total_tokens" db:"total_tokens"`
-	CreatedAt        int64      `json:"created_at" db:"created_at"`
-	UpdatedAt        int64      `json:"updated_at" db:"updated_at"`
+	EventID          int64        `json:"event_id" db:"event_id"`
+	SessionID        string       `json:"session_id" db:"session_id"`
+	TurnID           string       `json:"turn_id" db:"turn_id"`
+	Author           string       `json:"author" db:"author"`
+	Role             string       `json:"role" db:"role"`
+	Content          string       `json:"content" db:"text"`
+	Parts            Parts        `json:"parts" db:"parts"`
+	ReasoningContent string       `json:"reasoning_content" db:"reasoning_text"`
+	ToolCalls        ToolCalls    `json:"tool_calls" db:"tool_calls"`
+	ToolResult       ToolResult   `json:"tool_result" db:"tool_result"`
+	ToolCallID       string       `json:"tool_call_id" db:"tool_call_id"`
+	FinishReason     string       `json:"finish_reason" db:"finish_reason"`
+	PromptTokens     int64        `json:"prompt_tokens" db:"prompt_tokens"`
+	CompletionTokens int64        `json:"completion_tokens" db:"completion_tokens"`
+	TotalTokens      int64        `json:"total_tokens" db:"total_tokens"`
+	UsageDetails     UsageDetails `json:"usage_details" db:"usage_details"`
+	CreatedAt        int64        `json:"created_at" db:"created_at"`
+	UpdatedAt        int64        `json:"updated_at" db:"updated_at"`
 	// CompactedAt is set when the event has been archived by a CompactEvents call.
 	// A non-zero value means the event is compacted and no longer part of the active history.
 	CompactedAt int64 `json:"compacted_at" db:"compacted_at"`
@@ -205,11 +261,13 @@ func (e *Event) ToModel() model.Event {
 		CreatedAt:    e.CreatedAt,
 		UpdatedAt:    e.UpdatedAt,
 	}
-	if e.PromptTokens != 0 || e.CompletionTokens != 0 || e.TotalTokens != 0 {
+	usageDetails := e.UsageDetails.toModel()
+	if e.PromptTokens != 0 || e.CompletionTokens != 0 || e.TotalTokens != 0 || usageDetails != nil {
 		ev.Usage = &model.TokenUsage{
 			PromptTokens:     e.PromptTokens,
 			CompletionTokens: e.CompletionTokens,
 			TotalTokens:      e.TotalTokens,
+			Details:          usageDetails,
 		}
 	}
 	if e.ToolResult.ToolCallID != "" || e.ToolResult.Name != "" || e.ToolResult.Content != "" || len(e.ToolResult.StructuredContent) > 0 || e.ToolResult.IsError {
@@ -280,6 +338,9 @@ func FromModel(e model.Event) *Event {
 		ev.PromptTokens = e.Usage.PromptTokens
 		ev.CompletionTokens = e.Usage.CompletionTokens
 		ev.TotalTokens = e.Usage.TotalTokens
+		if e.Usage.Details != nil {
+			ev.UsageDetails = UsageDetails(*e.Usage.Details)
+		}
 	}
 	return ev
 }

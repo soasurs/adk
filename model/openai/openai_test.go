@@ -109,6 +109,31 @@ func TestTokenUsageFromCompletion_Presence(t *testing.T) {
 	assert.Equal(t, int64(0), present.PromptTokens)
 	assert.Equal(t, int64(0), present.CompletionTokens)
 	assert.Equal(t, int64(0), present.TotalTokens)
+	assert.Nil(t, present.Details)
+
+	withDetails := tokenUsageFromCompletion(goopenai.CompletionUsage{
+		PromptTokens:     3,
+		CompletionTokens: 4,
+		TotalTokens:      7,
+		PromptTokensDetails: goopenai.CompletionUsagePromptTokensDetails{
+			AudioTokens:  1,
+			CachedTokens: 2,
+		},
+		CompletionTokensDetails: goopenai.CompletionUsageCompletionTokensDetails{
+			AcceptedPredictionTokens: 6,
+			AudioTokens:              4,
+			ReasoningTokens:          5,
+			RejectedPredictionTokens: 7,
+		},
+	}, true)
+	require.NotNil(t, withDetails)
+	require.NotNil(t, withDetails.Details)
+	assert.Equal(t, int64(2), withDetails.Details.CachedPromptTokens)
+	assert.Equal(t, int64(1), withDetails.Details.AudioPromptTokens)
+	assert.Equal(t, int64(4), withDetails.Details.AudioCompletionTokens)
+	assert.Equal(t, int64(5), withDetails.Details.ReasoningTokens)
+	assert.Equal(t, int64(6), withDetails.Details.AcceptedPredictionTokens)
+	assert.Equal(t, int64(7), withDetails.Details.RejectedPredictionTokens)
 }
 
 func TestConvertMessage_System(t *testing.T) {

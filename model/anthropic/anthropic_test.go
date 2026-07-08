@@ -198,6 +198,10 @@ func TestTokenUsageFromAnthropic_IncludesCacheTokens(t *testing.T) {
 	assert.Equal(t, int64(15), usage.PromptTokens)
 	assert.Equal(t, int64(4), usage.CompletionTokens)
 	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
 	assert.Nil(t, tokenUsageFromAnthropic(goanthropic.Usage{InputTokens: 10}, false))
 }
 
@@ -213,6 +217,10 @@ func TestTokenUsageFromAnthropicDelta_IncludesCacheTokens(t *testing.T) {
 	assert.Equal(t, int64(15), usage.PromptTokens)
 	assert.Equal(t, int64(4), usage.CompletionTokens)
 	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
 	assert.Nil(t, tokenUsageFromAnthropicDelta(goanthropic.MessageDeltaUsage{InputTokens: 10}, false))
 }
 
@@ -221,6 +229,11 @@ func TestMergeAnthropicDeltaUsage_PreservesPromptTokens(t *testing.T) {
 		PromptTokens:     15,
 		CompletionTokens: 1,
 		TotalTokens:      16,
+		Details: &model.TokenUsageDetails{
+			CachedPromptTokens:        3,
+			CacheCreationPromptTokens: 2,
+			CacheReadPromptTokens:     3,
+		},
 	}, goanthropic.MessageDeltaUsage{
 		OutputTokens: 4,
 	}, true)
@@ -229,6 +242,10 @@ func TestMergeAnthropicDeltaUsage_PreservesPromptTokens(t *testing.T) {
 	assert.Equal(t, int64(15), usage.PromptTokens)
 	assert.Equal(t, int64(4), usage.CompletionTokens)
 	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
 }
 
 func TestMessages_Stream_Usage(t *testing.T) {
@@ -296,6 +313,10 @@ func TestMessages_Stream_Usage(t *testing.T) {
 	assert.Equal(t, int64(15), finalResp.Usage.PromptTokens)
 	assert.Equal(t, int64(4), finalResp.Usage.CompletionTokens)
 	assert.Equal(t, int64(19), finalResp.Usage.TotalTokens)
+	require.NotNil(t, finalResp.Usage.Details)
+	assert.Equal(t, int64(3), finalResp.Usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), finalResp.Usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), finalResp.Usage.Details.CacheReadPromptTokens)
 }
 
 func TestConvertMessages_System(t *testing.T) {

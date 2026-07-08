@@ -418,10 +418,15 @@ func tokenUsageFromResponses(usage goresponses.ResponseUsage, valid bool) *model
 	if !valid {
 		return nil
 	}
+	details := model.TokenUsageDetails{
+		CachedPromptTokens: usage.InputTokensDetails.CachedTokens,
+		ReasoningTokens:    usage.OutputTokensDetails.ReasoningTokens,
+	}
 	return &model.TokenUsage{
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
 		TotalTokens:      usage.TotalTokens,
+		Details:          tokenUsageDetailsPtr(details),
 	}
 }
 

@@ -157,6 +157,13 @@ type Event struct {
 }
 ```
 
+### `model.TokenUsage`
+
+`TokenUsage` carries provider-reported aggregate token counts. `Details` is
+optional and contains common breakdowns such as cached prompt tokens, cache
+creation/read tokens, reasoning tokens, tool-use prompt tokens, audio tokens,
+and prediction tokens when a provider reports them.
+
 ### `agent.Agent`
 
 ```go

@@ -553,16 +553,52 @@ func mergeAnthropicDeltaUsage(current *model.TokenUsage, delta goanthropic.Messa
 		PromptTokens:     promptTokens,
 		CompletionTokens: deltaUsage.CompletionTokens,
 		TotalTokens:      promptTokens + deltaUsage.CompletionTokens,
+		Details:          mergeAnthropicUsageDetails(current.Details, deltaUsage.Details),
 	}
 }
 
 func tokenUsageFromAnthropicParts(inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int64) *model.TokenUsage {
 	promptTokens := inputTokens + cacheCreationTokens + cacheReadTokens
+	details := model.TokenUsageDetails{
+		CachedPromptTokens:        cacheReadTokens,
+		CacheCreationPromptTokens: cacheCreationTokens,
+		CacheReadPromptTokens:     cacheReadTokens,
+	}
 	return &model.TokenUsage{
 		PromptTokens:     promptTokens,
 		CompletionTokens: outputTokens,
 		TotalTokens:      promptTokens + outputTokens,
+		Details:          tokenUsageDetailsPtr(details),
 	}
+}
+
+func mergeAnthropicUsageDetails(current, delta *model.TokenUsageDetails) *model.TokenUsageDetails {
+	if delta == nil {
+		return cloneTokenUsageDetails(current)
+	}
+	if current == nil {
+		return cloneTokenUsageDetails(delta)
+	}
+	merged := *current
+	merged.CachedPromptTokens = delta.CachedPromptTokens
+	merged.CacheCreationPromptTokens = delta.CacheCreationPromptTokens
+	merged.CacheReadPromptTokens = delta.CacheReadPromptTokens
+	return tokenUsageDetailsPtr(merged)
+}
+
+func cloneTokenUsageDetails(details *model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details == nil || details.IsZero() {
+		return nil
+	}
+	cloned := *details
+	return &cloned
+}
+
+func tokenUsageDetailsPtr(details model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details.IsZero() {
+		return nil
+	}
+	return &details
 }
 
 // convertStopReason maps Anthropic StopReason to model.FinishReason.

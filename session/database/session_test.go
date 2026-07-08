@@ -157,7 +157,7 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	var versions []int
 	err = db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version")
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 3}, versions)
+	assert.Equal(t, []int{1, 2, 3, 4}, versions)
 
 	service, err := NewDatabaseSessionService(db)
 	require.NoError(t, err)
@@ -178,6 +178,56 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 2)
 	assert.Equal(t, "turn-new", events[1].TurnID)
+}
+
+func TestSQLite_DatabaseSession_UsageDetails_RoundTrip(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
+	require.NoError(t, err)
+
+	expectedDetails := &model.TokenUsageDetails{
+		CachedPromptTokens:        12,
+		CacheCreationPromptTokens: 3,
+		CacheReadPromptTokens:     9,
+		ReasoningTokens:           4,
+		ToolUsePromptTokens:       5,
+		AudioPromptTokens:         6,
+		AudioCompletionTokens:     7,
+		AcceptedPredictionTokens:  8,
+		RejectedPredictionTokens:  2,
+	}
+	ev := event.FromModel(model.Event{
+		ID:        1,
+		CreatedAt: time.Now().UnixMilli(),
+		UpdatedAt: time.Now().UnixMilli(),
+		Author:    "assistant",
+		Content: model.Content{
+			Role:    model.RoleAssistant,
+			Content: "answer",
+		},
+		Usage: &model.TokenUsage{
+			PromptTokens:     20,
+			CompletionTokens: 10,
+			TotalTokens:      30,
+			Details:          expectedDetails,
+		},
+	})
+	require.NoError(t, sess.CreateEvent(ctx, ev))
+
+	events, err := sess.ListEvents(ctx)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	got := events[0].ToModel()
+	require.NotNil(t, got.Usage)
+	assert.Equal(t, int64(20), got.Usage.PromptTokens)
+	assert.Equal(t, int64(10), got.Usage.CompletionTokens)
+	assert.Equal(t, int64(30), got.Usage.TotalTokens)
+	require.NotNil(t, got.Usage.Details)
+	assert.Equal(t, expectedDetails, got.Usage.Details)
 }
 
 func TestSQLite_DatabaseSession_DeleteEvent(t *testing.T) {

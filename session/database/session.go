@@ -79,6 +79,7 @@ func (s *databaseSession) CreateEvent(ctx context.Context, ev *event.Event) erro
 		ev.PromptTokens,
 		ev.CompletionTokens,
 		ev.TotalTokens,
+		ev.UsageDetails,
 		ev.CreatedAt,
 		ev.UpdatedAt,
 	)
@@ -155,6 +156,7 @@ func (s *databaseSession) CompactEvents(ctx context.Context, splitEventID int64,
 		summaryEvent.PromptTokens,
 		summaryEvent.CompletionTokens,
 		summaryEvent.TotalTokens,
+		summaryEvent.UsageDetails,
 		summaryEvent.CreatedAt,
 		summaryEvent.UpdatedAt,
 	)

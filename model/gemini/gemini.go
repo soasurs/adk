@@ -285,12 +285,8 @@ func (g *GenerateContent) callAPI(ctx context.Context, modelName string, content
 			if candidate.FinishReason != "" {
 				finishReason = convertFinishReason(candidate.FinishReason)
 			}
-			if resp.UsageMetadata != nil {
-				usage = &model.TokenUsage{
-					PromptTokens:     int64(resp.UsageMetadata.PromptTokenCount),
-					CompletionTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
-					TotalTokens:      int64(resp.UsageMetadata.TotalTokenCount),
-				}
+			if eventUsage := tokenUsageFromGemini(resp.UsageMetadata); eventUsage != nil {
+				usage = eventUsage
 			}
 		}
 
@@ -601,20 +597,47 @@ func convertResponse(resp *genai.GenerateContentResponse) *model.LLMResponse {
 		finishReason = convertFinishReason(candidate.FinishReason)
 	}
 
-	var usage *model.TokenUsage
-	if resp.UsageMetadata != nil {
-		usage = &model.TokenUsage{
-			PromptTokens:     int64(resp.UsageMetadata.PromptTokenCount),
-			CompletionTokens: int64(resp.UsageMetadata.CandidatesTokenCount),
-			TotalTokens:      int64(resp.UsageMetadata.TotalTokenCount),
-		}
-	}
-
 	return &model.LLMResponse{
 		Content:      msg,
 		FinishReason: finishReason,
-		Usage:        usage,
+		Usage:        tokenUsageFromGemini(resp.UsageMetadata),
 	}
+}
+
+func tokenUsageFromGemini(usage *genai.GenerateContentResponseUsageMetadata) *model.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	details := model.TokenUsageDetails{
+		CachedPromptTokens:    int64(usage.CachedContentTokenCount),
+		ReasoningTokens:       int64(usage.ThoughtsTokenCount),
+		ToolUsePromptTokens:   int64(usage.ToolUsePromptTokenCount),
+		AudioPromptTokens:     modalityTokenCount(usage.PromptTokensDetails, genai.MediaModalityAudio),
+		AudioCompletionTokens: modalityTokenCount(usage.CandidatesTokensDetails, genai.MediaModalityAudio),
+	}
+	return &model.TokenUsage{
+		PromptTokens:     int64(usage.PromptTokenCount),
+		CompletionTokens: int64(usage.CandidatesTokenCount),
+		TotalTokens:      int64(usage.TotalTokenCount),
+		Details:          tokenUsageDetailsPtr(details),
+	}
+}
+
+func modalityTokenCount(details []*genai.ModalityTokenCount, modality genai.MediaModality) int64 {
+	var count int64
+	for _, detail := range details {
+		if detail != nil && detail.Modality == modality {
+			count += int64(detail.TokenCount)
+		}
+	}
+	return count
+}
+
+func tokenUsageDetailsPtr(details model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details.IsZero() {
+		return nil
+	}
+	return &details
 }
 
 func marshalToolArgs(args map[string]any) json.RawMessage {

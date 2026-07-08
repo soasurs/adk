@@ -170,3 +170,80 @@ func TestFromModel_ToModel_ToolResult(t *testing.T) {
 	assert.JSONEq(t, `{"temperature":23}`, string(restored.Content.ToolResult.StructuredContent))
 	assert.Equal(t, "call-1", restored.Content.ToolCallID)
 }
+
+func TestUsageDetails_ValueScan(t *testing.T) {
+	original := UsageDetails(model.TokenUsageDetails{
+		CachedPromptTokens:        12,
+		CacheCreationPromptTokens: 3,
+		CacheReadPromptTokens:     9,
+		ReasoningTokens:           4,
+		ToolUsePromptTokens:       5,
+		AudioPromptTokens:         6,
+		AudioCompletionTokens:     7,
+		AcceptedPredictionTokens:  8,
+		RejectedPredictionTokens:  2,
+	})
+
+	val, err := original.Value()
+	require.NoError(t, err)
+	require.IsType(t, "", val)
+	assert.JSONEq(t, `{
+		"cached_prompt_tokens": 12,
+		"cache_creation_prompt_tokens": 3,
+		"cache_read_prompt_tokens": 9,
+		"reasoning_tokens": 4,
+		"tool_use_prompt_tokens": 5,
+		"audio_prompt_tokens": 6,
+		"audio_completion_tokens": 7,
+		"accepted_prediction_tokens": 8,
+		"rejected_prediction_tokens": 2
+	}`, val.(string))
+
+	var restored UsageDetails
+	require.NoError(t, restored.Scan(val))
+	assert.Equal(t, original, restored)
+
+	emptyVal, err := UsageDetails{}.Value()
+	require.NoError(t, err)
+	assert.Equal(t, "", emptyVal)
+
+	require.NoError(t, restored.Scan(nil))
+	assert.Equal(t, UsageDetails{}, restored)
+	require.NoError(t, restored.Scan(""))
+	assert.Equal(t, UsageDetails{}, restored)
+}
+
+func TestFromModel_ToModel_UsageDetails(t *testing.T) {
+	original := model.Event{
+		Author: "assistant",
+		Content: model.Content{
+			Role:    model.RoleAssistant,
+			Content: "answer",
+		},
+		Usage: &model.TokenUsage{
+			PromptTokens:     20,
+			CompletionTokens: 10,
+			TotalTokens:      30,
+			Details: &model.TokenUsageDetails{
+				CachedPromptTokens:        12,
+				CacheCreationPromptTokens: 3,
+				CacheReadPromptTokens:     9,
+				ReasoningTokens:           4,
+				ToolUsePromptTokens:       5,
+				AudioPromptTokens:         6,
+				AudioCompletionTokens:     7,
+				AcceptedPredictionTokens:  8,
+				RejectedPredictionTokens:  2,
+			},
+		},
+	}
+
+	restored := FromModel(original).ToModel()
+
+	require.NotNil(t, restored.Usage)
+	assert.Equal(t, original.Usage.PromptTokens, restored.Usage.PromptTokens)
+	assert.Equal(t, original.Usage.CompletionTokens, restored.Usage.CompletionTokens)
+	assert.Equal(t, original.Usage.TotalTokens, restored.Usage.TotalTokens)
+	require.NotNil(t, restored.Usage.Details)
+	assert.Equal(t, original.Usage.Details, restored.Usage.Details)
+}

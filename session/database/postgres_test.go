@@ -99,7 +99,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"SELECT version FROM "+f.prefix+"schema_migrations ORDER BY version",
 		)
 		require.NoError(t, err)
-		assert.Equal(t, []int{1, 2, 3}, versions)
+		assert.Equal(t, []int{1, 2, 3, 4}, versions)
 	})
 
 	t.Run("creates expected column types", func(t *testing.T) {
@@ -140,6 +140,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 		}
 		assert.Equal(t, "text", columns["session_id"])
 		assert.Equal(t, "text", columns["turn_id"])
+		assert.Equal(t, "text", columns["usage_details"])
 	})
 
 	t.Run("supports custom table names", func(t *testing.T) {
@@ -299,8 +300,14 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 			PromptTokens:     10,
 			CompletionTokens: 20,
 			TotalTokens:      30,
-			CreatedAt:        1_781_289_412_066,
-			UpdatedAt:        1_781_289_412_067,
+			UsageDetails: event.UsageDetails(model.TokenUsageDetails{
+				CachedPromptTokens:        7,
+				CacheCreationPromptTokens: 2,
+				CacheReadPromptTokens:     5,
+				ReasoningTokens:           3,
+			}),
+			CreatedAt: 1_781_289_412_066,
+			UpdatedAt: 1_781_289_412_067,
 		}
 
 		require.NoError(t, sess.CreateEvent(t.Context(), ev))
@@ -321,6 +328,7 @@ func TestPostgres_DatabaseSession_CreateEvent(t *testing.T) {
 		assert.Equal(t, ev.PromptTokens, got.PromptTokens)
 		assert.Equal(t, ev.CompletionTokens, got.CompletionTokens)
 		assert.Equal(t, ev.TotalTokens, got.TotalTokens)
+		assert.Equal(t, ev.UsageDetails, got.UsageDetails)
 		assert.Equal(t, ev.CreatedAt, got.CreatedAt)
 		assert.Equal(t, ev.UpdatedAt, got.UpdatedAt)
 	})

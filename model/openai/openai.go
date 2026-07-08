@@ -633,11 +633,27 @@ func tokenUsageFromCompletion(usage goopenai.CompletionUsage, valid bool) *model
 	if !valid {
 		return nil
 	}
+	details := model.TokenUsageDetails{
+		CachedPromptTokens:       usage.PromptTokensDetails.CachedTokens,
+		AudioPromptTokens:        usage.PromptTokensDetails.AudioTokens,
+		AudioCompletionTokens:    usage.CompletionTokensDetails.AudioTokens,
+		ReasoningTokens:          usage.CompletionTokensDetails.ReasoningTokens,
+		AcceptedPredictionTokens: usage.CompletionTokensDetails.AcceptedPredictionTokens,
+		RejectedPredictionTokens: usage.CompletionTokensDetails.RejectedPredictionTokens,
+	}
 	return &model.TokenUsage{
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		TotalTokens:      usage.TotalTokens,
+		Details:          tokenUsageDetailsPtr(details),
 	}
+}
+
+func tokenUsageDetailsPtr(details model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details.IsZero() {
+		return nil
+	}
+	return &details
 }
 
 func toolArgumentsString(args json.RawMessage) string {

@@ -139,7 +139,13 @@ func TestConvertResponsesResponse_TextAndToolCalls(t *testing.T) {
 				"status": "completed"
 			}
 		],
-		"usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7}
+		"usage": {
+			"input_tokens": 3,
+			"input_tokens_details": {"cached_tokens": 2},
+			"output_tokens": 4,
+			"output_tokens_details": {"reasoning_tokens": 1},
+			"total_tokens": 7
+		}
 	}`), &resp))
 
 	got := convertResponsesResponse(&resp)
@@ -154,6 +160,9 @@ func TestConvertResponsesResponse_TextAndToolCalls(t *testing.T) {
 	assert.Equal(t, int64(3), got.Usage.PromptTokens)
 	assert.Equal(t, int64(4), got.Usage.CompletionTokens)
 	assert.Equal(t, int64(7), got.Usage.TotalTokens)
+	require.NotNil(t, got.Usage.Details)
+	assert.Equal(t, int64(2), got.Usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(1), got.Usage.Details.ReasoningTokens)
 }
 
 func TestConvertResponsesResponse_MissingUsage(t *testing.T) {
