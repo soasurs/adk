@@ -12,6 +12,7 @@ import (
 	"time"
 
 	goanthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -112,6 +113,12 @@ func readCapturedRequest(t *testing.T, reqCh <-chan capturedRequest) capturedReq
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests (no network required)
 // ---------------------------------------------------------------------------
@@ -177,6 +184,139 @@ func TestConvertStopReason(t *testing.T) {
 			assert.Equal(t, tc.expected, convertStopReason(tc.input))
 		})
 	}
+}
+
+func TestTokenUsageFromAnthropic_IncludesCacheTokens(t *testing.T) {
+	usage := tokenUsageFromAnthropic(goanthropic.Usage{
+		InputTokens:              10,
+		CacheCreationInputTokens: 2,
+		CacheReadInputTokens:     3,
+		OutputTokens:             4,
+	}, true)
+
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(15), usage.PromptTokens)
+	assert.Equal(t, int64(4), usage.CompletionTokens)
+	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
+	assert.Nil(t, tokenUsageFromAnthropic(goanthropic.Usage{InputTokens: 10}, false))
+}
+
+func TestTokenUsageFromAnthropicDelta_IncludesCacheTokens(t *testing.T) {
+	usage := tokenUsageFromAnthropicDelta(goanthropic.MessageDeltaUsage{
+		InputTokens:              10,
+		CacheCreationInputTokens: 2,
+		CacheReadInputTokens:     3,
+		OutputTokens:             4,
+	}, true)
+
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(15), usage.PromptTokens)
+	assert.Equal(t, int64(4), usage.CompletionTokens)
+	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
+	assert.Nil(t, tokenUsageFromAnthropicDelta(goanthropic.MessageDeltaUsage{InputTokens: 10}, false))
+}
+
+func TestMergeAnthropicDeltaUsage_PreservesPromptTokens(t *testing.T) {
+	usage := mergeAnthropicDeltaUsage(&model.TokenUsage{
+		PromptTokens:     15,
+		CompletionTokens: 1,
+		TotalTokens:      16,
+		Details: &model.TokenUsageDetails{
+			CachedPromptTokens:        3,
+			CacheCreationPromptTokens: 2,
+			CacheReadPromptTokens:     3,
+		},
+	}, goanthropic.MessageDeltaUsage{
+		OutputTokens: 4,
+	}, true)
+
+	require.NotNil(t, usage)
+	assert.Equal(t, int64(15), usage.PromptTokens)
+	assert.Equal(t, int64(4), usage.CompletionTokens)
+	assert.Equal(t, int64(19), usage.TotalTokens)
+	require.NotNil(t, usage.Details)
+	assert.Equal(t, int64(3), usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), usage.Details.CacheReadPromptTokens)
+}
+
+func TestMessages_Stream_Usage(t *testing.T) {
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "/v1/messages", r.URL.Path)
+
+			body := strings.Join([]string{
+				`event: message_start`,
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"output_tokens":1}}}`,
+				``,
+				`event: content_block_start`,
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				``,
+				`event: content_block_delta`,
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pong"}}`,
+				``,
+				`event: content_block_stop`,
+				`data: {"type":"content_block_stop","index":0}`,
+				``,
+				`event: message_delta`,
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":4}}`,
+				``,
+				`event: message_stop`,
+				`data: {"type":"message_stop"}`,
+				``,
+			}, "\n")
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		}),
+	}
+	m := &Model{
+		client:    goanthropic.NewClient(option.WithAPIKey("test-key"), option.WithHTTPClient(httpClient)),
+		modelName: "claude-test",
+	}
+
+	var finalResp *model.LLMResponse
+	for resp, err := range m.callAPIStreaming(t.Context(), goanthropic.MessageNewParams{
+		Model:     goanthropic.Model("claude-test"),
+		MaxTokens: 128,
+		Messages: []goanthropic.MessageParam{
+			{
+				Role: goanthropic.MessageParamRoleUser,
+				Content: []goanthropic.ContentBlockParamUnion{
+					{OfText: &goanthropic.TextBlockParam{Text: "ping"}},
+				},
+			},
+		},
+	}) {
+		require.NoError(t, err)
+		if !resp.Partial {
+			finalResp = resp
+		}
+	}
+
+	require.NotNil(t, finalResp)
+	require.NotNil(t, finalResp.Usage)
+	assert.Equal(t, "pong", finalResp.Content.Content)
+	assert.Equal(t, int64(15), finalResp.Usage.PromptTokens)
+	assert.Equal(t, int64(4), finalResp.Usage.CompletionTokens)
+	assert.Equal(t, int64(19), finalResp.Usage.TotalTokens)
+	require.NotNil(t, finalResp.Usage.Details)
+	assert.Equal(t, int64(3), finalResp.Usage.Details.CachedPromptTokens)
+	assert.Equal(t, int64(2), finalResp.Usage.Details.CacheCreationPromptTokens)
+	assert.Equal(t, int64(3), finalResp.Usage.Details.CacheReadPromptTokens)
 }
 
 func TestConvertMessages_System(t *testing.T) {

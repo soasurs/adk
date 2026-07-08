@@ -192,11 +192,17 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 		var reasoningBuf strings.Builder
 		toolCallAcc := make(map[int64]*model.ToolCall) // index → accumulated tool call
 		var finishReason goanthropic.StopReason
+		var usage *model.TokenUsage
 
 		for stream.Next() {
 			event := stream.Current()
 
 			switch e := event.AsAny().(type) {
+			case goanthropic.MessageStartEvent:
+				if eventUsage := tokenUsageFromAnthropic(e.Message.Usage, e.Message.JSON.Usage.Valid()); eventUsage != nil {
+					usage = eventUsage
+				}
+
 			case goanthropic.ContentBlockStartEvent:
 				// Capture tool_use block start.
 				if toolUse := e.ContentBlock.AsToolUse(); toolUse.ID != "" {
@@ -245,6 +251,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 				if e.Delta.StopReason != "" {
 					finishReason = e.Delta.StopReason
 				}
+				usage = mergeAnthropicDeltaUsage(usage, e.Usage, e.JSON.Usage.Valid())
 			}
 		}
 
@@ -279,6 +286,7 @@ func (m *Model) callAPIStreaming(ctx context.Context, params goanthropic.Message
 		yield(&model.LLMResponse{
 			Content:      msg,
 			FinishReason: f,
+			Usage:        usage,
 			TurnComplete: true,
 		}, nil)
 	}
@@ -498,17 +506,99 @@ func convertResponse(resp *goanthropic.Message) *model.LLMResponse {
 		finishReason = model.FinishReasonToolCalls
 	}
 
-	usage := &model.TokenUsage{
-		PromptTokens:     resp.Usage.InputTokens,
-		CompletionTokens: resp.Usage.OutputTokens,
-		TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-	}
-
 	return &model.LLMResponse{
 		Content:      msg,
 		FinishReason: finishReason,
-		Usage:        usage,
+		Usage:        tokenUsageFromAnthropic(resp.Usage, resp.JSON.Usage.Valid()),
 	}
+}
+
+func tokenUsageFromAnthropic(usage goanthropic.Usage, valid bool) *model.TokenUsage {
+	if !valid {
+		return nil
+	}
+	return tokenUsageFromAnthropicParts(
+		usage.InputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheReadInputTokens,
+		usage.OutputTokens,
+	)
+}
+
+func tokenUsageFromAnthropicDelta(usage goanthropic.MessageDeltaUsage, valid bool) *model.TokenUsage {
+	if !valid {
+		return nil
+	}
+	return tokenUsageFromAnthropicParts(
+		usage.InputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheReadInputTokens,
+		usage.OutputTokens,
+	)
+}
+
+func mergeAnthropicDeltaUsage(current *model.TokenUsage, delta goanthropic.MessageDeltaUsage, valid bool) *model.TokenUsage {
+	if !valid {
+		return current
+	}
+	deltaUsage := tokenUsageFromAnthropicDelta(delta, true)
+	if current == nil {
+		return deltaUsage
+	}
+	promptTokens := current.PromptTokens
+	if deltaUsage.PromptTokens != 0 {
+		promptTokens = deltaUsage.PromptTokens
+	}
+	return &model.TokenUsage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: deltaUsage.CompletionTokens,
+		TotalTokens:      promptTokens + deltaUsage.CompletionTokens,
+		Details:          mergeAnthropicUsageDetails(current.Details, deltaUsage.Details),
+	}
+}
+
+func tokenUsageFromAnthropicParts(inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens int64) *model.TokenUsage {
+	promptTokens := inputTokens + cacheCreationTokens + cacheReadTokens
+	details := model.TokenUsageDetails{
+		CachedPromptTokens:        cacheReadTokens,
+		CacheCreationPromptTokens: cacheCreationTokens,
+		CacheReadPromptTokens:     cacheReadTokens,
+	}
+	return &model.TokenUsage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: outputTokens,
+		TotalTokens:      promptTokens + outputTokens,
+		Details:          tokenUsageDetailsPtr(details),
+	}
+}
+
+func mergeAnthropicUsageDetails(current, delta *model.TokenUsageDetails) *model.TokenUsageDetails {
+	if delta == nil {
+		return cloneTokenUsageDetails(current)
+	}
+	if current == nil {
+		return cloneTokenUsageDetails(delta)
+	}
+	merged := *current
+	merged.CachedPromptTokens = delta.CachedPromptTokens
+	merged.CacheCreationPromptTokens = delta.CacheCreationPromptTokens
+	merged.CacheReadPromptTokens = delta.CacheReadPromptTokens
+	return tokenUsageDetailsPtr(merged)
+}
+
+func cloneTokenUsageDetails(details *model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details == nil || details.IsZero() {
+		return nil
+	}
+	cloned := *details
+	return &cloned
+}
+
+func tokenUsageDetailsPtr(details model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details.IsZero() {
+		return nil
+	}
+	return &details
 }
 
 // convertStopReason maps Anthropic StopReason to model.FinishReason.

@@ -410,11 +410,23 @@ func convertResponsesResponse(resp *goresponses.Response) *model.LLMResponse {
 	return &model.LLMResponse{
 		Content:      msg,
 		FinishReason: convertResponsesFinishReason(resp),
-		Usage: &model.TokenUsage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
+		Usage:        tokenUsageFromResponses(resp.Usage, resp.JSON.Usage.Valid()),
+	}
+}
+
+func tokenUsageFromResponses(usage goresponses.ResponseUsage, valid bool) *model.TokenUsage {
+	if !valid {
+		return nil
+	}
+	details := model.TokenUsageDetails{
+		CachedPromptTokens: usage.InputTokensDetails.CachedTokens,
+		ReasoningTokens:    usage.OutputTokensDetails.ReasoningTokens,
+	}
+	return &model.TokenUsage{
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      usage.TotalTokens,
+		Details:          tokenUsageDetailsPtr(details),
 	}
 }
 

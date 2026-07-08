@@ -146,6 +146,37 @@ type TokenUsage struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	TotalTokens      int64
+	Details          *TokenUsageDetails
+}
+
+// TokenUsageDetails holds provider-neutral token usage breakdowns for a single
+// LLM call. These fields are informational; callers should use TokenUsage's
+// aggregate fields for billing and limit accounting unless they explicitly need
+// a provider-reported breakdown.
+type TokenUsageDetails struct {
+	// CachedPromptTokens is the number of prompt tokens served from cache.
+	CachedPromptTokens int64 `json:"cached_prompt_tokens,omitempty"`
+	// CacheCreationPromptTokens is the number of prompt tokens used to create a cache entry.
+	CacheCreationPromptTokens int64 `json:"cache_creation_prompt_tokens,omitempty"`
+	// CacheReadPromptTokens is the number of prompt tokens read from a cache entry.
+	CacheReadPromptTokens int64 `json:"cache_read_prompt_tokens,omitempty"`
+	// ReasoningTokens is the number of output tokens used for model reasoning.
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	// ToolUsePromptTokens is the number of prompt tokens from tool execution results.
+	ToolUsePromptTokens int64 `json:"tool_use_prompt_tokens,omitempty"`
+	// AudioPromptTokens is the number of prompt tokens from audio input.
+	AudioPromptTokens int64 `json:"audio_prompt_tokens,omitempty"`
+	// AudioCompletionTokens is the number of completion tokens from audio output.
+	AudioCompletionTokens int64 `json:"audio_completion_tokens,omitempty"`
+	// AcceptedPredictionTokens is the number of predicted output tokens accepted by the model.
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	// RejectedPredictionTokens is the number of predicted output tokens rejected by the model.
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+}
+
+// IsZero reports whether d contains no provider-reported detail values.
+func (d TokenUsageDetails) IsZero() bool {
+	return d == TokenUsageDetails{}
 }
 
 // Content is the provider-neutral payload carried by an Event.

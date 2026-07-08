@@ -6,6 +6,38 @@ const (
 	defaultMigrationsTable = "schema_migrations"
 )
 
+const sessionColumns = `
+	session_id,
+	app_id,
+	user_id,
+	created_at,
+	updated_at,
+	deleted_at
+`
+
+const eventColumns = `
+	event_id,
+	session_id,
+	turn_id,
+	author,
+	role,
+	text,
+	reasoning_text,
+	tool_calls,
+	tool_result,
+	tool_call_id,
+	finish_reason,
+	parts,
+	prompt_tokens,
+	completion_tokens,
+	total_tokens,
+	usage_details,
+	created_at,
+	updated_at,
+	compacted_at,
+	deleted_at
+`
+
 // queries holds all pre-built SQL expressions for a set of table names.
 type queries struct {
 	createSession       string
@@ -36,7 +68,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			VALUES ($1, $2, $3, $4, $5, $6)
 		`,
 		getSession: `
-			SELECT *
+			SELECT ` + sessionColumns + `
 			FROM ` + sessionsTable + `
 			WHERE session_id = $1
 				AND deleted_at = $2
@@ -65,6 +97,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 				prompt_tokens,
 				completion_tokens,
 				total_tokens,
+				usage_details,
 				created_at,
 				updated_at,
 				compacted_at,
@@ -73,7 +106,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8,
 				$9, $10, $11, $12, $13, $14, $15, $16,
-				$17, 0, 0
+				$17, $18, 0, 0
 			)
 		`,
 		deleteEvent: `
@@ -84,7 +117,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 				AND deleted_at = 0
 		`,
 		getEvents: `
-			SELECT *
+			SELECT ` + eventColumns + `
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
@@ -93,7 +126,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			LIMIT $2 OFFSET $3
 		`,
 		listEvents: `
-			SELECT *
+			SELECT ` + eventColumns + `
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
@@ -101,7 +134,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			ORDER BY created_at ASC, event_id ASC
 		`,
 		listCompactedEvents: `
-			SELECT *
+			SELECT ` + eventColumns + `
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND compacted_at > 0
@@ -211,6 +244,15 @@ func migrationV3SQL(t migrationTables) []string {
 		`
 			ALTER TABLE ` + t.events + `
 			ADD COLUMN turn_id TEXT NOT NULL DEFAULT ''
+		`,
+	}
+}
+
+func migrationV4SQL(t migrationTables) []string {
+	return []string{
+		`
+			ALTER TABLE ` + t.events + `
+			ADD COLUMN usage_details TEXT NOT NULL DEFAULT ''
 		`,
 	}
 }

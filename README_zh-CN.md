@@ -152,6 +152,13 @@ type Event struct {
 }
 ```
 
+### `model.TokenUsage`
+
+`TokenUsage` 保存 provider 返回的聚合 token 计数。`Details` 是可选字段，
+用于记录 provider 提供的常见细分项，例如 cached prompt tokens、cache
+creation/read tokens、reasoning tokens、tool-use prompt tokens、audio tokens
+和 prediction tokens。
+
 ### `agent.Agent`
 
 ```go

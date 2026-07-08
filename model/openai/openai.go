@@ -263,7 +263,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 				yield(nil, fmt.Errorf("openai: no choices returned"))
 				return
 			}
-			llmResp := convertResponse(resp.Choices[0], &resp.Usage)
+			llmResp := convertResponse(resp.Choices[0], tokenUsageFromCompletion(resp.Usage, resp.JSON.Usage.Valid()))
 			llmResp.TurnComplete = true
 			yield(llmResp, nil)
 			return
@@ -282,7 +282,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 			chunk := s.Current()
 
 			// The last usage-bearing chunk may have no choices; capture usage first.
-			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+			if chunk.JSON.Usage.Valid() {
 				u := chunk.Usage
 				streamUsage = &u
 			}
@@ -378,11 +378,7 @@ func (c *ChatCompletion) callAPI(ctx context.Context, params goopenai.ChatComple
 
 		var usage *model.TokenUsage
 		if streamUsage != nil {
-			usage = &model.TokenUsage{
-				PromptTokens:     streamUsage.PromptTokens,
-				CompletionTokens: streamUsage.CompletionTokens,
-				TotalTokens:      streamUsage.TotalTokens,
-			}
+			usage = tokenUsageFromCompletion(*streamUsage, true)
 		}
 		yield(&model.LLMResponse{
 			Content:      msg,
@@ -597,7 +593,7 @@ func deepSeekReasoningEffort(effort ReasoningEffort) string {
 }
 
 // convertResponse maps the first OpenAI choice and usage to model.LLMResponse.
-func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.CompletionUsage) *model.LLMResponse {
+func convertResponse(choice goopenai.ChatCompletionChoice, usage *model.TokenUsage) *model.LLMResponse {
 	msg := model.Content{
 		Role:    model.RoleAssistant,
 		Content: choice.Message.Content,
@@ -629,12 +625,35 @@ func convertResponse(choice goopenai.ChatCompletionChoice, usage *goopenai.Compl
 	return &model.LLMResponse{
 		Content:      msg,
 		FinishReason: convertFinishReason(choice.FinishReason),
-		Usage: &model.TokenUsage{
-			PromptTokens:     usage.PromptTokens,
-			CompletionTokens: usage.CompletionTokens,
-			TotalTokens:      usage.TotalTokens,
-		},
+		Usage:        usage,
 	}
+}
+
+func tokenUsageFromCompletion(usage goopenai.CompletionUsage, valid bool) *model.TokenUsage {
+	if !valid {
+		return nil
+	}
+	details := model.TokenUsageDetails{
+		CachedPromptTokens:       usage.PromptTokensDetails.CachedTokens,
+		AudioPromptTokens:        usage.PromptTokensDetails.AudioTokens,
+		AudioCompletionTokens:    usage.CompletionTokensDetails.AudioTokens,
+		ReasoningTokens:          usage.CompletionTokensDetails.ReasoningTokens,
+		AcceptedPredictionTokens: usage.CompletionTokensDetails.AcceptedPredictionTokens,
+		RejectedPredictionTokens: usage.CompletionTokensDetails.RejectedPredictionTokens,
+	}
+	return &model.TokenUsage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		Details:          tokenUsageDetailsPtr(details),
+	}
+}
+
+func tokenUsageDetailsPtr(details model.TokenUsageDetails) *model.TokenUsageDetails {
+	if details.IsZero() {
+		return nil
+	}
+	return &details
 }
 
 func toolArgumentsString(args json.RawMessage) string {
