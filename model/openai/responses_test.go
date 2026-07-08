@@ -156,6 +156,28 @@ func TestConvertResponsesResponse_TextAndToolCalls(t *testing.T) {
 	assert.Equal(t, int64(7), got.Usage.TotalTokens)
 }
 
+func TestConvertResponsesResponse_MissingUsage(t *testing.T) {
+	var resp goresponses.Response
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "resp_1",
+		"status": "completed",
+		"output": [
+			{
+				"type": "message",
+				"id": "msg_1",
+				"role": "assistant",
+				"status": "completed",
+				"content": [
+					{"type": "output_text", "text": "pong", "annotations": []}
+				]
+			}
+		]
+	}`), &resp))
+
+	got := convertResponsesResponse(&resp)
+	assert.Nil(t, got.Usage)
+}
+
 func TestResponses_Generate_RequestShape(t *testing.T) {
 	var captured struct {
 		Model           string           `json:"model"`

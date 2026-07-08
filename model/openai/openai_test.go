@@ -96,6 +96,21 @@ func TestConvertFinishReason(t *testing.T) {
 	}
 }
 
+func TestTokenUsageFromCompletion_Presence(t *testing.T) {
+	missing := tokenUsageFromCompletion(goopenai.CompletionUsage{
+		PromptTokens:     3,
+		CompletionTokens: 4,
+		TotalTokens:      7,
+	}, false)
+	assert.Nil(t, missing)
+
+	present := tokenUsageFromCompletion(goopenai.CompletionUsage{}, true)
+	require.NotNil(t, present)
+	assert.Equal(t, int64(0), present.PromptTokens)
+	assert.Equal(t, int64(0), present.CompletionTokens)
+	assert.Equal(t, int64(0), present.TotalTokens)
+}
+
 func TestConvertMessage_System(t *testing.T) {
 	p, err := convertMessage(model.Content{Role: model.RoleSystem, Content: "you are helpful"})
 	require.NoError(t, err)
