@@ -176,6 +176,12 @@ type Agent interface {
 Agent 是无状态的。Runner 会从 session 加载 active events，追加新的 user event，
 再把完整 event history 传给 Agent。
 
+追加 user event 之前，Runner 会检查 active history 中的每个 assistant tool call
+是否都有对应的持久化 tool result。如果缺少结果，`Run` 会返回
+`runner.ErrToolExecutionUnknown`（具体信息在 `runner.ToolExecutionUnknownError` 中），
+保持 session 不变，并且不会调用 Agent。Runner 不会自动重试或伪造结果，因为外部
+副作用可能已经发生。
+
 ### `model.LLM`
 
 ```go

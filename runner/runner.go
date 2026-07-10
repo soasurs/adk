@@ -56,6 +56,10 @@ func New(a agent.Agent, s session.SessionService, opts ...Option) (*Runner, erro
 // The caller iterates the returned sequence and decides whether to continue the
 // conversation by calling Run again.
 //
+// If active history contains assistant tool calls without matching durable
+// results, Run yields ErrToolExecutionUnknown before persisting the user input
+// or invoking the agent.
+//
 // userInput must contain the user's input content (via Text or Parts).
 // Its Role is always set to RoleUser by the runner.
 func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Content) iter.Seq2[*model.Event, error] {
@@ -121,6 +125,11 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 		events := make([]model.Event, 0, len(persisted)+1)
 		for _, ev := range persisted {
 			events = append(events, ev.ToModel())
+		}
+		if err := findUnknownToolExecution(sessionID, events); err != nil {
+			runEnd.Err = err
+			yield(nil, err)
+			return
 		}
 
 		// Append and persist the incoming user event.

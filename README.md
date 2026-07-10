@@ -182,6 +182,13 @@ type Agent interface {
 Agents are stateless. The runner loads active events from the session, appends
 the new user event, and passes the full event history into `Run`.
 
+Before appending that user event, the runner checks whether every assistant
+tool call in active history has a matching durable tool result. If any result is
+missing, `Run` returns `runner.ErrToolExecutionUnknown` (with details in
+`runner.ToolExecutionUnknownError`), leaves the session unchanged, and does not
+invoke the agent. The runner does not automatically retry or synthesize a
+result because the external side effect may already have happened.
+
 ### `model.LLM`
 
 ```go
