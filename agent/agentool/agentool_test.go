@@ -138,6 +138,24 @@ func TestAgentTool_OrchestratorFlow(t *testing.T) {
 	assert.Equal(t, "2+2 equals 4.", msgs[2].Content)
 }
 
+func TestAgentTool_Run_InvalidArgumentsReturnModelVisibleFailure(t *testing.T) {
+	subLLM := &mockLLM{name: "sub-llm"}
+	subAgent := llmagent.New(llmagent.Config{Name: "worker", Model: subLLM})
+	wrapped, err := agentool.New(subAgent)
+	require.NoError(t, err)
+
+	result, runErr := wrapped.Run(t.Context(), tool.Call{
+		ID:        "call-1",
+		Name:      "worker",
+		Arguments: json.RawMessage(`{"task":`),
+	})
+
+	require.NoError(t, runErr)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "parse arguments")
+	assert.Zero(t, subLLM.callIdx)
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests (require OPENAI_API_KEY)
 // ---------------------------------------------------------------------------

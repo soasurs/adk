@@ -124,8 +124,8 @@ type ToolResult struct {
 	Content string
 	// StructuredContent is the raw JSON result returned by the tool.
 	StructuredContent json.RawMessage
-	// IsError reports that the tool result represents an execution failure that
-	// should be returned to the model as a tool response.
+	// IsError reports that the tool invocation completed with a handled failure
+	// whose content is safe to return to the model as a tool response.
 	IsError bool
 }
 

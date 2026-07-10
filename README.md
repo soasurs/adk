@@ -142,6 +142,11 @@ display and are not persisted by `Runner`. `TurnID` groups the user event and
 all agent events produced by one `Runner.Run` call; it is a correlation
 identifier, not an ordering key or an automatic resume checkpoint.
 
+`Runner` persists complete events as they are produced. If the agent returns an
+error or the caller stops consuming the sequence early, events created for that
+incomplete turn are removed so a partial tool-call protocol is not replayed on
+the next run.
+
 ```go
 type Event struct {
     ID           int64
@@ -220,6 +225,9 @@ weatherTool, err := tool.NewFunc(tool.Definition{
     Name:        "weather",
     Description: "Get a short weather forecast for a city.",
 }, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
+    if input.City == "" {
+        return weatherOutput{}, tool.NewFuncError("city is required")
+    }
     return weatherOutput{
         City:     input.City,
         Forecast: "clear",
@@ -237,9 +245,17 @@ agent := llmagent.New(llmagent.Config{
 })
 ```
 
-Use `tool.Result{IsError: true}` for model-visible tool failures. Return a Go
-`error` for SDK, transport, or framework failures that the agent runtime should
-mark as execution failures.
+Use `tool.Result{IsError: true}` for handled failures whose content is safe to
+send to the model. A custom `Tool` returning a non-nil Go `error` reports that
+the invocation did not produce a valid result: `LlmAgent` ignores the returned
+`Result`, cancels sibling tool calls, and terminates the current run without
+sending the error text to the model.
+
+For `tool.NewFunc`, ordinary handler errors follow that terminal path. Return
+`tool.NewFuncError(...)` only for an expected, model-visible failure. Tool and
+SDK retries belong inside the tool implementation or an explicit wrapper;
+`LlmAgent` does not automatically retry tool calls because they may have side
+effects.
 
 ### Generation config
 

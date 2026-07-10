@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"reflect"
@@ -29,10 +30,12 @@ type Config struct {
 	AfterLLMCall func(ctx context.Context, call *LLMCall, result *LLMCallResult) error
 	// BeforeToolCall runs immediately before each tool invocation.
 	// Return a non-nil *ToolCallResult to skip the actual tool execution and
-	// use the returned result instead. Return an error to abort execution.
+	// use the returned result instead. A returned ToolCallResult with Err set, or
+	// a non-nil error return, aborts execution.
 	BeforeToolCall func(ctx context.Context, call *ToolCall) (*ToolCallResult, error)
-	// AfterToolCall runs after each tool invocation completes, including tool
-	// lookup failures and tool execution errors.
+	// AfterToolCall runs after each tool invocation completes, including handled
+	// lookup failures and terminal tool execution errors. Returning an error
+	// aborts execution.
 	AfterToolCall func(ctx context.Context, call *ToolCall, result *ToolCallResult) error
 	// Instruction is prepended as a system message on every Run call.
 	Instruction string
@@ -47,7 +50,8 @@ type Config struct {
 	// tool invocation gets a fresh context derived from the call context with
 	// this deadline. The shorter of ToolTimeout and any deadline already
 	// present in the incoming context wins. Zero means no per-agent timeout
-	// (tools may still be bounded by the call context or tool.WithTimeout).
+	// (tools may still be bounded by the call context or tool.WithTimeout). A
+	// resulting context error is terminal under the tool failure contract.
 	ToolTimeout time.Duration
 	// Stream enables streaming responses. When true, the agent yields partial
 	// Events (Event.Partial=true) with incremental text as the LLM generates,
@@ -360,13 +364,11 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			wg.Wait()
 			cancelTools()
 
-			for _, err := range toolErrs {
-				if err != nil {
-					iterationEnd.Err = err
-					iterationSpan.End(iterationCtx, iterationEnd)
-					yield(nil, err)
-					return
-				}
+			if err := firstToolCallError(toolErrs); err != nil {
+				iterationEnd.Err = err
+				iterationSpan.End(iterationCtx, iterationEnd)
+				yield(nil, err)
+				return
 			}
 
 			for _, toolEvent := range toolEvents {
@@ -443,9 +445,17 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 	if skipResult != nil {
 		toolEnd.Attributes = map[string]any{"skipped": true}
 		toolEnd.Duration = time.Since(startedAt)
+		if skipResult.Err != nil {
+			executionErr := fmt.Errorf("llmagent: skip tool %q: %w", tc.Name, skipResult.Err)
+			callResult := &ToolCallResult{
+				Err:      executionErr,
+				Duration: toolEnd.Duration,
+			}
+			return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
+		}
 		toolEnd.IsError = skipResult.Result.IsError
-		if err := a.afterToolCall(ctx, call, skipResult); err != nil {
-			return model.Event{}, err
+		if hookErr := a.afterToolCall(ctx, call, skipResult); hookErr != nil {
+			return model.Event{}, joinAfterToolCallError(tc.Name, nil, hookErr)
 		}
 		return skipResult.Event, nil
 	}
@@ -463,13 +473,11 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		if err := a.afterToolCall(ctx, call, &ToolCallResult{
 			Event:    event,
 			Result:   result,
-			Err:      toolErr,
 			Duration: time.Since(startedAt),
 		}); err != nil {
-			return model.Event{}, err
+			return model.Event{}, joinAfterToolCallError(tc.Name, nil, err)
 		}
 		toolEnd.Duration = time.Since(startedAt)
-		toolEnd.Err = toolErr
 		toolEnd.IsError = true
 		return event, nil
 	}
@@ -480,25 +488,55 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 		Arguments: toolCallArguments(tc.Arguments),
 	})
 	if toolErr != nil {
-		result.Content = fmt.Sprintf("error: %s", toolErr.Error())
-		result.IsError = true
+		toolEnd.Duration = time.Since(startedAt)
+		executionErr := fmt.Errorf("llmagent: run tool %q: %w", tc.Name, toolErr)
+		callResult := &ToolCallResult{
+			Err:      executionErr,
+			Duration: toolEnd.Duration,
+		}
+		return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
 	}
 	event = model.Event{
 		Author:  t.Definition().Name,
 		Content: toolResultContent(tc, result),
 	}
-	if err := a.afterToolCall(ctx, call, &ToolCallResult{
+	if hookErr := a.afterToolCall(ctx, call, &ToolCallResult{
 		Event:    event,
 		Result:   result,
-		Err:      toolErr,
 		Duration: time.Since(startedAt),
-	}); err != nil {
-		return model.Event{}, err
+	}); hookErr != nil {
+		return model.Event{}, joinAfterToolCallError(tc.Name, nil, hookErr)
 	}
 	toolEnd.Duration = time.Since(startedAt)
-	toolEnd.Err = toolErr
 	toolEnd.IsError = result.IsError
 	return event, nil
+}
+
+func firstToolCallError(errs []error) error {
+	var firstErr error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if !errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+	return firstErr
+}
+
+func joinAfterToolCallError(toolName string, executionErr, hookErr error) error {
+	if hookErr == nil {
+		return executionErr
+	}
+	hookErr = fmt.Errorf("llmagent: after tool %q: %w", toolName, hookErr)
+	if executionErr == nil {
+		return hookErr
+	}
+	return errors.Join(executionErr, hookErr)
 }
 
 func toolCallArguments(args []byte) []byte {

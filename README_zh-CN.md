@@ -137,6 +137,10 @@ content := model.Content{
 `Runner.Run` 调用中的 user event 和所有 agent events 分到同一组；它是关联 ID，
 不是排序键，也不是自动恢复检查点。
 
+`Runner` 会在完整事件产生时持久化它们。如果 agent 返回错误，或者调用方提前停止
+消费 sequence，当前未完成 turn 已写入的事件会被移除，避免下一次运行重放不完整的
+tool-call 协议。
+
 ```go
 type Event struct {
     ID           int64
@@ -213,6 +217,9 @@ weatherTool, err := tool.NewFunc(tool.Definition{
     Name:        "weather",
     Description: "Get a short weather forecast for a city.",
 }, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
+    if input.City == "" {
+        return weatherOutput{}, tool.NewFuncError("city is required")
+    }
     return weatherOutput{
         City:     input.City,
         Forecast: "clear",
@@ -230,8 +237,14 @@ agent := llmagent.New(llmagent.Config{
 })
 ```
 
-面向模型可见的工具失败使用 `tool.Result{IsError: true}`。SDK、transport 或框架
-层面的失败返回 Go `error`，由 agent runtime 标记为执行失败。
+对于内容可安全发送给模型的已处理失败，使用 `tool.Result{IsError: true}`。自定义
+`Tool` 返回非 nil Go `error` 表示本次调用没有产生有效结果：`LlmAgent` 会忽略同时
+返回的 `Result`、取消并行的其他工具调用并终止当前 Run，不会把原始错误文本发送给
+模型。
+
+对于 `tool.NewFunc`，普通 handler error 同样会终止 Run；只有预期中的模型可见失败
+才返回 `tool.NewFuncError(...)`。工具或 SDK 的重试应在工具实现内部或显式 wrapper
+中完成；因为工具可能带有副作用，`LlmAgent` 不会自动重试工具调用。
 
 ### 生成配置
 
