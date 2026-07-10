@@ -124,3 +124,20 @@ func TestToolWrapper_Run_NotConnected(t *testing.T) {
 	var target error = ErrNotConnected
 	assert.True(t, errors.Is(err, target))
 }
+
+func TestToolWrapper_Run_InvalidArgumentsReturnModelVisibleFailure(t *testing.T) {
+	tw := &toolWrapper{
+		session: new(sdkmcp.ClientSession),
+		def:     tool.Definition{Name: "search"},
+	}
+
+	result, err := tw.Run(t.Context(), tool.Call{
+		ID:        "call-1",
+		Name:      "search",
+		Arguments: json.RawMessage(`{"query":`),
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Content, "parse arguments")
+}

@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"iter"
 	"time"
 
@@ -17,7 +19,9 @@ import (
 
 // Runner coordinates a stateless Agent with a SessionService. It loads
 // conversation history from the session, forwards it to the agent, and
-// persists every complete yielded event back to the session.
+// persists complete yielded events back to the session. If a run fails or the
+// caller stops consuming it early, Runner removes the events created for that
+// incomplete turn so they are not replayed as conversation history.
 type Runner struct {
 	agent      agent.Agent
 	session    session.SessionService
@@ -47,8 +51,10 @@ func New(a agent.Agent, s session.SessionService, opts ...Option) (*Runner, erro
 // input, invokes the agent, and yields each produced Event to the caller.
 // Complete events (Event.Partial=false) are persisted to the session; partial
 // streaming fragments are forwarded to the caller for real-time display but
-// are not persisted. The caller iterates the returned sequence and decides
-// whether to continue the conversation by calling Run again.
+// are not persisted. If the agent returns an error or the caller stops
+// iteration early, events already persisted for the current turn are removed.
+// The caller iterates the returned sequence and decides whether to continue the
+// conversation by calling Run again.
 //
 // userInput must contain the user's input content (via Text or Parts).
 // Its Role is always set to RoleUser by the runner.
@@ -78,6 +84,18 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 		}
 		if unlock != nil {
 			defer unlock()
+		}
+		turnEventIDs := make([]int64, 0)
+		rollback := func(cause error) error {
+			rollbackErr := rollbackTurnEvents(ctx, sess, turnEventIDs)
+			turnEventIDs = nil
+			if cause == nil {
+				return rollbackErr
+			}
+			if rollbackErr == nil {
+				return cause
+			}
+			return errors.Join(cause, rollbackErr)
 		}
 		info.AppID = sess.GetAppID()
 		info.UserID = sess.GetUserID()
@@ -114,10 +132,12 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			Content: userContent,
 		})
 		if err != nil {
+			err = rollback(err)
 			runEnd.Err = err
 			yield(nil, err)
 			return
 		}
+		turnEventIDs = append(turnEventIDs, userEvent.ID)
 		events = append(events, userEvent)
 
 		// Run the agent, forwarding every event to the caller.
@@ -136,6 +156,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 
 		for event, err := range r.agent.Run(agentCtx, events) {
 			if err != nil {
+				err = rollback(err)
 				agentEnd.Err = err
 				runEnd.Err = err
 				yield(nil, err)
@@ -148,16 +169,22 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			if !event.Partial {
 				persistedEvent, err := r.persistEvent(ctx, sess, *event)
 				if err != nil {
+					err = rollback(err)
 					agentEnd.Err = err
 					runEnd.Err = err
 					yield(nil, err)
 					return
 				}
+				turnEventIDs = append(turnEventIDs, persistedEvent.ID)
 				event = &persistedEvent
 			}
 			if !yield(event, nil) {
 				agentEnd.StoppedEarly = true
 				runEnd.StoppedEarly = true
+				if err := rollback(nil); err != nil {
+					agentEnd.Err = err
+					runEnd.Err = err
+				}
 				return
 			}
 		}
@@ -227,6 +254,17 @@ func (r *Runner) getSessionWithScopedLock(
 		}
 		return lockedSess, unlock, nil
 	}
+}
+
+func rollbackTurnEvents(ctx context.Context, sess session.Session, eventIDs []int64) error {
+	ctx = context.WithoutCancel(ctx)
+	var rollbackErr error
+	for i := len(eventIDs) - 1; i >= 0; i-- {
+		if err := sess.DeleteEvent(ctx, eventIDs[i]); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("runner: rollback event %d: %w", eventIDs[i], err))
+		}
+	}
+	return rollbackErr
 }
 
 func runLockKey(sess session.Session) session.RunLockKey {

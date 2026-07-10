@@ -64,7 +64,10 @@ func (t *agentTool) Definition() tool.Definition { return t.def }
 func (t *agentTool) Run(ctx context.Context, call tool.Call) (tool.Result, error) {
 	var req taskRequest
 	if err := json.Unmarshal(call.Arguments, &req); err != nil {
-		return tool.Result{}, fmt.Errorf("agentool %q: parse arguments: %w", t.a.Name(), err)
+		return tool.Result{
+			Content: fmt.Sprintf("agentool %q: parse arguments: %s", t.a.Name(), err),
+			IsError: true,
+		}, nil
 	}
 
 	events := []model.Event{

@@ -103,7 +103,10 @@ func (t *toolWrapper) Run(ctx context.Context, call tool.Call) (tool.Result, err
 	}
 	var args map[string]any
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		return tool.Result{}, fmt.Errorf("mcp tool arguments unmarshal: %w", err)
+		return tool.Result{
+			Content: fmt.Sprintf("mcp tool %q: parse arguments: %s", t.def.Name, err),
+			IsError: true,
+		}, nil
 	}
 	result, err := t.session.CallTool(ctx, &sdkmcp.CallToolParams{
 		Name:      t.def.Name,

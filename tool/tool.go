@@ -34,8 +34,8 @@ type Result struct {
 	Content string
 	// StructuredContent is the raw JSON result returned by the tool.
 	StructuredContent json.RawMessage
-	// IsError reports that the tool result represents an execution failure that
-	// should be sent back to the model as a tool response.
+	// IsError reports that the invocation completed with a handled failure whose
+	// content is safe to send back to the model as a tool response.
 	IsError bool
 }
 
@@ -43,6 +43,9 @@ type Result struct {
 type Tool interface {
 	// Definition returns the tool's metadata used by the LLM to understand and call the tool.
 	Definition() Definition
-	// Run executes the tool call and returns a provider-neutral result.
+	// Run executes the tool call and returns a provider-neutral result. A Result
+	// with IsError set is a handled failure that may be sent to the model. A
+	// non-nil error means the invocation did not produce a valid result; callers
+	// must ignore the Result and terminate the current execution.
 	Run(ctx context.Context, call Call) (Result, error)
 }

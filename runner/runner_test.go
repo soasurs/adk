@@ -365,6 +365,47 @@ func TestRunner_Run_AgentError(t *testing.T) {
 	msgs, err := collectRun(t, r, sessionID, model.Content{Content: "hello"})
 	assert.ErrorIs(t, err, agentErr)
 	assert.Empty(t, msgs)
+
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	stored, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, stored, "failed turn must not remain in active history")
+}
+
+func TestRunner_Run_AgentErrorRollsBackYieldedTurnEvents(t *testing.T) {
+	agentErr := errors.New("tool execution failed")
+	a := &mockAgent{
+		name:        "event-then-error-agent",
+		description: "yields a tool call and then fails",
+		runFunc: func(_ context.Context, _ []model.Event) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				if !yield(&model.Event{
+					Author: "event-then-error-agent",
+					Content: model.Content{
+						Role:      model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "lookup", Arguments: json.RawMessage(`{}`)}},
+					},
+				}, nil) {
+					return
+				}
+				yield(nil, agentErr)
+			}
+		},
+	}
+	r, sessionID := newRunnerWithSession(t, a)
+
+	msgs, err := collectRun(t, r, sessionID, model.Content{Content: "look up record"})
+
+	require.ErrorIs(t, err, agentErr)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
+
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	stored, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, stored, "assistant tool call without a result must be rolled back")
 }
 
 // TestRunner_Run_EarlyBreak verifies that a consumer breaking out of the
@@ -390,6 +431,12 @@ func TestRunner_Run_EarlyBreak(t *testing.T) {
 
 	require.Len(t, collected, 1)
 	assert.Equal(t, "first", collected[0].Content)
+
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	stored, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, stored, "incomplete turn must not remain in active history")
 }
 
 // TestRunner_Run_NoAgentMessages verifies that an agent that yields nothing

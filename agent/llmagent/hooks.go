@@ -55,11 +55,14 @@ type ToolCall struct {
 
 // ToolCallResult captures the outcome of a single tool invocation.
 type ToolCallResult struct {
-	// Event is the tool event that will be appended to the conversation.
+	// Event is the tool event that will be appended to the conversation. It is
+	// zero when Err is non-nil.
 	Event model.Event
-	// Result is the raw successful tool result.
+	// Result is the completed tool result, including handled failures marked with
+	// IsError. It is zero when Err is non-nil.
 	Result tool.Result
-	// Err is the tool lookup or execution error, if any.
+	// Err is the terminal tool execution error, if any. A non-nil Err aborts the
+	// current agent Run and is never appended to the conversation.
 	Err error
 	// Duration is the wall-clock time spent in the tool invocation.
 	Duration time.Duration
