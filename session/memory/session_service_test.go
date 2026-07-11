@@ -102,7 +102,7 @@ func TestMemorySessionService_ListSessions(t *testing.T) {
 		{
 			name: "defaults to creation time descending with stable session id order",
 			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1"},
-			want: []string{"session-c", "session-b", "session-a"},
+			want: []string{"session-c", "session-a", "session-b"},
 		},
 		{
 			name: "sorts by session id ascending",
@@ -113,11 +113,29 @@ func TestMemorySessionService_ListSessions(t *testing.T) {
 			want: []string{"session-a", "session-b", "session-c"},
 		},
 		{
+			name: "sorts by created_at ascending explicitly",
+			req: adksession.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1",
+				SortBy: adksession.SessionSortByCreatedAt, SortOrder: adksession.SortAscending,
+			},
+			want: []string{"session-a", "session-b", "session-c"},
+		},
+		{
 			name: "applies limit and offset",
 			req: adksession.ListSessionsRequest{
 				AppID: "chat", UserID: "user-1", Limit: 1, Offset: 1,
 			},
-			want: []string{"session-b"},
+			want: []string{"session-a"},
+		},
+		{
+			name: "returns empty slice when no sessions match",
+			req:  adksession.ListSessionsRequest{AppID: "nonexistent", UserID: "user-1"},
+			want: []string{},
+		},
+		{
+			name: "returns empty slice when offset exceeds count",
+			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1", Offset: 10},
+			want: []string{},
 		},
 	}
 

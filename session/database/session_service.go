@@ -175,7 +175,7 @@ func (ss *databaseSessionService) ListSessions(ctx context.Context, req session.
 		}
 	} else {
 		if req.SortOrder == session.SortDescending {
-			sb.OrderByDesc("created_at").OrderByDesc("session_id")
+			sb.OrderByDesc("created_at").OrderByAsc("session_id")
 		} else {
 			sb.OrderByAsc("created_at").OrderByAsc("session_id")
 		}

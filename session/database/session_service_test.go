@@ -127,7 +127,7 @@ func TestSQLite_DatabaseSessionService_ListSessions(t *testing.T) {
 		{
 			name: "filters ownership and deleted sessions",
 			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1"},
-			want: []string{"session-b", "session-a"},
+			want: []string{"session-a", "session-b"},
 		},
 		{
 			name: "sorts by session id descending with pagination",
@@ -136,6 +136,24 @@ func TestSQLite_DatabaseSessionService_ListSessions(t *testing.T) {
 				SortBy: adksession.SessionSortBySessionID, SortOrder: adksession.SortDescending,
 			},
 			want: []string{"session-a"},
+		},
+		{
+			name: "sorts by created_at ascending explicitly",
+			req: adksession.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1",
+				SortBy: adksession.SessionSortByCreatedAt, SortOrder: adksession.SortAscending,
+			},
+			want: []string{"session-a", "session-b"},
+		},
+		{
+			name: "returns empty slice when no sessions match",
+			req:  adksession.ListSessionsRequest{AppID: "nonexistent", UserID: "user-1"},
+			want: []string{},
+		},
+		{
+			name: "returns empty slice when offset exceeds count",
+			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1", Offset: 10},
+			want: []string{},
 		},
 	}
 

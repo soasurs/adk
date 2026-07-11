@@ -252,26 +252,81 @@ func TestPostgres_DatabaseSessionService_ListSessions(t *testing.T) {
 	f := newPostgresFixture(t)
 	ctx := t.Context()
 
-	for _, req := range []session.CreateSessionRequest{
-		{SessionID: "session-b", AppID: "chat", UserID: "user-1"},
-		{SessionID: "session-a", AppID: "chat", UserID: "user-1"},
-		{SessionID: "other-user", AppID: "chat", UserID: "user-2"},
-	} {
-		_, err := f.service.CreateSession(ctx, req)
+	create := func(id, appID, userID string, createdAt int64) {
+		t.Helper()
+		_, err := f.service.CreateSession(ctx, session.CreateSessionRequest{
+			SessionID: id,
+			AppID:     appID,
+			UserID:    userID,
+		})
+		require.NoError(t, err)
+		_, err = f.db.ExecContext(ctx, `
+			UPDATE `+f.prefix+`sessions
+			SET created_at = $1
+			WHERE session_id = $2
+		`, createdAt, id)
 		require.NoError(t, err)
 	}
 
-	sessions, err := f.service.ListSessions(ctx, session.ListSessionsRequest{
-		AppID:     "chat",
-		UserID:    "user-1",
-		Limit:     1,
-		Offset:    1,
-		SortBy:    session.SessionSortBySessionID,
-		SortOrder: session.SortAscending,
-	})
-	require.NoError(t, err)
-	require.Len(t, sessions, 1)
-	assert.Equal(t, "session-b", sessions[0].GetSessionID())
+	create("session-b", "chat", "user-1", 100)
+	create("session-a", "chat", "user-1", 100)
+	create("session-c", "chat", "user-1", 300)
+	create("other-user", "chat", "user-2", 500)
+	create("other-app", "admin", "user-1", 600)
+	require.NoError(t, f.service.DeleteSession(ctx, "session-c"))
+
+	tests := []struct {
+		name string
+		req  session.ListSessionsRequest
+		want []string
+	}{
+		{
+			name: "filters ownership and deleted sessions in default order",
+			req:  session.ListSessionsRequest{AppID: "chat", UserID: "user-1"},
+			want: []string{"session-a", "session-b"},
+		},
+		{
+			name: "sorts by session id descending with pagination",
+			req: session.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1", Limit: 1, Offset: 1,
+				SortBy: session.SessionSortBySessionID, SortOrder: session.SortDescending,
+			},
+			want: []string{"session-a"},
+		},
+		{
+			name: "sorts by created_at ascending explicitly",
+			req: session.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1",
+				SortBy: session.SessionSortByCreatedAt, SortOrder: session.SortAscending,
+			},
+			want: []string{"session-a", "session-b"},
+		},
+		{
+			name: "returns empty slice when no sessions match",
+			req:  session.ListSessionsRequest{AppID: "nonexistent", UserID: "user-1"},
+			want: []string{},
+		},
+		{
+			name: "returns empty slice when offset exceeds count",
+			req:  session.ListSessionsRequest{AppID: "chat", UserID: "user-1", Offset: 10},
+			want: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions, err := f.service.ListSessions(ctx, tc.req)
+			require.NoError(t, err)
+			ids := make([]string, len(sessions))
+			for i, sess := range sessions {
+				ids[i] = sess.GetSessionID()
+			}
+			assert.Equal(t, tc.want, ids)
+			for _, sess := range sessions {
+				assert.Positive(t, sess.GetCreatedAt())
+			}
+		})
+	}
 }
 
 func TestPostgres_DatabaseSessionService_DeleteSession(t *testing.T) {

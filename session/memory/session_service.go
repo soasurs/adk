@@ -82,6 +82,7 @@ func (ss *memorySessionService) ListSessions(ctx context.Context, req session.Li
 		}
 		if n == 0 {
 			n = cmp.Compare(a.GetSessionID(), b.GetSessionID())
+			return n
 		}
 		if req.SortOrder == session.SortDescending {
 			return -n
