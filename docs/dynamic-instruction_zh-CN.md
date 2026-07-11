@@ -47,7 +47,7 @@ LLM。
 |--------------------------|--------------------------------------------------------------|
 | `Config.Instruction`     | 指令在 agent 创建时即可确定。                                  |
 | `InstructionProvider`    | 指令需要运行时上下文，但只需修改 system message。              |
-| `BeforeLLMCall` hook     | 需要修改整个请求（tools、model、generation config），或跳过 LLM 调用。 |
+| `BeforeLLMCalls` hooks   | 需要修改整个请求（tools、model、generation config），或跳过 LLM 调用。 |
 
 ## Prompt cache 行为
 

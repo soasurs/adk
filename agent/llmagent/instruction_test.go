@@ -248,10 +248,10 @@ func TestInstructionProvider_SeesStateAfterToolHooksWithoutStaleInstruction(t *t
 			providerMu.Unlock()
 			return fmt.Sprintf("state-%d", state.Load()), nil
 		},
-		AfterToolCall: func(context.Context, *ToolCall, *ToolCallResult) error {
+		AfterToolCalls: []AfterToolCall{func(context.Context, *ToolCall, *ToolCallResult) error {
 			state.Store(1)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	_, err := runInstructionAgent(t, a, []model.Content{{Role: model.RoleUser, Content: "update"}})
@@ -311,22 +311,22 @@ func TestInstructionProvider_OrderingWaitsForParallelToolsAndHooks(t *testing.T)
 			}
 			return "dynamic", nil
 		},
-		BeforeLLMCall: func(_ context.Context, call *LLMCall) (*model.LLMResponse, error) {
+		BeforeLLMCalls: []BeforeLLMCall{func(_ context.Context, call *LLMCall) (*model.LLMResponse, error) {
 			appendOrder(fmt.Sprintf("before-llm-%d", call.Iteration))
 			return nil, nil
-		},
-		AfterLLMCall: func(_ context.Context, call *LLMCall, _ *LLMCallResult) error {
+		}},
+		AfterLLMCalls: []AfterLLMCall{func(_ context.Context, call *LLMCall, _ *LLMCallResult) error {
 			appendOrder(fmt.Sprintf("after-llm-%d", call.Iteration))
 			return nil
-		},
-		BeforeToolCall: func(_ context.Context, call *ToolCall) (*ToolCallResult, error) {
+		}},
+		BeforeToolCalls: []BeforeToolCall{func(_ context.Context, call *ToolCall) (*ToolCallResult, error) {
 			appendOrder(fmt.Sprintf("before-tool-%d", call.ToolIndex))
 			return nil, nil
-		},
-		AfterToolCall: func(_ context.Context, call *ToolCall, _ *ToolCallResult) error {
+		}},
+		AfterToolCalls: []AfterToolCall{func(_ context.Context, call *ToolCall, _ *ToolCallResult) error {
 			appendOrder(fmt.Sprintf("after-tool-%d", call.ToolIndex))
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	events, err := runInstructionAgent(t, a, []model.Content{{Role: model.RoleUser, Content: "run"}})
@@ -383,10 +383,10 @@ func TestInstructionProvider_ErrorWrapsAndStopsBeforeHookAndModel(t *testing.T) 
 		InstructionProvider: func(context.Context, InstructionInput) (string, error) {
 			return "", providerErr
 		},
-		BeforeLLMCall: func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+		BeforeLLMCalls: []BeforeLLMCall{func(context.Context, *LLMCall) (*model.LLMResponse, error) {
 			beforeCalls.Add(1)
 			return nil, nil
-		},
+		}},
 	}).(*LlmAgent)
 	ctx := adktrace.ContextWithTracer(t.Context(), tracer)
 
@@ -414,7 +414,7 @@ func TestInstructionProvider_EarlyStopAndSkipDoNotStartAnotherIteration(t *testi
 	tests := []struct {
 		name        string
 		responses   [][]*model.LLMResponse
-		before      func(context.Context, *LLMCall) (*model.LLMResponse, error)
+		before      BeforeLLMCall
 		stopOnRole  model.Role
 		stopPartial bool
 	}{
@@ -449,15 +449,18 @@ func TestInstructionProvider_EarlyStopAndSkipDoNotStartAnotherIteration(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			var providerCalls atomic.Int64
 			llm := &instructionScriptLLM{name: "script", calls: tt.responses}
-			a := New(Config{
-				Name:          "agent",
-				Model:         llm,
-				BeforeLLMCall: tt.before,
+			config := Config{
+				Name:  "agent",
+				Model: llm,
 				InstructionProvider: func(context.Context, InstructionInput) (string, error) {
 					providerCalls.Add(1)
 					return "dynamic", nil
 				},
-			}).(*LlmAgent)
+			}
+			if tt.before != nil {
+				config.BeforeLLMCalls = []BeforeLLMCall{tt.before}
+			}
+			a := New(config).(*LlmAgent)
 
 			for event, err := range a.Run(t.Context(), model.EventsFromContents([]model.Content{{Role: model.RoleUser, Content: "go"}})) {
 				require.NoError(t, err)
@@ -511,7 +514,7 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 			}
 			return "dynamic", nil
 		},
-		BeforeLLMCall: func(_ context.Context, call *LLMCall) (*model.LLMResponse, error) {
+		BeforeLLMCalls: []BeforeLLMCall{func(_ context.Context, call *LLMCall) (*model.LLMResponse, error) {
 			originalRequest := call.Request
 			require.Equal(t, "original part", originalRequest.Contents[1].Parts[0].Text)
 			require.Len(t, originalRequest.Tools, 1)
@@ -524,7 +527,7 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 			originalRequest.Model = fmt.Sprintf("iteration-%d", call.Iteration)
 			call.Request = &model.LLMRequest{Model: "unsupported replacement"}
 			return nil, nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	_, err := runInstructionAgent(t, a, []model.Content{original})
@@ -600,9 +603,9 @@ func TestInstructionProvider_ToolFailureControlsNextInvocation(t *testing.T) {
 					providerCalls.Add(1)
 					return "dynamic", nil
 				},
-				AfterToolCall: func(context.Context, *ToolCall, *ToolCallResult) error {
+				AfterToolCalls: []AfterToolCall{func(context.Context, *ToolCall, *ToolCallResult) error {
 					return tc.afterError
-				},
+				}},
 			}).(*LlmAgent)
 
 			_, err := runInstructionAgent(t, a, []model.Content{{Role: model.RoleUser, Content: "go"}})

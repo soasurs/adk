@@ -22,21 +22,22 @@ type Config struct {
 	Description string
 	Model       model.LLM
 	Tools       []tool.Tool
-	// BeforeLLMCall runs immediately before each GenerateContent call.
-	// Return a non-nil *model.LLMResponse to skip the actual LLM call and use
-	// the returned response instead. Return an error to abort execution.
-	BeforeLLMCall func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error)
-	// AfterLLMCall runs after each GenerateContent call completes or fails.
-	AfterLLMCall func(ctx context.Context, call *LLMCall, result *LLMCallResult) error
-	// BeforeToolCall runs immediately before each tool invocation.
-	// Return a non-nil *ToolCallResult to skip the actual tool execution and
-	// use the returned result instead. A returned ToolCallResult with Err set, or
-	// a non-nil error return, aborts execution.
-	BeforeToolCall func(ctx context.Context, call *ToolCall) (*ToolCallResult, error)
-	// AfterToolCall runs after each tool invocation completes, including handled
-	// lookup failures and terminal tool execution errors. Returning an error
-	// aborts execution.
-	AfterToolCall func(ctx context.Context, call *ToolCall, result *ToolCallResult) error
+	// BeforeLLMCalls run in order immediately before each GenerateContent call.
+	// The first non-nil response skips the remaining hooks and the actual LLM
+	// call. Returning an error aborts execution.
+	BeforeLLMCalls []BeforeLLMCall
+	// AfterLLMCalls run in order after each GenerateContent call completes or
+	// fails. All hooks run and their errors are joined.
+	AfterLLMCalls []AfterLLMCall
+	// BeforeToolCalls run in order immediately before each tool invocation. The
+	// first non-nil result skips the remaining hooks and the actual tool call. A
+	// returned ToolCallResult with Err set, or a non-nil error return, aborts
+	// execution.
+	BeforeToolCalls []BeforeToolCall
+	// AfterToolCalls run in order after each tool invocation completes, including
+	// handled lookup failures and terminal tool execution errors. All hooks run
+	// and their errors are joined.
+	AfterToolCalls []AfterToolCall
 	// Instruction is included in the leading system message for every LLM call.
 	Instruction string
 	// InstructionProvider builds an ephemeral instruction before each LLM call.
@@ -90,6 +91,26 @@ func NewWithError(config Config) (agent.Agent, error) {
 	if config.ToolTimeout < 0 {
 		return nil, &ConfigError{Field: "tool_timeout", Reason: "must not be negative"}
 	}
+	for i, hook := range config.BeforeLLMCalls {
+		if hook == nil {
+			return nil, &ConfigError{Field: fmt.Sprintf("before_llm_calls[%d]", i), Reason: "must not be nil"}
+		}
+	}
+	for i, hook := range config.AfterLLMCalls {
+		if hook == nil {
+			return nil, &ConfigError{Field: fmt.Sprintf("after_llm_calls[%d]", i), Reason: "must not be nil"}
+		}
+	}
+	for i, hook := range config.BeforeToolCalls {
+		if hook == nil {
+			return nil, &ConfigError{Field: fmt.Sprintf("before_tool_calls[%d]", i), Reason: "must not be nil"}
+		}
+	}
+	for i, hook := range config.AfterToolCalls {
+		if hook == nil {
+			return nil, &ConfigError{Field: fmt.Sprintf("after_tool_calls[%d]", i), Reason: "must not be nil"}
+		}
+	}
 
 	tools := make(map[string]tool.Tool, len(config.Tools))
 	for i, t := range config.Tools {
@@ -115,6 +136,10 @@ func NewWithError(config Config) (agent.Agent, error) {
 		tools[name] = t
 	}
 	config.Tools = append([]tool.Tool(nil), config.Tools...)
+	config.BeforeLLMCalls = append([]BeforeLLMCall(nil), config.BeforeLLMCalls...)
+	config.AfterLLMCalls = append([]AfterLLMCall(nil), config.AfterLLMCalls...)
+	config.BeforeToolCalls = append([]BeforeToolCall(nil), config.BeforeToolCalls...)
+	config.AfterToolCalls = append([]AfterToolCall(nil), config.AfterToolCalls...)
 	return &LlmAgent{
 		config: &config,
 		tools:  tools,
@@ -294,13 +319,15 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				iterationEnd.FinishReason = completeResp.FinishReason
 				addUsageToTraceEvent(&iterationEnd, completeResp.Usage)
 			}
-			if err := a.afterLLMCall(llmCtx, call, &LLMCallResult{
+			afterLLMErr := a.afterLLMCall(llmCtx, call, &LLMCallResult{
 				Response:         completeResp,
 				Err:              llmErr,
 				PartialResponses: partialResponses,
 				Duration:         duration,
 				StoppedEarly:     stoppedEarly,
-			}); err != nil {
+			})
+			if afterLLMErr != nil {
+				err := errors.Join(llmErr, afterLLMErr)
 				llmEnd.Err = err
 				llmSpan.End(llmCtx, llmEnd)
 				iterationEnd.Err = err
@@ -586,29 +613,41 @@ func toolResultContent(tc model.ToolCall, result tool.Result) model.Content {
 }
 
 func (a *LlmAgent) beforeLLMCall(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
-	if a.config.BeforeLLMCall == nil {
-		return nil, nil
+	for _, hook := range a.config.BeforeLLMCalls {
+		response, err := hook(ctx, call)
+		if err != nil || response != nil {
+			return response, err
+		}
 	}
-	return a.config.BeforeLLMCall(ctx, call)
+	return nil, nil
 }
 
 func (a *LlmAgent) afterLLMCall(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
-	if a.config.AfterLLMCall == nil {
-		return nil
+	var errs []error
+	for _, hook := range a.config.AfterLLMCalls {
+		if err := hook(ctx, call, result); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return a.config.AfterLLMCall(ctx, call, result)
+	return errors.Join(errs...)
 }
 
 func (a *LlmAgent) beforeToolCall(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
-	if a.config.BeforeToolCall == nil {
-		return nil, nil
+	for _, hook := range a.config.BeforeToolCalls {
+		result, err := hook(ctx, call)
+		if err != nil || result != nil {
+			return result, err
+		}
 	}
-	return a.config.BeforeToolCall(ctx, call)
+	return nil, nil
 }
 
 func (a *LlmAgent) afterToolCall(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
-	if a.config.AfterToolCall == nil {
-		return nil
+	var errs []error
+	for _, hook := range a.config.AfterToolCalls {
+		if err := hook(ctx, call, result); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return a.config.AfterToolCall(ctx, call, result)
+	return errors.Join(errs...)
 }
