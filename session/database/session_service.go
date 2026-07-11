@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/huandu/go-sqlbuilder"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/soasurs/adk/session"
@@ -150,4 +151,48 @@ func (ss *databaseSessionService) GetSession(ctx context.Context, sessionID stri
 	s.db = ss.db
 	s.q = ss.q
 	return s, nil
+}
+
+func (ss *databaseSessionService) ListSessions(ctx context.Context, req session.ListSessionsRequest) ([]session.Session, error) {
+	req, err := req.Normalize()
+	if err != nil {
+		return nil, err
+	}
+
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("session_id", "app_id", "user_id", "created_at", "deleted_at")
+	sb.From(ss.sessionsTable)
+	sb.Where(
+		sb.Equal("app_id", req.AppID),
+		sb.Equal("user_id", req.UserID),
+		sb.Equal("deleted_at", 0),
+	)
+	if req.SortBy == session.SessionSortBySessionID {
+		if req.SortOrder == session.SortDescending {
+			sb.OrderByDesc("session_id")
+		} else {
+			sb.OrderByAsc("session_id")
+		}
+	} else {
+		if req.SortOrder == session.SortDescending {
+			sb.OrderByDesc("created_at").OrderByAsc("session_id")
+		} else {
+			sb.OrderByAsc("created_at").OrderByAsc("session_id")
+		}
+	}
+	sb.Limit(int(req.Limit)).Offset(int(req.Offset))
+
+	sql, args := sb.Build()
+	rows := make([]*databaseSession, 0)
+	if err := ss.db.SelectContext(ctx, &rows, sql, args...); err != nil {
+		return nil, err
+	}
+
+	sessions := make([]session.Session, len(rows))
+	for i, row := range rows {
+		row.db = ss.db
+		row.q = ss.q
+		sessions[i] = row
+	}
+	return sessions, nil
 }

@@ -11,7 +11,6 @@ const sessionColumns = `
 	app_id,
 	user_id,
 	created_at,
-	updated_at,
 	deleted_at
 `
 
@@ -62,10 +61,9 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 				app_id,
 				user_id,
 				created_at,
-				updated_at,
 				deleted_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			VALUES ($1, $2, $3, $4, $5)
 		`,
 		getSession: `
 			SELECT ` + sessionColumns + `
@@ -253,6 +251,34 @@ func migrationV4SQL(t migrationTables) []string {
 		`
 			ALTER TABLE ` + t.events + `
 			ADD COLUMN usage_details TEXT NOT NULL DEFAULT ''
+		`,
+	}
+}
+
+func migrationV5SQL(t migrationTables) []string {
+	return []string{
+		`
+			ALTER TABLE ` + t.sessions + `
+			DROP COLUMN updated_at
+		`,
+		`
+			CREATE INDEX IF NOT EXISTS idx_` + t.sessions + `_owner_created
+			ON ` + t.sessions + ` (
+				app_id,
+				user_id,
+				deleted_at,
+				created_at,
+				session_id
+			)
+		`,
+		`
+			CREATE INDEX IF NOT EXISTS idx_` + t.sessions + `_owner_session
+			ON ` + t.sessions + ` (
+				app_id,
+				user_id,
+				deleted_at,
+				session_id
+			)
 		`,
 	}
 }

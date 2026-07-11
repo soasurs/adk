@@ -353,6 +353,23 @@ sess, err := svc.CreateSession(ctx, session.CreateSessionRequest{
 })
 ```
 
+可以按照应用和用户列出 sessions，并使用 offset 分页和显式排序。默认返回 50
+条，按照创建时间倒序排列：
+
+```go
+sessions, err := svc.ListSessions(ctx, session.ListSessionsRequest{
+    AppID:     "my-app",
+    UserID:    "user-123",
+    Limit:     20,
+    Offset:    0,
+    SortBy:    session.SessionSortByCreatedAt,
+    SortOrder: session.SortDescending,
+})
+```
+
+`ListSessions` 返回普通的 `Session`，不会预加载 events。`GetCreatedAt` 返回
+session 创建时间对应的 Unix 毫秒时间戳。
+
 需要持久化时可以使用 database 后端。它接收应用自己持有的 `*sqlx.DB`；
 SQLite 和 PostgreSQL 都有测试覆盖。应用需要自行 import 对应 driver。
 

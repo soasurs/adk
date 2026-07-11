@@ -88,6 +88,91 @@ func TestSQLite_DatabaseSessionService_GetSession_NotFound(t *testing.T) {
 	assert.Nil(t, s)
 }
 
+func TestSQLite_DatabaseSessionService_ListSessions(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	service, err := NewDatabaseSessionService(db)
+	require.NoError(t, err)
+	ctx := t.Context()
+
+	create := func(id, appID, userID string, createdAt int64) {
+		t.Helper()
+		_, err := service.CreateSession(ctx, adksession.CreateSessionRequest{
+			SessionID: id,
+			AppID:     appID,
+			UserID:    userID,
+		})
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `
+			UPDATE sessions
+			SET created_at = $1
+			WHERE session_id = $2
+		`, createdAt, id)
+		require.NoError(t, err)
+	}
+
+	create("session-b", "chat", "user-1", 100)
+	create("session-a", "chat", "user-1", 100)
+	create("session-c", "chat", "user-1", 300)
+	create("other-user", "chat", "user-2", 500)
+	create("other-app", "admin", "user-1", 600)
+	require.NoError(t, service.DeleteSession(ctx, "session-c"))
+
+	tests := []struct {
+		name string
+		req  adksession.ListSessionsRequest
+		want []string
+	}{
+		{
+			name: "filters ownership and deleted sessions",
+			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1"},
+			want: []string{"session-a", "session-b"},
+		},
+		{
+			name: "sorts by session id descending with pagination",
+			req: adksession.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1", Limit: 1, Offset: 1,
+				SortBy: adksession.SessionSortBySessionID, SortOrder: adksession.SortDescending,
+			},
+			want: []string{"session-a"},
+		},
+		{
+			name: "sorts by created_at ascending explicitly",
+			req: adksession.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1",
+				SortBy: adksession.SessionSortByCreatedAt, SortOrder: adksession.SortAscending,
+			},
+			want: []string{"session-a", "session-b"},
+		},
+		{
+			name: "returns empty slice when no sessions match",
+			req:  adksession.ListSessionsRequest{AppID: "nonexistent", UserID: "user-1"},
+			want: []string{},
+		},
+		{
+			name: "returns empty slice when offset exceeds count",
+			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1", Offset: 10},
+			want: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions, err := service.ListSessions(ctx, tc.req)
+			require.NoError(t, err)
+			ids := make([]string, len(sessions))
+			for i, sess := range sessions {
+				ids[i] = sess.GetSessionID()
+			}
+			assert.Equal(t, tc.want, ids)
+			for _, sess := range sessions {
+				assert.Positive(t, sess.GetCreatedAt())
+			}
+		})
+	}
+}
+
 func TestSQLite_DatabaseSessionService_DefaultDoesNotImplementRunLocker(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()

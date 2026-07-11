@@ -61,6 +61,16 @@ func TestSQLite_DatabaseSession_CreateEvent(t *testing.T) {
 	assert.Len(t, evs, 1)
 	assert.Equal(t, int64(1), evs[0].EventID)
 	assert.Equal(t, "turn-1", evs[0].TurnID)
+	assert.Positive(t, session.GetCreatedAt())
+}
+
+func TestSQLite_InitSchema_RemovesSessionUpdatedAt(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	var names []string
+	require.NoError(t, db.SelectContext(t.Context(), &names, "SELECT name FROM pragma_table_info('sessions')"))
+	assert.NotContains(t, names, "updated_at")
 }
 
 func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
@@ -157,7 +167,7 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	var versions []int
 	err = db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version")
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 3, 4}, versions)
+	assert.Equal(t, []int{1, 2, 3, 4, 5}, versions)
 
 	service, err := NewDatabaseSessionService(db)
 	require.NoError(t, err)

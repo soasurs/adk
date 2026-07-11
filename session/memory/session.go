@@ -16,14 +16,17 @@ type memorySession struct {
 	sessionID string
 	appID     string
 	userID    string
+	createdAt int64
 	events    []*event.Event // all events: active (compacted_at=0, deleted_at=0) + archived
 }
 
 func NewMemorySession(req session.CreateSessionRequest) session.Session {
+	now := time.Now().UnixMilli()
 	return &memorySession{
 		sessionID: req.SessionID,
 		appID:     req.AppID,
 		userID:    req.UserID,
+		createdAt: now,
 		events:    make([]*event.Event, 0),
 	}
 }
@@ -38,6 +41,10 @@ func (s *memorySession) GetAppID() string {
 
 func (s *memorySession) GetUserID() string {
 	return s.userID
+}
+
+func (s *memorySession) GetCreatedAt() int64 {
+	return s.createdAt
 }
 
 func (s *memorySession) CreateEvent(ctx context.Context, ev *event.Event) error {

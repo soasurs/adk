@@ -370,6 +370,23 @@ sess, err := svc.CreateSession(ctx, session.CreateSessionRequest{
 })
 ```
 
+List sessions for one application and user with offset pagination and explicit
+ordering. The default is 50 sessions ordered by creation time descending:
+
+```go
+sessions, err := svc.ListSessions(ctx, session.ListSessionsRequest{
+    AppID:     "my-app",
+    UserID:    "user-123",
+    Limit:     20,
+    Offset:    0,
+    SortBy:    session.SessionSortByCreatedAt,
+    SortOrder: session.SortDescending,
+})
+```
+
+`ListSessions` returns regular `Session` values without preloading events.
+`GetCreatedAt` exposes the session creation time as a Unix millisecond timestamp.
+
 Use the database backend for durable sessions. It accepts an application-owned
 `*sqlx.DB`; SQLite and PostgreSQL are covered by the test suite. Applications
 must import the driver they use.
