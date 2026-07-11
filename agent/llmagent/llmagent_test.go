@@ -92,6 +92,19 @@ type streamingMockLLM struct {
 	callIdx int
 }
 
+type failingLLM struct {
+	name string
+	err  error
+}
+
+func (m *failingLLM) Name() string { return m.name }
+
+func (m *failingLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(nil, m.err)
+	}
+}
+
 func (m *streamingMockLLM) Name() string { return m.name }
 
 func (m *streamingMockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ *model.GenerateConfig, _ bool) iter.Seq2[*model.LLMResponse, error] {
@@ -257,6 +270,34 @@ func TestNewWithError_InvalidConfig(t *testing.T) {
 				Tools: []tool.Tool{echoTool, echoTool},
 			},
 		},
+		{
+			name: "nil before LLM hook",
+			config: Config{
+				Model:          &mockLLM{name: "mock"},
+				BeforeLLMCalls: []BeforeLLMCall{nil},
+			},
+		},
+		{
+			name: "nil after LLM hook",
+			config: Config{
+				Model:         &mockLLM{name: "mock"},
+				AfterLLMCalls: []AfterLLMCall{nil},
+			},
+		},
+		{
+			name: "nil before tool hook",
+			config: Config{
+				Model:           &mockLLM{name: "mock"},
+				BeforeToolCalls: []BeforeToolCall{nil},
+			},
+		},
+		{
+			name: "nil after tool hook",
+			config: Config{
+				Model:          &mockLLM{name: "mock"},
+				AfterToolCalls: []AfterToolCall{nil},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -274,6 +315,28 @@ func TestNew_InvalidConfigPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		New(Config{})
 	})
+}
+
+func TestNewWithError_CopiesHookSlices(t *testing.T) {
+	var originalCalled bool
+	hooks := []BeforeLLMCall{func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+		originalCalled = true
+		return nil, nil
+	}}
+	a, err := NewWithError(Config{
+		Model:          &captureLLM{name: "capture"},
+		BeforeLLMCalls: hooks,
+	})
+	require.NoError(t, err)
+	hooks[0] = func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+		t.Fatal("agent used the caller's mutated hook slice")
+		return nil, nil
+	}
+
+	_, runErr := collectMessages(t, a.(*LlmAgent), []model.Content{{Role: model.RoleUser, Content: "hello"}})
+
+	require.NoError(t, runErr)
+	assert.True(t, originalCalled)
 }
 
 func TestLlmAgent_Tracing_LLMCallLifecycle(t *testing.T) {
@@ -926,14 +989,14 @@ func TestLlmAgent_Hooks_LLMCallLifecycle(t *testing.T) {
 	a := New(Config{
 		Name:  "hooked-agent",
 		Model: llm,
-		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
+		BeforeLLMCalls: []BeforeLLMCall{func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
 			order = append(order, fmt.Sprintf("before-llm-%d", call.Iteration))
 			require.Equal(t, "hooked-agent", call.AgentName)
 			require.Equal(t, 1, call.Iteration)
 			require.NotNil(t, call.Request)
 			return nil, nil
-		},
-		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+		}},
+		AfterLLMCalls: []AfterLLMCall{func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
 			order = append(order, fmt.Sprintf("after-llm-%d", call.Iteration))
 			require.NotNil(t, result.Response)
 			assert.Equal(t, model.FinishReasonStop, result.Response.FinishReason)
@@ -941,7 +1004,7 @@ func TestLlmAgent_Hooks_LLMCallLifecycle(t *testing.T) {
 			assert.False(t, result.StoppedEarly)
 			assert.NoError(t, result.Err)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
@@ -953,6 +1016,63 @@ func TestLlmAgent_Hooks_LLMCallLifecycle(t *testing.T) {
 	assert.Equal(t, "hello", llm.lastRequest.Contents[0].Content)
 	assert.Equal(t, model.RoleUser, llm.lastRequest.Contents[0].Role)
 	assert.Equal(t, "ok", msgs[0].Content)
+}
+
+func TestLlmAgent_Hooks_AfterLLMCallsJoinAllErrors(t *testing.T) {
+	llmErr := errors.New("model unavailable")
+	firstHookErr := errors.New("first after hook failed")
+	secondHookErr := errors.New("second after hook failed")
+	var order []string
+	a := New(Config{
+		Name:  "failing-agent",
+		Model: &failingLLM{name: "failing", err: llmErr},
+		AfterLLMCalls: []AfterLLMCall{
+			func(context.Context, *LLMCall, *LLMCallResult) error {
+				order = append(order, "first")
+				return firstHookErr
+			},
+			func(context.Context, *LLMCall, *LLMCallResult) error {
+				order = append(order, "second")
+				return secondHookErr
+			},
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
+
+	require.ErrorIs(t, err, llmErr)
+	require.ErrorIs(t, err, firstHookErr)
+	require.ErrorIs(t, err, secondHookErr)
+	assert.Equal(t, []string{"first", "second"}, order)
+	assert.Empty(t, msgs)
+}
+
+func TestLlmAgent_Hooks_BeforeLLMCallErrorStopsRemainingHooks(t *testing.T) {
+	hookErr := errors.New("request blocked")
+	llm := &mockLLM{name: "never-called"}
+	a := New(Config{
+		Name:  "blocked-agent",
+		Model: llm,
+		BeforeLLMCalls: []BeforeLLMCall{
+			func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+				return nil, hookErr
+			},
+			func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+				t.Fatal("hook after before error must not run")
+				return nil, nil
+			},
+		},
+		AfterLLMCalls: []AfterLLMCall{func(context.Context, *LLMCall, *LLMCallResult) error {
+			t.Fatal("after hook must not run when a before hook fails")
+			return nil
+		}},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
+
+	require.ErrorIs(t, err, hookErr)
+	assert.Empty(t, msgs)
+	assert.Zero(t, llm.callIdx)
 }
 
 // hookAwareTool is a test double that records the context values visible to Run.
@@ -1022,13 +1142,13 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 		Name:  "hooked-tool-agent",
 		Model: mock,
 		Tools: []tool.Tool{hookTool},
-		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
+		BeforeLLMCalls: []BeforeLLMCall{func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("before-llm-%d", call.Iteration))
 			mu.Unlock()
 			return nil, nil
-		},
-		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+		}},
+		AfterLLMCalls: []AfterLLMCall{func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("after-llm-%d", call.Iteration))
 			mu.Unlock()
@@ -1037,8 +1157,8 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 				assert.Equal(t, model.FinishReasonToolCalls, result.Response.FinishReason)
 			}
 			return nil
-		},
-		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+		}},
+		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("before-tool-%d-%d", call.Iteration, call.ToolIndex))
 			mu.Unlock()
@@ -1047,8 +1167,8 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			require.Equal(t, 0, call.ToolIndex)
 			require.Equal(t, "hook-tool", call.Definition.Name)
 			return nil, nil
-		},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		}},
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("after-tool-%d-%d", call.Iteration, call.ToolIndex))
 			mu.Unlock()
@@ -1056,7 +1176,7 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			assert.NoError(t, result.Err)
 			assert.Equal(t, "tool-result", result.Event.Content.Content)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run hook tool"}})
@@ -1101,10 +1221,10 @@ func TestLlmAgent_ToolHandledFailureContinuesRun(t *testing.T) {
 		Name:  "handled-tool-failure-agent",
 		Model: mock,
 		Tools: []tool.Tool{handled},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			captured = *result
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "look up record"}})
@@ -1143,14 +1263,22 @@ func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 	}
 	tracer := new(recordingTraceTracer)
 	hookErr := errors.New("after hook failed")
+	secondHookErr := errors.New("second after hook failed")
 	var captured ToolCallResult
+	var secondHookCalled bool
 	a := New(Config{
 		Name:  "terminal-tool-failure-agent",
 		Model: mock,
 		Tools: []tool.Tool{failing},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
-			captured = *result
-			return hookErr
+		AfterToolCalls: []AfterToolCall{
+			func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+				captured = *result
+				return hookErr
+			},
+			func(context.Context, *ToolCall, *ToolCallResult) error {
+				secondHookCalled = true
+				return secondHookErr
+			},
 		},
 	}).(*LlmAgent)
 	ctx := adktrace.ContextWithTracer(t.Context(), tracer)
@@ -1159,6 +1287,7 @@ func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 
 	require.ErrorIs(t, err, toolErr)
 	require.ErrorIs(t, err, hookErr)
+	require.ErrorIs(t, err, secondHookErr)
 	assert.Contains(t, err.Error(), `llmagent: run tool "lookup"`)
 	assert.NotContains(t, err.Error(), "sensitive partial result")
 	require.Len(t, msgs, 1)
@@ -1167,11 +1296,13 @@ func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 	assert.Empty(t, captured.Event)
 	assert.Empty(t, captured.Result)
 	require.ErrorIs(t, captured.Err, toolErr)
+	assert.True(t, secondHookCalled)
 
 	toolEnd, ok := traceEndByKind(tracer, adktrace.KindToolCall)
 	require.True(t, ok)
 	assert.ErrorIs(t, toolEnd.Err, toolErr)
 	assert.ErrorIs(t, toolEnd.Err, hookErr)
+	assert.ErrorIs(t, toolEnd.Err, secondHookErr)
 	assert.False(t, toolEnd.IsError)
 	assert.Empty(t, toolEnd.EventRole)
 }
@@ -1208,8 +1339,14 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 		Name:  "hook-error-agent",
 		Model: mock,
 		Tools: []tool.Tool{hookTool},
-		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
-			return nil, hookErr
+		BeforeToolCalls: []BeforeToolCall{
+			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+				return nil, hookErr
+			},
+			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+				t.Fatal("hook after before error must not run")
+				return nil, nil
+			},
 		},
 	}).(*LlmAgent)
 
@@ -1247,10 +1384,10 @@ func TestLlmAgent_MissingTool_ReturnsHandledFailure(t *testing.T) {
 	a := New(Config{
 		Name:  "missing-tool-agent",
 		Model: mock,
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			captured = *result
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run missing tool"}})
@@ -1277,19 +1414,31 @@ func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
 		FinishReason: model.FinishReasonStop,
 	}
 
+	var beforeCalls int
 	var afterCalled bool
 	a := New(Config{
 		Name:  "skip-llm-agent",
 		Model: neverCalled,
-		BeforeLLMCall: func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
-			return fakeResp, nil
+		BeforeLLMCalls: []BeforeLLMCall{
+			func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+				beforeCalls++
+				return nil, nil
+			},
+			func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+				beforeCalls++
+				return fakeResp, nil
+			},
+			func(context.Context, *LLMCall) (*model.LLMResponse, error) {
+				t.Fatal("hook after skip response must not run")
+				return nil, nil
+			},
 		},
-		AfterLLMCall: func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
+		AfterLLMCalls: []AfterLLMCall{func(ctx context.Context, call *LLMCall, result *LLMCallResult) error {
 			afterCalled = true
 			require.NotNil(t, result.Response)
 			assert.Equal(t, "cached response", result.Response.Content.Content)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "hello"}})
@@ -1298,6 +1447,7 @@ func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "cached response", msgs[0].Content)
 	assert.Equal(t, 0, neverCalled.callIdx, "real LLM must not have been called")
+	assert.Equal(t, 2, beforeCalls)
 	assert.True(t, afterCalled, "AfterLLMCall must still be invoked after skip")
 }
 
@@ -1334,30 +1484,43 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		ToolCallID: "tc-1",
 		Content:    "injected-result",
 	}
+	var beforeCalls int
 	var afterCalled bool
 
 	a := New(Config{
 		Name:  "skip-tool-agent",
 		Model: mock,
 		Tools: []tool.Tool{realTool},
-		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
-			return &ToolCallResult{
-				Event:  model.Event{Content: fakeToolMsg},
-				Result: tool.Result{Content: "injected-result"},
-			}, nil
+		BeforeToolCalls: []BeforeToolCall{
+			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+				beforeCalls++
+				return nil, nil
+			},
+			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+				beforeCalls++
+				return &ToolCallResult{
+					Event:  model.Event{Content: fakeToolMsg},
+					Result: tool.Result{Content: "injected-result"},
+				}, nil
+			},
+			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+				t.Fatal("hook after skip result must not run")
+				return nil, nil
+			},
 		},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
 			assert.Equal(t, "injected-result", result.Result.Content)
 			assert.Equal(t, "injected-result", result.Event.Content.Content)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tool"}})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), callCount.Load(), "real tool must not have been called")
+	assert.Equal(t, 2, beforeCalls)
 	assert.True(t, afterCalled, "AfterToolCall must still be invoked after skip")
 	require.Len(t, msgs, 3)
 	assert.Equal(t, model.RoleTool, msgs[1].Role)
@@ -1390,20 +1553,20 @@ func TestLlmAgent_Hooks_BeforeToolCall_SkipErrorStopsRun(t *testing.T) {
 		Name:  "skip-tool-error-agent",
 		Model: mock,
 		Tools: []tool.Tool{realTool},
-		BeforeToolCall: func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
 			return &ToolCallResult{
 				Event:  model.Event{Content: model.Content{Role: model.RoleTool, Content: "must be ignored"}},
 				Result: tool.Result{Content: "must be ignored", IsError: true},
 				Err:    skipErr,
 			}, nil
-		},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		}},
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
 			require.ErrorIs(t, result.Err, skipErr)
 			assert.Empty(t, result.Event)
 			assert.Empty(t, result.Result)
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tool"}})
@@ -1663,13 +1826,13 @@ func TestLlmAgent_ParallelToolErrorCancelsBeforeAfterHook(t *testing.T) {
 		Name:  "parallel-tool-error-hook-agent",
 		Model: mock,
 		Tools: []tool.Tool{blocking, failing},
-		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			if call.Request.Name == "failing" {
 				assert.ErrorIs(t, ctx.Err(), context.Canceled)
 				assert.ErrorIs(t, result.Err, rootErr)
 			}
 			return nil
-		},
+		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tools"}})

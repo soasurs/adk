@@ -1,11 +1,26 @@
 package llmagent
 
 import (
+	"context"
 	"time"
 
 	"github.com/soasurs/adk/model"
 	"github.com/soasurs/adk/tool"
 )
+
+// BeforeLLMCall runs immediately before an LLM invocation. Returning a
+// non-nil response skips the remaining before hooks and the actual LLM call.
+type BeforeLLMCall func(ctx context.Context, call *LLMCall) (*model.LLMResponse, error)
+
+// AfterLLMCall runs after an LLM invocation completes or fails.
+type AfterLLMCall func(ctx context.Context, call *LLMCall, result *LLMCallResult) error
+
+// BeforeToolCall runs immediately before a tool invocation. Returning a
+// non-nil result skips the remaining before hooks and the actual tool call.
+type BeforeToolCall func(ctx context.Context, call *ToolCall) (*ToolCallResult, error)
+
+// AfterToolCall runs after a tool invocation completes or fails.
+type AfterToolCall func(ctx context.Context, call *ToolCall, result *ToolCallResult) error
 
 // LLMCall describes one LLM invocation within an LlmAgent Run loop.
 type LLMCall struct {

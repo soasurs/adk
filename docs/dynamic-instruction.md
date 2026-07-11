@@ -54,7 +54,7 @@ alternatives below.
 |---------------------------|----------------------------------------------------------|
 | `Config.Instruction`      | The instruction is fixed at agent creation time.         |
 | `InstructionProvider`     | The instruction needs runtime context, but only the system message should change. |
-| `BeforeLLMCall` hook      | You need to modify the full request (tools, model, generation config) or skip the LLM call entirely. |
+| `BeforeLLMCalls` hooks    | You need to modify the full request (tools, model, generation config) or skip the LLM call entirely. |
 
 ## Prompt-cache behavior
 
