@@ -61,13 +61,10 @@ func (t *agentTool) Definition() tool.Definition { return t.def }
 // Run executes the wrapped agent with the delegated task and returns the
 // agent's final assistant text response. Partial (streaming) events and
 // intermediate messages (tool calls, tool results) are consumed silently.
-func (t *agentTool) Run(ctx context.Context, call tool.Call) (tool.Result, error) {
+func (t *agentTool) Run(ctx context.Context, call tool.Call) (*tool.Result, error) {
 	var req taskRequest
 	if err := json.Unmarshal(call.Arguments, &req); err != nil {
-		return tool.Result{
-			Content: fmt.Sprintf("agentool %q: parse arguments: %s", t.a.Name(), err),
-			IsError: true,
-		}, nil
+		return nil, tool.NewHandledError(fmt.Sprintf("agentool %q: parse arguments: %s", t.a.Name(), err))
 	}
 
 	events := []model.Event{
@@ -83,12 +80,12 @@ func (t *agentTool) Run(ctx context.Context, call tool.Call) (tool.Result, error
 	var result string
 	for event, err := range t.a.Run(ctx, events) {
 		if err != nil {
-			return tool.Result{}, fmt.Errorf("agentool %q: %w", t.a.Name(), err)
+			return nil, fmt.Errorf("agentool %q: %w", t.a.Name(), err)
 		}
 		// Only capture the last complete assistant text response.
 		if !event.Partial && event.Content.Role == model.RoleAssistant && event.Content.Content != "" {
 			result = event.Content.Content
 		}
 	}
-	return tool.Result{Content: result}, nil
+	return &tool.Result{Content: result}, nil
 }

@@ -2,28 +2,28 @@ package tool
 
 import "encoding/json"
 
-const defaultFuncErrorContent = "tool call failed"
+const defaultHandledErrorContent = "tool call failed"
 
-// FuncError is a handled failure returned by a Handler. NewFunc converts it
-// into a Result with IsError set, so its content must be safe to send to the
-// model. Ordinary Handler errors are terminal and propagate to the caller.
-type FuncError struct {
+// HandledError is a completed tool failure whose content is safe to send to
+// the model. It must not contain internal SDK, transport, or infrastructure
+// error details.
+type HandledError struct {
 	// Content is the plain-text failure message that may be sent to the model.
-	Content string
+	Content string `json:"content,omitempty"`
 	// StructuredContent is the optional JSON failure payload that may be sent to
 	// providers supporting structured tool results.
-	StructuredContent json.RawMessage
+	StructuredContent json.RawMessage `json:"structured_content,omitempty"`
 }
 
-// NewFuncError creates a model-visible handled failure for a NewFunc Handler.
-func NewFuncError(content string) *FuncError {
-	return &FuncError{Content: content}
+// NewHandledError creates a model-visible handled tool failure.
+func NewHandledError(content string) *HandledError {
+	return &HandledError{Content: content}
 }
 
 // Error implements the error interface.
-func (e *FuncError) Error() string {
+func (e *HandledError) Error() string {
 	if e == nil {
-		return defaultFuncErrorContent
+		return defaultHandledErrorContent
 	}
 	if e.Content != "" {
 		return e.Content
@@ -31,21 +31,26 @@ func (e *FuncError) Error() string {
 	if len(e.StructuredContent) > 0 {
 		return string(e.StructuredContent)
 	}
-	return defaultFuncErrorContent
+	return defaultHandledErrorContent
 }
 
-func (e *FuncError) result() Result {
+func (*HandledError) isOutcome() {}
+
+// Text returns the safe plain-text failure sent to providers that do not
+// support structured tool results.
+func (e *HandledError) Text() string {
+	return e.Error()
+}
+
+// Clone returns an independent copy of e.
+func (e *HandledError) Clone() *HandledError {
 	if e == nil {
-		return Result{Content: defaultFuncErrorContent, IsError: true}
+		return &HandledError{Content: defaultHandledErrorContent}
 	}
-	structured := append(json.RawMessage(nil), e.StructuredContent...)
-	content := e.Content
-	if content == "" && len(structured) == 0 {
-		content = defaultFuncErrorContent
+	clone := *e
+	clone.StructuredContent = append(json.RawMessage(nil), e.StructuredContent...)
+	if clone.Content == "" && len(clone.StructuredContent) == 0 {
+		clone.Content = defaultHandledErrorContent
 	}
-	return Result{
-		Content:           content,
-		StructuredContent: structured,
-		IsError:           true,
-	}
+	return &clone
 }

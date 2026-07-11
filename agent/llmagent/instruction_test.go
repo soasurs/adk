@@ -68,14 +68,14 @@ func (m *instructionScriptLLM) snapshot() (int, []*model.LLMRequest) {
 
 type instructionTool struct {
 	name string
-	run  func(context.Context, tool.Call) (tool.Result, error)
+	run  func(context.Context, tool.Call) (*tool.Result, error)
 }
 
 func (t *instructionTool) Definition() tool.Definition {
 	return tool.Definition{Name: t.name, Description: "instruction provider test tool"}
 }
 
-func (t *instructionTool) Run(ctx context.Context, call tool.Call) (tool.Result, error) {
+func (t *instructionTool) Run(ctx context.Context, call tool.Call) (*tool.Result, error) {
 	return t.run(ctx, call)
 }
 
@@ -111,8 +111,8 @@ func runInstructionAgent(t *testing.T, a *LlmAgent, contents []model.Content) ([
 func TestInstructionProvider_NilPreservesStaticInstructionStreamingAndToolLoop(t *testing.T) {
 	t.Parallel()
 
-	echo := &instructionTool{name: "echo", run: func(context.Context, tool.Call) (tool.Result, error) {
-		return tool.Result{Content: "echoed"}, nil
+	echo := &instructionTool{name: "echo", run: func(context.Context, tool.Call) (*tool.Result, error) {
+		return &tool.Result{Content: "echoed"}, nil
 	}}
 	llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{
 		{
@@ -230,8 +230,8 @@ func TestInstructionProvider_SeesStateAfterToolHooksWithoutStaleInstruction(t *t
 	var state atomic.Int64
 	var providerConversations [][]model.Content
 	var providerMu sync.Mutex
-	stateTool := &instructionTool{name: "state", run: func(context.Context, tool.Call) (tool.Result, error) {
-		return tool.Result{Content: "updated"}, nil
+	stateTool := &instructionTool{name: "state", run: func(context.Context, tool.Call) (*tool.Result, error) {
+		return &tool.Result{Content: "updated"}, nil
 	}}
 	llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{
 		{instructionToolResponse(model.ToolCall{ID: "state-1", Name: "state", Arguments: json.RawMessage(`{}`)})},
@@ -283,15 +283,15 @@ func TestInstructionProvider_OrderingWaitsForParallelToolsAndHooks(t *testing.T)
 		mu.Unlock()
 	}
 	secondStarted := make(chan struct{})
-	first := &instructionTool{name: "first", run: func(context.Context, tool.Call) (tool.Result, error) {
+	first := &instructionTool{name: "first", run: func(context.Context, tool.Call) (*tool.Result, error) {
 		<-secondStarted
 		appendOrder("tool-0")
-		return tool.Result{Content: "zero"}, nil
+		return &tool.Result{Content: "zero"}, nil
 	}}
-	second := &instructionTool{name: "second", run: func(context.Context, tool.Call) (tool.Result, error) {
+	second := &instructionTool{name: "second", run: func(context.Context, tool.Call) (*tool.Result, error) {
 		close(secondStarted)
 		appendOrder("tool-1")
-		return tool.Result{Content: "one"}, nil
+		return &tool.Result{Content: "one"}, nil
 	}}
 	llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{
 		{instructionToolResponse(
@@ -319,7 +319,7 @@ func TestInstructionProvider_OrderingWaitsForParallelToolsAndHooks(t *testing.T)
 			appendOrder(fmt.Sprintf("after-llm-%d", call.Iteration))
 			return nil
 		}},
-		BeforeToolCalls: []BeforeToolCall{func(_ context.Context, call *ToolCall) (*ToolCallResult, error) {
+		BeforeToolCalls: []BeforeToolCall{func(_ context.Context, call *ToolCall) (*ToolCallOverride, error) {
 			appendOrder(fmt.Sprintf("before-tool-%d", call.ToolIndex))
 			return nil, nil
 		}},
@@ -486,9 +486,11 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 			Arguments:        json.RawMessage(`{"value":"original"}`),
 			ThoughtSignature: []byte("original-signature"),
 		}},
-		ToolResult: &model.ToolResult{
-			ToolCallID:        "original-call",
-			StructuredContent: json.RawMessage(`{"result":"original"}`),
+		ToolResponse: &model.ToolResponse{
+			ToolCallID: "original-call",
+			Outcome: &tool.Result{
+				StructuredContent: json.RawMessage(`{"result":"original"}`),
+			},
 		},
 	}
 	var secondInput []model.Content
@@ -496,8 +498,8 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 		{instructionToolResponse(model.ToolCall{ID: "missing", Name: "missing", Arguments: json.RawMessage(`{"round":1}`), ThoughtSignature: []byte("round-1")})},
 		{instructionStopResponse("done")},
 	}}
-	unusedTool := &instructionTool{name: "unused", run: func(context.Context, tool.Call) (tool.Result, error) {
-		return tool.Result{}, nil
+	unusedTool := &instructionTool{name: "unused", run: func(context.Context, tool.Call) (*tool.Result, error) {
+		return &tool.Result{}, nil
 	}}
 	a := New(Config{
 		Name:  "agent",
@@ -508,7 +510,7 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 				input.Conversation[0].Parts[0].Text = "provider mutation"
 				input.Conversation[0].ToolCalls[0].Arguments[0] = 'x'
 				input.Conversation[0].ToolCalls[0].ThoughtSignature[0] = 'x'
-				input.Conversation[0].ToolResult.StructuredContent[0] = 'x'
+				input.Conversation[0].ToolResponse.Outcome.(*tool.Result).StructuredContent[0] = 'x'
 			} else {
 				secondInput = cloneContents(input.Conversation)
 			}
@@ -522,7 +524,7 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 			originalRequest.Contents[1].Parts[0].Text = fmt.Sprintf("hook mutation %d", call.Iteration)
 			originalRequest.Contents[1].ToolCalls[0].Arguments[0] = 'y'
 			originalRequest.Contents[1].ToolCalls[0].ThoughtSignature[0] = 'y'
-			originalRequest.Contents[1].ToolResult.StructuredContent[0] = 'y'
+			originalRequest.Contents[1].ToolResponse.Outcome.(*tool.Result).StructuredContent[0] = 'y'
 			originalRequest.Tools[0] = nil
 			originalRequest.Model = fmt.Sprintf("iteration-%d", call.Iteration)
 			call.Request = &model.LLMRequest{Model: "unsupported replacement"}
@@ -537,7 +539,7 @@ func TestInstructionProvider_ProviderAndHookCannotMutateCanonicalConversation(t 
 	assert.Equal(t, "original part", secondInput[0].Parts[0].Text)
 	assert.JSONEq(t, `{"value":"original"}`, string(secondInput[0].ToolCalls[0].Arguments))
 	assert.Equal(t, []byte("original-signature"), secondInput[0].ToolCalls[0].ThoughtSignature)
-	assert.JSONEq(t, `{"result":"original"}`, string(secondInput[0].ToolResult.StructuredContent))
+	assert.JSONEq(t, `{"result":"original"}`, string(secondInput[0].ToolResponse.Outcome.(*tool.Result).StructuredContent))
 	_, requests := llm.snapshot()
 	require.Len(t, requests, 2)
 	assert.Equal(t, "iteration-1", requests[0].Model)
@@ -555,8 +557,8 @@ func TestInstructionProvider_ToolFailureControlsNextInvocation(t *testing.T) {
 
 	t.Run("handled failure continues", func(t *testing.T) {
 		var providerCalls atomic.Int64
-		handled := &instructionTool{name: "lookup", run: func(context.Context, tool.Call) (tool.Result, error) {
-			return tool.Result{Content: "not found", IsError: true}, nil
+		handled := &instructionTool{name: "lookup", run: func(context.Context, tool.Call) (*tool.Result, error) {
+			return nil, tool.NewHandledError("not found")
 		}}
 		llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{
 			{instructionToolResponse(model.ToolCall{ID: "lookup-1", Name: "lookup", Arguments: json.RawMessage(`{}`)})},
@@ -588,8 +590,8 @@ func TestInstructionProvider_ToolFailureControlsNextInvocation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var providerCalls atomic.Int64
-			terminal := &instructionTool{name: "lookup", run: func(context.Context, tool.Call) (tool.Result, error) {
-				return tool.Result{}, tc.toolErr
+			terminal := &instructionTool{name: "lookup", run: func(context.Context, tool.Call) (*tool.Result, error) {
+				return nil, tc.toolErr
 			}}
 			llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{
 				{instructionToolResponse(model.ToolCall{ID: "lookup-1", Name: "lookup", Arguments: json.RawMessage(`{}`)})},

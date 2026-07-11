@@ -151,7 +151,7 @@ func modelVisibleError(code, message string) error {
 	if err != nil {
 		return fmt.Errorf("skill: marshal handled error: %w", err)
 	}
-	result := tool.NewFuncError(message)
+	result := tool.NewHandledError(message)
 	result.StructuredContent = structured
 	return result
 }

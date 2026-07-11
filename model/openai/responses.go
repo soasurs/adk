@@ -293,9 +293,9 @@ func convertResponsesContent(content model.Content) ([]goresponses.ResponseInput
 		}
 		return items, nil
 	case model.RoleTool:
-		toolResult := content.ToolResultValue()
+		toolResponse := content.ToolResponseValue()
 		return []goresponses.ResponseInputItemUnionParam{
-			goresponses.ResponseInputItemParamOfFunctionCallOutput(toolResult.ToolCallID, toolResult.Text()),
+			goresponses.ResponseInputItemParamOfFunctionCallOutput(toolResponse.ToolCallID, toolResponse.Text()),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown role: %q", content.Role)

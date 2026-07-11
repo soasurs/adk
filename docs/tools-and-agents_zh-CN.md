@@ -9,7 +9,7 @@ Tool 接收 raw JSON arguments，并返回 provider-neutral result：
 ```go
 type Tool interface {
     Definition() Definition
-    Run(ctx context.Context, call Call) (Result, error)
+    Run(ctx context.Context, call Call) (*Result, error)
 }
 ```
 
@@ -28,7 +28,7 @@ weatherTool, err := tool.NewFunc(tool.Definition{
     Name: "weather", Description: "Get a weather forecast.",
 }, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
     if input.City == "" {
-        return weatherOutput{}, tool.NewFuncError("city is required")
+        return weatherOutput{}, tool.NewHandledError("city is required")
     }
     return weatherOutput{City: input.City, Forecast: "clear"}, nil
 })
@@ -39,12 +39,13 @@ weatherTool, err := tool.NewFunc(tool.Definition{
 
 ## 失败语义
 
-两条失败通道含义不同：
+三种结果含义不同：
 
-- `tool.Result{IsError: true}, nil` 表示可安全发送给模型的预期失败。使用
-  `tool.NewFunc` 时，通过 `tool.NewFuncError(...)` 返回。
-- 非 nil Go `error` 表示没有有效结果。`LlmAgent` 会丢弃同时返回的 result、取消并行
-  tool calls 并终止 Run，不会向模型暴露错误文本。
+- `*tool.Result, nil` 表示成功；nil result 和 nil error 的组合是非法实现。
+- `nil, *tool.HandledError` 表示已经完成且可安全发送给模型的预期失败，通过
+  `tool.NewHandledError(...)` 创建。
+- 其他非 nil Go `error` 表示没有有效结果。`LlmAgent` 会丢弃同时返回的 result、取消
+  并行 tool calls 并终止 Run，不会向模型暴露错误文本。
 
 工具可能有副作用，因此 ADK 不会自动重试。安全的重试应放在工具内部或显式 wrapper 中。
 

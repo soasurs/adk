@@ -150,9 +150,10 @@ func TestAgentTool_Run_InvalidArgumentsReturnModelVisibleFailure(t *testing.T) {
 		Arguments: json.RawMessage(`{"task":`),
 	})
 
-	require.NoError(t, runErr)
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.Content, "parse arguments")
+	assert.Nil(t, result)
+	var handledErr *tool.HandledError
+	require.ErrorAs(t, runErr, &handledErr)
+	assert.Contains(t, handledErr.Content, "parse arguments")
 	assert.Zero(t, subLLM.callIdx)
 }
 

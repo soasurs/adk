@@ -106,9 +106,7 @@ func slogAttrs(event Event) []slog.Attr {
 	if event.StoppedEarly {
 		attrs = append(attrs, slog.Bool("stopped_early", true))
 	}
-	if event.IsError {
-		attrs = append(attrs, slog.Bool("is_error", true))
-	}
+	addString("tool_outcome", string(event.ToolOutcome))
 	if event.Duration > 0 {
 		attrs = append(attrs, slog.Duration("duration", event.Duration))
 	}

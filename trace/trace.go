@@ -12,6 +12,17 @@ import (
 // Kind identifies the ADK operation represented by a span.
 type Kind string
 
+// ToolOutcome identifies whether a completed tool call succeeded or returned
+// a model-visible failure.
+type ToolOutcome string
+
+const (
+	// ToolOutcomeSuccess identifies a successful tool response.
+	ToolOutcomeSuccess ToolOutcome = "success"
+	// ToolOutcomeFailure identifies a handled, model-visible tool failure.
+	ToolOutcomeFailure ToolOutcome = "failure"
+)
+
 const (
 	// KindRunnerRun spans one complete Runner.Run call.
 	KindRunnerRun Kind = "adk.runner.run"
@@ -105,8 +116,8 @@ type Event struct {
 	PartialResponses int
 	// StoppedEarly reports that downstream iteration stopped before completion.
 	StoppedEarly bool
-	// IsError reports a model-visible tool or operation error.
-	IsError bool
+	// ToolOutcome reports the completed outcome of a tool call.
+	ToolOutcome ToolOutcome
 	// Err is the Go error that ended the operation, if any.
 	Err error
 	// Attributes carries implementation-specific fields.

@@ -20,7 +20,7 @@ func findUnknownToolExecution(sessionID string, events []model.Event) *ToolExecu
 			if assistantEvent.TurnID != events[j].TurnID {
 				continue
 			}
-			resultID := events[j].Content.ToolResultValue().ToolCallID
+			resultID := events[j].Content.ToolResponseValue().ToolCallID
 			for callIndex, call := range assistantEvent.Content.ToolCalls {
 				if !matched[callIndex] && call.ID == resultID {
 					matched[callIndex] = true

@@ -465,7 +465,7 @@ func TestLlmAgent_Tracing_ToolCallSpan(t *testing.T) {
 	toolEnd, ok := traceEndByKind(tracer, adktrace.KindToolCall)
 	require.True(t, ok)
 	assert.Equal(t, model.RoleTool, toolEnd.EventRole)
-	assert.False(t, toolEnd.IsError)
+	assert.Equal(t, adktrace.ToolOutcomeSuccess, toolEnd.ToolOutcome)
 	assert.NoError(t, toolEnd.Err)
 }
 
@@ -1085,14 +1085,14 @@ type hookAwareTool struct {
 
 type outcomeTool struct {
 	name string
-	run  func(context.Context, tool.Call) (tool.Result, error)
+	run  func(context.Context, tool.Call) (*tool.Result, error)
 }
 
 func (t *outcomeTool) Definition() tool.Definition {
 	return tool.Definition{Name: t.name, Description: "configurable test tool"}
 }
 
-func (t *outcomeTool) Run(ctx context.Context, call tool.Call) (tool.Result, error) {
+func (t *outcomeTool) Run(ctx context.Context, call tool.Call) (*tool.Result, error) {
 	return t.run(ctx, call)
 }
 
@@ -1100,12 +1100,12 @@ func (h *hookAwareTool) Definition() tool.Definition {
 	return tool.Definition{Name: h.name, Description: "hook-aware tool"}
 }
 
-func (h *hookAwareTool) Run(ctx context.Context, _ tool.Call) (tool.Result, error) {
+func (h *hookAwareTool) Run(ctx context.Context, _ tool.Call) (*tool.Result, error) {
 	h.callCount.Add(1)
 	if h.ctxChecker != nil {
 		h.ctxChecker(ctx)
 	}
-	return tool.Result{Content: h.result}, nil
+	return &tool.Result{Content: h.result}, nil
 }
 
 // TestLlmAgent_Hooks_ToolCallLifecycle verifies that tool hooks run around
@@ -1158,7 +1158,7 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			}
 			return nil
 		}},
-		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallOverride, error) {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("before-tool-%d-%d", call.Iteration, call.ToolIndex))
 			mu.Unlock()
@@ -1172,9 +1172,12 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 			mu.Lock()
 			order = append(order, fmt.Sprintf("after-tool-%d-%d", call.Iteration, call.ToolIndex))
 			mu.Unlock()
-			assert.Equal(t, "tool-result", result.Result.Content)
+			require.NotNil(t, result.Response)
+			outcome, ok := result.Response.Outcome.(*tool.Result)
+			require.True(t, ok)
+			assert.Equal(t, "tool-result", outcome.Content)
 			assert.NoError(t, result.Err)
-			assert.Equal(t, "tool-result", result.Event.Content.Content)
+			assert.Equal(t, "tool-result", result.Response.Text())
 			return nil
 		}},
 	}).(*LlmAgent)
@@ -1199,8 +1202,8 @@ func TestLlmAgent_Hooks_ToolCallLifecycle(t *testing.T) {
 func TestLlmAgent_ToolHandledFailureContinuesRun(t *testing.T) {
 	handled := &outcomeTool{
 		name: "lookup",
-		run: func(context.Context, tool.Call) (tool.Result, error) {
-			return tool.Result{Content: "record not found", IsError: true}, nil
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
+			return nil, tool.NewHandledError("record not found")
 		},
 	}
 	mock := &mockLLM{
@@ -1233,19 +1236,109 @@ func TestLlmAgent_ToolHandledFailureContinuesRun(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.Equal(t, 2, mock.callIdx)
 	assert.Equal(t, model.RoleTool, msgs[1].Role)
-	require.NotNil(t, msgs[1].ToolResult)
-	assert.True(t, msgs[1].ToolResult.IsError)
+	require.NotNil(t, msgs[1].ToolResponse)
+	_, ok := msgs[1].ToolResponse.Outcome.(*tool.HandledError)
+	assert.True(t, ok)
 	assert.Equal(t, "record not found", msgs[1].Content)
 	assert.NoError(t, captured.Err)
-	assert.True(t, captured.Result.IsError)
+	require.NotNil(t, captured.Response)
+	_, ok = captured.Response.Outcome.(*tool.HandledError)
+	assert.True(t, ok)
+}
+
+func TestLlmAgent_BeforeToolCallWrappedHandledErrorSkipsToolAndContinues(t *testing.T) {
+	var callCount atomic.Int64
+	hookTool := &hookAwareTool{name: "protected", result: "must not run", callCount: &callCount}
+	mock := &mockLLM{
+		name: "mock-before-tool-handled-error",
+		responses: []*model.LLMResponse{
+			{
+				Content: model.Content{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "protected", Arguments: json.RawMessage(`{}`)}},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{Content: model.Content{Role: model.RoleAssistant, Content: "denied"}, FinishReason: model.FinishReasonStop},
+		},
+	}
+	var captured ToolCallResult
+	a := New(Config{
+		Name:  "protected-agent",
+		Model: mock,
+		Tools: []tool.Tool{hookTool},
+		BeforeToolCalls: []BeforeToolCall{func(context.Context, *ToolCall) (*ToolCallOverride, error) {
+			return nil, fmt.Errorf("policy: %w", tool.NewHandledError("permission denied"))
+		}},
+		AfterToolCalls: []AfterToolCall{func(_ context.Context, _ *ToolCall, result *ToolCallResult) error {
+			captured = *result
+			return nil
+		}},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run protected tool"}})
+
+	require.NoError(t, err)
+	assert.Zero(t, callCount.Load())
+	require.Len(t, msgs, 3)
+	require.NotNil(t, msgs[1].ToolResponse)
+	failure, ok := msgs[1].ToolResponse.Outcome.(*tool.HandledError)
+	require.True(t, ok)
+	assert.Equal(t, "permission denied", failure.Content)
+	require.NotNil(t, captured.Response)
+	assert.NoError(t, captured.Err)
+}
+
+func TestLlmAgent_ToolNilResultWithoutErrorStopsRun(t *testing.T) {
+	nilResult := &outcomeTool{
+		name: "nil-result",
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
+			return nil, nil
+		},
+	}
+	mock := &mockLLM{
+		name: "mock-nil-tool-result",
+		responses: []*model.LLMResponse{{
+			Content: model.Content{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "tc-1", Name: "nil-result", Arguments: json.RawMessage(`{}`)}},
+			},
+			FinishReason: model.FinishReasonToolCalls,
+		}},
+	}
+	a := New(Config{Name: "nil-result-agent", Model: mock, Tools: []tool.Tool{nilResult}}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run"}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil result without error")
+	require.Len(t, msgs, 1)
+}
+
+func TestAsHandledToolError_RejectsContextAndJoinedErrors(t *testing.T) {
+	handled := tool.NewHandledError("safe")
+
+	got, ok := asHandledToolError(fmt.Errorf("wrapped: %w", handled))
+	require.True(t, ok)
+	assert.Same(t, handled, got)
+
+	for _, err := range []error{
+		context.Canceled,
+		context.DeadlineExceeded,
+		errors.Join(handled, errors.New("infrastructure failed")),
+	} {
+		got, ok := asHandledToolError(err)
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	}
 }
 
 func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 	toolErr := errors.New("database unavailable")
 	failing := &outcomeTool{
 		name: "lookup",
-		run: func(context.Context, tool.Call) (tool.Result, error) {
-			return tool.Result{Content: "sensitive partial result", IsError: true}, toolErr
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
+			return &tool.Result{Content: "sensitive partial result"}, toolErr
 		},
 	}
 	mock := &mockLLM{
@@ -1293,8 +1386,7 @@ func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
 	assert.Equal(t, 1, mock.callIdx)
-	assert.Empty(t, captured.Event)
-	assert.Empty(t, captured.Result)
+	assert.Nil(t, captured.Response)
 	require.ErrorIs(t, captured.Err, toolErr)
 	assert.True(t, secondHookCalled)
 
@@ -1303,7 +1395,7 @@ func TestLlmAgent_ToolExecutionErrorStopsRun(t *testing.T) {
 	assert.ErrorIs(t, toolEnd.Err, toolErr)
 	assert.ErrorIs(t, toolEnd.Err, hookErr)
 	assert.ErrorIs(t, toolEnd.Err, secondHookErr)
-	assert.False(t, toolEnd.IsError)
+	assert.Empty(t, toolEnd.ToolOutcome)
 	assert.Empty(t, toolEnd.EventRole)
 }
 
@@ -1340,10 +1432,10 @@ func TestLlmAgent_Hooks_BeforeToolCallErrorStopsRun(t *testing.T) {
 		Model: mock,
 		Tools: []tool.Tool{hookTool},
 		BeforeToolCalls: []BeforeToolCall{
-			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+			func(context.Context, *ToolCall) (*ToolCallOverride, error) {
 				return nil, hookErr
 			},
-			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+			func(context.Context, *ToolCall) (*ToolCallOverride, error) {
 				t.Fatal("hook after before error must not run")
 				return nil, nil
 			},
@@ -1395,10 +1487,13 @@ func TestLlmAgent_MissingTool_ReturnsHandledFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 	assert.NoError(t, captured.Err)
-	assert.True(t, captured.Result.IsError)
+	require.NotNil(t, captured.Response)
+	_, ok := captured.Response.Outcome.(*tool.HandledError)
+	assert.True(t, ok)
 	assert.Equal(t, model.RoleTool, msgs[1].Role)
-	require.NotNil(t, msgs[1].ToolResult)
-	assert.True(t, msgs[1].ToolResult.IsError)
+	require.NotNil(t, msgs[1].ToolResponse)
+	_, ok = msgs[1].ToolResponse.Outcome.(*tool.HandledError)
+	assert.True(t, ok)
 	assert.Equal(t, `llmagent: tool "missing-tool" not found`, msgs[1].Content)
 }
 
@@ -1452,7 +1547,7 @@ func TestLlmAgent_Hooks_BeforeLLMCall_Skip(t *testing.T) {
 }
 
 // TestLlmAgent_Hooks_BeforeToolCall_Skip verifies that returning a non-nil
-// *ToolCallResult from BeforeToolCall skips the actual tool execution and uses
+// *ToolCallOverride from BeforeToolCall skips the actual tool execution and uses
 // the returned result instead.
 func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 	var callCount atomic.Int64
@@ -1479,11 +1574,6 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		},
 	}
 
-	fakeToolMsg := model.Content{
-		Role:       model.RoleTool,
-		ToolCallID: "tc-1",
-		Content:    "injected-result",
-	}
 	var beforeCalls int
 	var afterCalled bool
 
@@ -1492,26 +1582,23 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 		Model: mock,
 		Tools: []tool.Tool{realTool},
 		BeforeToolCalls: []BeforeToolCall{
-			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+			func(context.Context, *ToolCall) (*ToolCallOverride, error) {
 				beforeCalls++
 				return nil, nil
 			},
-			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+			func(context.Context, *ToolCall) (*ToolCallOverride, error) {
 				beforeCalls++
-				return &ToolCallResult{
-					Event:  model.Event{Content: fakeToolMsg},
-					Result: tool.Result{Content: "injected-result"},
-				}, nil
+				return CompleteToolCall(&tool.Result{Content: "injected-result"}), nil
 			},
-			func(context.Context, *ToolCall) (*ToolCallResult, error) {
+			func(context.Context, *ToolCall) (*ToolCallOverride, error) {
 				t.Fatal("hook after skip result must not run")
 				return nil, nil
 			},
 		},
 		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
-			assert.Equal(t, "injected-result", result.Result.Content)
-			assert.Equal(t, "injected-result", result.Event.Content.Content)
+			require.NotNil(t, result.Response)
+			assert.Equal(t, "injected-result", result.Response.Text())
 			return nil
 		}},
 	}).(*LlmAgent)
@@ -1527,7 +1614,7 @@ func TestLlmAgent_Hooks_BeforeToolCall_Skip(t *testing.T) {
 	assert.Equal(t, "injected-result", msgs[1].Content)
 }
 
-func TestLlmAgent_Hooks_BeforeToolCall_SkipErrorStopsRun(t *testing.T) {
+func TestLlmAgent_Hooks_BeforeToolCall_EmptyOverrideStopsRun(t *testing.T) {
 	var callCount atomic.Int64
 	realTool := &hookAwareTool{
 		name:      "real-tool",
@@ -1547,31 +1634,27 @@ func TestLlmAgent_Hooks_BeforeToolCall_SkipErrorStopsRun(t *testing.T) {
 			{Content: model.Content{Role: model.RoleAssistant, Content: "must not run"}, FinishReason: model.FinishReasonStop},
 		},
 	}
-	skipErr := errors.New("blocked by policy")
 	var afterCalled bool
 	a := New(Config{
 		Name:  "skip-tool-error-agent",
 		Model: mock,
 		Tools: []tool.Tool{realTool},
-		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
-			return &ToolCallResult{
-				Event:  model.Event{Content: model.Content{Role: model.RoleTool, Content: "must be ignored"}},
-				Result: tool.Result{Content: "must be ignored", IsError: true},
-				Err:    skipErr,
-			}, nil
+		BeforeToolCalls: []BeforeToolCall{func(ctx context.Context, call *ToolCall) (*ToolCallOverride, error) {
+			return &ToolCallOverride{}, nil
 		}},
 		AfterToolCalls: []AfterToolCall{func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
 			afterCalled = true
-			require.ErrorIs(t, result.Err, skipErr)
-			assert.Empty(t, result.Event)
-			assert.Empty(t, result.Result)
+			require.Error(t, result.Err)
+			assert.Contains(t, result.Err.Error(), "override without an outcome")
+			assert.Nil(t, result.Response)
 			return nil
 		}},
 	}).(*LlmAgent)
 
 	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tool"}})
 
-	require.ErrorIs(t, err, skipErr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "override without an outcome")
 	assert.Equal(t, int64(0), callCount.Load())
 	assert.True(t, afterCalled)
 	assert.Equal(t, 1, mock.callIdx)
@@ -1661,10 +1744,10 @@ func (s *slowTool) Definition() tool.Definition {
 	return tool.Definition{Name: s.name, Description: "a slow tool for testing"}
 }
 
-func (s *slowTool) Run(_ context.Context, _ tool.Call) (tool.Result, error) {
+func (s *slowTool) Run(_ context.Context, _ tool.Call) (*tool.Result, error) {
 	s.callLog.Add(1)
 	time.Sleep(s.delay)
-	return tool.Result{Content: s.result}, nil
+	return &tool.Result{Content: s.result}, nil
 }
 
 // TestLlmAgent_ParallelToolExecution verifies that multiple tool calls issued
@@ -1737,24 +1820,81 @@ func TestLlmAgent_ParallelToolExecution(t *testing.T) {
 	t.Logf("elapsed=%v (2×delay=%v)", elapsed, 2*delay)
 }
 
+func TestLlmAgent_ParallelHandledFailureDoesNotCancelSibling(t *testing.T) {
+	release := make(chan struct{})
+	handled := &outcomeTool{
+		name: "handled",
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
+			return nil, tool.NewHandledError("not available")
+		},
+	}
+	sibling := &outcomeTool{
+		name: "sibling",
+		run: func(ctx context.Context, _ tool.Call) (*tool.Result, error) {
+			<-release
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return &tool.Result{Content: "completed"}, nil
+		},
+	}
+	mock := &mockLLM{
+		name: "mock-parallel-handled-failure",
+		responses: []*model.LLMResponse{
+			{
+				Content: model.Content{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-1", Name: "handled", Arguments: json.RawMessage(`{}`)},
+						{ID: "tc-2", Name: "sibling", Arguments: json.RawMessage(`{}`)},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+			{Content: model.Content{Role: model.RoleAssistant, Content: "done"}, FinishReason: model.FinishReasonStop},
+		},
+	}
+	var once sync.Once
+	a := New(Config{
+		Name:  "parallel-handled-agent",
+		Model: mock,
+		Tools: []tool.Tool{handled, sibling},
+		AfterToolCalls: []AfterToolCall{func(_ context.Context, _ *ToolCall, result *ToolCallResult) error {
+			if result.Response != nil {
+				if _, failed := result.Response.Outcome.(*tool.HandledError); failed {
+					once.Do(func() { close(release) })
+				}
+			}
+			return nil
+		}},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run both"}})
+
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, "not available", msgs[1].Content)
+	assert.Equal(t, "completed", msgs[2].Content)
+}
+
 func TestLlmAgent_ParallelToolErrorsPreferNonCancellationCause(t *testing.T) {
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
 	blocking := &outcomeTool{
 		name: "blocking",
-		run: func(ctx context.Context, _ tool.Call) (tool.Result, error) {
+		run: func(ctx context.Context, _ tool.Call) (*tool.Result, error) {
 			close(started)
 			<-ctx.Done()
 			close(cancelled)
-			return tool.Result{}, ctx.Err()
+			return nil, ctx.Err()
 		},
 	}
 	rootErr := errors.New("dependency failed")
 	failing := &outcomeTool{
 		name: "failing",
-		run: func(context.Context, tool.Call) (tool.Result, error) {
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
 			<-started
-			return tool.Result{}, rootErr
+			return nil, rootErr
 		},
 	}
 	mock := &mockLLM{
@@ -1793,18 +1933,18 @@ func TestLlmAgent_ParallelToolErrorCancelsBeforeAfterHook(t *testing.T) {
 	started := make(chan struct{})
 	blocking := &outcomeTool{
 		name: "blocking",
-		run: func(ctx context.Context, _ tool.Call) (tool.Result, error) {
+		run: func(ctx context.Context, _ tool.Call) (*tool.Result, error) {
 			close(started)
 			<-ctx.Done()
-			return tool.Result{}, ctx.Err()
+			return nil, ctx.Err()
 		},
 	}
 	rootErr := errors.New("dependency failed")
 	failing := &outcomeTool{
 		name: "failing",
-		run: func(context.Context, tool.Call) (tool.Result, error) {
+		run: func(context.Context, tool.Call) (*tool.Result, error) {
 			<-started
-			return tool.Result{}, rootErr
+			return nil, rootErr
 		},
 	}
 	mock := &mockLLM{
@@ -1855,9 +1995,9 @@ func (b *blockingTool) Definition() tool.Definition {
 	return tool.Definition{Name: b.name, Description: "a blocking tool for testing"}
 }
 
-func (b *blockingTool) Run(ctx context.Context, _ tool.Call) (tool.Result, error) {
+func (b *blockingTool) Run(ctx context.Context, _ tool.Call) (*tool.Result, error) {
 	<-ctx.Done()
-	return tool.Result{}, ctx.Err()
+	return nil, ctx.Err()
 }
 
 // TestLlmAgent_ToolTimeout_ExceedsDeadline verifies that when ToolTimeout is set

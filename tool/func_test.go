@@ -39,7 +39,7 @@ func TestNewFunc_Run_StructuredResult(t *testing.T) {
 		Arguments: json.RawMessage(`{"message":"hello"}`),
 	})
 	require.NoError(t, err)
-	assert.False(t, result.IsError)
+	require.NotNil(t, result)
 	assert.JSONEq(t, `{"echo":"hello"}`, string(result.StructuredContent))
 	assert.JSONEq(t, `{"echo":"hello"}`, result.Content)
 }
@@ -56,7 +56,7 @@ func TestNewFunc_Run_StringResultUsesPlainTextContent(t *testing.T) {
 		Arguments: json.RawMessage(`{"message":"hello"}`),
 	})
 	require.NoError(t, err)
-	assert.False(t, result.IsError)
+	require.NotNil(t, result)
 	assert.Equal(t, "hello", result.Content)
 	assert.JSONEq(t, `"hello"`, string(result.StructuredContent))
 }
@@ -79,11 +79,11 @@ func TestNewFunc_Run_HandlerErrorPropagates(t *testing.T) {
 	assert.Contains(t, runErr.Error(), `tool "fail": run handler`)
 }
 
-func TestNewFunc_Run_FuncErrorReturnsModelVisibleFailure(t *testing.T) {
+func TestNewFunc_Run_HandledErrorPropagates(t *testing.T) {
 	failing, err := tool.NewFunc(tool.Definition{Name: "fail"}, func(_ context.Context, input funcInput) (funcOutput, error) {
-		funcErr := tool.NewFuncError("not available")
-		funcErr.StructuredContent = json.RawMessage(`{"code":"not_available"}`)
-		return funcOutput{}, funcErr
+		handledErr := tool.NewHandledError("not available")
+		handledErr.StructuredContent = json.RawMessage(`{"code":"not_available"}`)
+		return funcOutput{}, handledErr
 	})
 	require.NoError(t, err)
 
@@ -93,10 +93,11 @@ func TestNewFunc_Run_FuncErrorReturnsModelVisibleFailure(t *testing.T) {
 		Arguments: json.RawMessage(`{"message":"hello"}`),
 	})
 
-	require.NoError(t, runErr)
-	assert.True(t, result.IsError)
-	assert.Equal(t, "not available", result.Content)
-	assert.JSONEq(t, `{"code":"not_available"}`, string(result.StructuredContent))
+	assert.Nil(t, result)
+	var handledErr *tool.HandledError
+	require.ErrorAs(t, runErr, &handledErr)
+	assert.Equal(t, "not available", handledErr.Content)
+	assert.JSONEq(t, `{"code":"not_available"}`, string(handledErr.StructuredContent))
 }
 
 func TestNewFunc_Run_InvalidArgumentsReturnModelVisibleFailure(t *testing.T) {
@@ -113,8 +114,9 @@ func TestNewFunc_Run_InvalidArgumentsReturnModelVisibleFailure(t *testing.T) {
 		Arguments: json.RawMessage(`{"message":`),
 	})
 
-	require.NoError(t, runErr)
+	assert.Nil(t, result)
 	assert.False(t, called)
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.Content, "parse arguments")
+	var handledErr *tool.HandledError
+	require.ErrorAs(t, runErr, &handledErr)
+	assert.Contains(t, handledErr.Content, "parse arguments")
 }

@@ -78,7 +78,7 @@ func (s *databaseSession) CreateEvent(ctx context.Context, ev *event.Event) erro
 		ev.Content,
 		ev.ReasoningContent,
 		ev.ToolCalls,
-		ev.ToolResult,
+		ev.ToolResponse,
 		ev.ToolCallID,
 		ev.FinishReason,
 		ev.Parts,

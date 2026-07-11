@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // Parts is a slice of ContentPart that serializes to/from JSON for database storage.
@@ -109,19 +110,21 @@ func (tl *ToolCalls) Scan(src any) error {
 	return json.Unmarshal([]byte(s), tl)
 }
 
-// ToolResult is a persisted tool result within a tool event.
-type ToolResult struct {
-	ToolCallID        string          `json:"tool_call_id"`
-	Name              string          `json:"name,omitempty"`
-	Content           string          `json:"content,omitempty"`
-	StructuredContent json.RawMessage `json:"structured_content,omitempty"`
-	IsError           bool            `json:"is_error,omitempty"`
+// ToolResponse is a persisted tool response within a tool event.
+type ToolResponse struct {
+	ToolCallID string             `json:"tool_call_id"`
+	Name       string             `json:"name,omitempty"`
+	Result     *tool.Result       `json:"result,omitempty"`
+	Error      *tool.HandledError `json:"error,omitempty"`
 }
 
-// Value implements driver.Valuer so ToolResult can be written as JSON.
-func (tr ToolResult) Value() (driver.Value, error) {
-	if tr.ToolCallID == "" && tr.Name == "" && tr.Content == "" && len(tr.StructuredContent) == 0 && !tr.IsError {
+// Value implements driver.Valuer so ToolResponse can be written as JSON.
+func (tr ToolResponse) Value() (driver.Value, error) {
+	if tr.ToolCallID == "" && tr.Name == "" && tr.Result == nil && tr.Error == nil {
 		return "", nil
+	}
+	if (tr.Result == nil) == (tr.Error == nil) {
+		return nil, fmt.Errorf("event: tool response must contain exactly one outcome")
 	}
 	b, err := json.Marshal(tr)
 	if err != nil {
@@ -130,10 +133,11 @@ func (tr ToolResult) Value() (driver.Value, error) {
 	return string(b), nil
 }
 
-// Scan implements sql.Scanner so ToolResult can be read from a JSON string.
-func (tr *ToolResult) Scan(src any) error {
+// Scan implements sql.Scanner so ToolResponse can be read from a JSON string.
+// It accepts the legacy flat shape containing is_error for history compatibility.
+func (tr *ToolResponse) Scan(src any) error {
 	if src == nil {
-		*tr = ToolResult{}
+		*tr = ToolResponse{}
 		return nil
 	}
 	var s string
@@ -143,13 +147,49 @@ func (tr *ToolResult) Scan(src any) error {
 	case []byte:
 		s = string(v)
 	default:
-		return fmt.Errorf("event: unsupported ToolResult source type: %T", src)
+		return fmt.Errorf("event: unsupported ToolResponse source type: %T", src)
 	}
 	if s == "" {
-		*tr = ToolResult{}
+		*tr = ToolResponse{}
 		return nil
 	}
-	return json.Unmarshal([]byte(s), tr)
+	var raw struct {
+		ToolCallID        string             `json:"tool_call_id"`
+		Name              string             `json:"name,omitempty"`
+		Result            *tool.Result       `json:"result,omitempty"`
+		Error             *tool.HandledError `json:"error,omitempty"`
+		Content           string             `json:"content,omitempty"`
+		StructuredContent json.RawMessage    `json:"structured_content,omitempty"`
+		IsError           bool               `json:"is_error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return err
+	}
+	if raw.Result != nil || raw.Error != nil {
+		if (raw.Result == nil) == (raw.Error == nil) {
+			return fmt.Errorf("event: tool response must contain exactly one outcome")
+		}
+		*tr = ToolResponse{ToolCallID: raw.ToolCallID, Name: raw.Name, Result: raw.Result, Error: raw.Error}
+		return nil
+	}
+	if raw.ToolCallID == "" && raw.Name == "" && raw.Content == "" && len(raw.StructuredContent) == 0 && !raw.IsError {
+		*tr = ToolResponse{}
+		return nil
+	}
+	if raw.IsError {
+		*tr = ToolResponse{
+			ToolCallID: raw.ToolCallID,
+			Name:       raw.Name,
+			Error:      &tool.HandledError{Content: raw.Content, StructuredContent: raw.StructuredContent},
+		}
+		return nil
+	}
+	*tr = ToolResponse{
+		ToolCallID: raw.ToolCallID,
+		Name:       raw.Name,
+		Result:     &tool.Result{Content: raw.Content, StructuredContent: raw.StructuredContent},
+	}
+	return nil
 }
 
 // UsageDetails serializes model.TokenUsageDetails to/from JSON for database storage.
@@ -218,7 +258,7 @@ type Event struct {
 	Parts            Parts        `json:"parts" db:"parts"`
 	ReasoningContent string       `json:"reasoning_content" db:"reasoning_text"`
 	ToolCalls        ToolCalls    `json:"tool_calls" db:"tool_calls"`
-	ToolResult       ToolResult   `json:"tool_result" db:"tool_result"`
+	ToolResponse     ToolResponse `json:"tool_response" db:"tool_result"`
 	ToolCallID       string       `json:"tool_call_id" db:"tool_call_id"`
 	FinishReason     string       `json:"finish_reason" db:"finish_reason"`
 	PromptTokens     int64        `json:"prompt_tokens" db:"prompt_tokens"`
@@ -270,18 +310,22 @@ func (e *Event) ToModel() model.Event {
 			Details:          usageDetails,
 		}
 	}
-	if e.ToolResult.ToolCallID != "" || e.ToolResult.Name != "" || e.ToolResult.Content != "" || len(e.ToolResult.StructuredContent) > 0 || e.ToolResult.IsError {
-		ev.Content.ToolResult = &model.ToolResult{
-			ToolCallID:        e.ToolResult.ToolCallID,
-			Name:              e.ToolResult.Name,
-			Content:           e.ToolResult.Content,
-			StructuredContent: e.ToolResult.StructuredContent,
-			IsError:           e.ToolResult.IsError,
+	if e.ToolResponse.Result != nil || e.ToolResponse.Error != nil {
+		var outcome tool.Outcome
+		if e.ToolResponse.Result != nil {
+			outcome = e.ToolResponse.Result.Clone()
+		} else {
+			outcome = e.ToolResponse.Error.Clone()
+		}
+		ev.Content.ToolResponse = &model.ToolResponse{
+			ToolCallID: e.ToolResponse.ToolCallID,
+			Name:       e.ToolResponse.Name,
+			Outcome:    outcome,
 		}
 	} else if ev.Content.Role == model.RoleTool && (e.ToolCallID != "" || e.Content != "") {
-		ev.Content.ToolResult = &model.ToolResult{
+		ev.Content.ToolResponse = &model.ToolResponse{
 			ToolCallID: e.ToolCallID,
-			Content:    e.Content,
+			Outcome:    &tool.Result{Content: e.Content},
 		}
 	}
 	return ev
@@ -299,23 +343,26 @@ func FromModel(e model.Event) *Event {
 			ThoughtSignature: tc.ThoughtSignature,
 		}
 	}
-	var toolResult ToolResult
+	var toolResponse ToolResponse
 	toolCallID := e.Content.ToolCallID
-	if e.Content.ToolResult != nil {
-		toolResult = ToolResult{
-			ToolCallID:        e.Content.ToolResult.ToolCallID,
-			Name:              e.Content.ToolResult.Name,
-			Content:           e.Content.ToolResult.Content,
-			StructuredContent: e.Content.ToolResult.StructuredContent,
-			IsError:           e.Content.ToolResult.IsError,
+	if e.Content.ToolResponse != nil {
+		toolResponse = ToolResponse{
+			ToolCallID: e.Content.ToolResponse.ToolCallID,
+			Name:       e.Content.ToolResponse.Name,
+		}
+		switch outcome := e.Content.ToolResponse.Outcome.(type) {
+		case *tool.Result:
+			toolResponse.Result = outcome.Clone()
+		case *tool.HandledError:
+			toolResponse.Error = outcome.Clone()
 		}
 		if toolCallID == "" {
-			toolCallID = e.Content.ToolResult.ToolCallID
+			toolCallID = e.Content.ToolResponse.ToolCallID
 		}
 	} else if e.Content.Role == model.RoleTool && (e.Content.ToolCallID != "" || e.Content.Content != "") {
-		toolResult = ToolResult{
+		toolResponse = ToolResponse{
 			ToolCallID: e.Content.ToolCallID,
-			Content:    e.Content.Content,
+			Result:     &tool.Result{Content: e.Content.Content},
 		}
 	}
 	ev := &Event{
@@ -328,7 +375,7 @@ func FromModel(e model.Event) *Event {
 		Parts:            Parts(e.Content.Parts),
 		ReasoningContent: e.Content.ReasoningContent,
 		ToolCalls:        toolCalls,
-		ToolResult:       toolResult,
+		ToolResponse:     toolResponse,
 		ToolCallID:       toolCallID,
 		FinishReason:     string(e.FinishReason),
 		CreatedAt:        e.CreatedAt,

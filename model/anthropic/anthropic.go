@@ -328,14 +328,14 @@ func convertMessages(msgs []model.Content) ([]goanthropic.MessageParam, []goanth
 			var blocks []goanthropic.ContentBlockParamUnion
 			for i < len(msgs) && msgs[i].Role == model.RoleTool {
 				tm := msgs[i]
-				result := tm.ToolResultValue()
+				response := tm.ToolResponseValue()
 				toolResult := goanthropic.ToolResultBlockParam{
-					ToolUseID: result.ToolCallID,
+					ToolUseID: response.ToolCallID,
 					Content: []goanthropic.ToolResultBlockParamContentUnion{
-						{OfText: &goanthropic.TextBlockParam{Text: result.Text()}},
+						{OfText: &goanthropic.TextBlockParam{Text: response.Text()}},
 					},
 				}
-				if result.IsError {
+				if _, failed := response.Outcome.(*tool.HandledError); failed {
 					toolResult.IsError = goanthropic.Bool(true)
 				}
 				blocks = append(blocks, goanthropic.ContentBlockParamUnion{

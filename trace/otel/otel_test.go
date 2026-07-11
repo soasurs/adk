@@ -79,14 +79,14 @@ func TestDefaultAttributes_IncludesZeroToolIndexForToolCalls(t *testing.T) {
 	assert.Contains(t, attrs, attribute.Int("adk.tool.index", 0))
 }
 
-func TestNewTracer_IsErrorSetsOTelStatus(t *testing.T) {
+func TestNewTracer_ToolFailureSetsOTelStatus(t *testing.T) {
 	provider := new(recordingOTelProvider)
 	tracer := NewTracer(WithTracerProvider(provider))
 
 	_, span := tracer.Start(t.Context(), adktrace.Event{Kind: adktrace.KindToolCall})
 	span.End(t.Context(), adktrace.Event{
-		Kind:    adktrace.KindToolCall,
-		IsError: true,
+		Kind:        adktrace.KindToolCall,
+		ToolOutcome: adktrace.ToolOutcomeFailure,
 	})
 
 	require.NotNil(t, provider.span)
