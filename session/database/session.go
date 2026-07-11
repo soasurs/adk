@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -113,16 +115,16 @@ func (s *databaseSession) ListEvents(ctx context.Context) ([]*event.Event, error
 	return events, nil
 }
 
-func (s *databaseSession) ListCompactedEvents(ctx context.Context) ([]*event.Event, error) {
+func (s *databaseSession) ListArchivedEvents(ctx context.Context) ([]*event.Event, error) {
 	events := make([]*event.Event, 0)
-	err := s.db.SelectContext(ctx, &events, s.q.listCompactedEvents, s.SessionID)
+	err := s.db.SelectContext(ctx, &events, s.q.listArchivedEvents, s.SessionID)
 	if err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
-func (s *databaseSession) CompactEvents(ctx context.Context, splitEventID int64, summaryEvent *event.Event) error {
+func (s *databaseSession) ArchiveEventsBefore(ctx context.Context, eventID int64) error {
 	now := time.Now()
 
 	tx, err := s.db.BeginTxx(ctx, nil)
@@ -131,39 +133,19 @@ func (s *databaseSession) CompactEvents(ctx context.Context, splitEventID int64,
 	}
 	defer tx.Rollback()
 
-	// Archive events before the split point. When splitEventID is 0, archive all.
-	if splitEventID > 0 {
-		_, err = tx.ExecContext(ctx, s.q.compactEventsBefore, now.UnixMilli(), s.SessionID, splitEventID)
+	if eventID != 0 {
+		var createdAt int64
+		err = tx.GetContext(ctx, &createdAt, s.q.getArchiveBoundary, s.SessionID, eventID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return &session.ArchiveBoundaryNotFoundError{EventID: eventID}
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, s.q.archiveEventsBefore, now.UnixMilli(), s.SessionID, createdAt, eventID)
 	} else {
-		_, err = tx.ExecContext(ctx, s.q.compactActiveEvents, now.UnixMilli(), s.SessionID)
+		_, err = tx.ExecContext(ctx, s.q.archiveActiveEvents, now.UnixMilli(), s.SessionID)
 	}
-	if err != nil {
-		return err
-	}
-
-	// Insert the summary as a new active event.
-	_, err = tx.ExecContext(
-		ctx,
-		s.q.createEvent,
-		summaryEvent.EventID,
-		s.SessionID,
-		summaryEvent.TurnID,
-		summaryEvent.Author,
-		summaryEvent.Role,
-		summaryEvent.Content,
-		summaryEvent.ReasoningContent,
-		summaryEvent.ToolCalls,
-		summaryEvent.ToolResult,
-		summaryEvent.ToolCallID,
-		summaryEvent.FinishReason,
-		summaryEvent.Parts,
-		summaryEvent.PromptTokens,
-		summaryEvent.CompletionTokens,
-		summaryEvent.TotalTokens,
-		summaryEvent.UsageDetails,
-		summaryEvent.CreatedAt,
-		summaryEvent.UpdatedAt,
-	)
 	if err != nil {
 		return err
 	}

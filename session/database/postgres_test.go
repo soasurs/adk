@@ -99,7 +99,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"SELECT version FROM "+f.prefix+"schema_migrations ORDER BY version",
 		)
 		require.NoError(t, err)
-		assert.Equal(t, []int{1, 2, 3, 4, 5}, versions)
+		assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, versions)
 	})
 
 	t.Run("creates expected column types", func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"total_tokens",
 			"created_at",
 			"updated_at",
-			"compacted_at",
+			"archived_at",
 			"deleted_at",
 		} {
 			assert.Equal(t, "bigint", columns[name], name)
@@ -530,18 +530,18 @@ func TestPostgres_DatabaseSession_GetEvents(t *testing.T) {
 		assert.Equal(t, []int64{1, 2, 3}, eventIDs(events))
 	})
 
-	t.Run("excludes deleted and compacted events", func(t *testing.T) {
+	t.Run("excludes deleted and archived events", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, "session-1")
 		for id := int64(1); id <= 4; id++ {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
 		require.NoError(t, sess.DeleteEvent(t.Context(), 2))
-		require.NoError(t, sess.CompactEvents(t.Context(), 3, postgresEvent(10, "summary")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 3))
 
 		events, err := sess.GetEvents(t.Context(), 10, 0)
 		require.NoError(t, err)
-		assert.Equal(t, []int64{3, 4, 10}, eventIDs(events))
+		assert.Equal(t, []int64{3, 4}, eventIDs(events))
 	})
 
 	t.Run("isolates sessions", func(t *testing.T) {
@@ -584,7 +584,7 @@ func TestPostgres_DatabaseSession_ListEvents(t *testing.T) {
 	})
 }
 
-func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
+func TestPostgres_DatabaseSession_ArchiveEventsBefore(t *testing.T) {
 	t.Run("archives events before the split point", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, "session-1")
@@ -592,15 +592,15 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 			require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(id, "event")))
 		}
 
-		require.NoError(t, sess.CompactEvents(t.Context(), 3, postgresEvent(10, "summary")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 3))
 
 		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, []int64{3, 4, 10}, eventIDs(active))
+		assert.Equal(t, []int64{3, 4}, eventIDs(active))
 
-		compacted, err := sess.(*databaseSession).ListCompactedEvents(t.Context())
+		archived, err := sess.ListArchivedEvents(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, []int64{1, 2}, eventIDs(compacted))
+		assert.Equal(t, []int64{1, 2}, eventIDs(archived))
 	})
 
 	t.Run("archives all events when split id is zero", func(t *testing.T) {
@@ -609,45 +609,49 @@ func TestPostgres_DatabaseSession_CompactEvents(t *testing.T) {
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
 
-		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(10, "summary")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 0))
 
 		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, []int64{10}, eventIDs(active))
+		assert.Empty(t, active)
 	})
 
-	t.Run("inserts a summary into an empty session", func(t *testing.T) {
+	t.Run("is a no-op for an empty session", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, "session-1")
 
-		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(10, "summary")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 0))
 
 		active, err := sess.ListEvents(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, []int64{10}, eventIDs(active))
+		assert.Empty(t, active)
 	})
 
-	t.Run("supports repeated compaction", func(t *testing.T) {
-		f := newPostgresFixture(t)
-		sess := f.createSession(t, "session-1")
-		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
-		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(10, "summary one")))
-		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
-		require.NoError(t, sess.CompactEvents(t.Context(), 0, postgresEvent(20, "summary two")))
-
-		active, err := sess.ListEvents(t.Context())
-		require.NoError(t, err)
-		assert.Equal(t, []int64{20}, eventIDs(active))
-	})
-
-	t.Run("rolls back archival when summary insertion fails", func(t *testing.T) {
+	t.Run("supports repeated archival", func(t *testing.T) {
 		f := newPostgresFixture(t)
 		sess := f.createSession(t, "session-1")
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 0))
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
+		require.NoError(t, sess.ArchiveEventsBefore(t.Context(), 0))
+
+		active, err := sess.ListEvents(t.Context())
+		require.NoError(t, err)
+		assert.Empty(t, active)
+
+		archived, err := sess.ListArchivedEvents(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, []int64{1, 2}, eventIDs(archived))
+	})
+
+	t.Run("rejects a missing boundary without archiving", func(t *testing.T) {
+		f := newPostgresFixture(t)
+		sess := f.createSession(t, "session-1")
+		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(1, "first")))
 		require.NoError(t, sess.CreateEvent(t.Context(), postgresEvent(2, "second")))
 
-		err := sess.CompactEvents(t.Context(), 0, postgresEvent(2, "duplicate summary id"))
-		require.Error(t, err)
+		err := sess.ArchiveEventsBefore(t.Context(), 99)
+		require.ErrorIs(t, err, session.ErrArchiveBoundaryNotFound)
 
 		active, listErr := sess.ListEvents(t.Context())
 		require.NoError(t, listErr)

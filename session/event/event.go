@@ -227,10 +227,10 @@ type Event struct {
 	UsageDetails     UsageDetails `json:"usage_details" db:"usage_details"`
 	CreatedAt        int64        `json:"created_at" db:"created_at"`
 	UpdatedAt        int64        `json:"updated_at" db:"updated_at"`
-	// CompactedAt is set when the event has been archived by a CompactEvents call.
-	// A non-zero value means the event is compacted and no longer part of the active history.
-	CompactedAt int64 `json:"compacted_at" db:"compacted_at"`
-	DeletedAt   int64 `json:"deleted_at" db:"deleted_at"`
+	// ArchivedAt is set when the event has been archived. A non-zero value means
+	// the event is no longer part of the active history.
+	ArchivedAt int64 `json:"archived_at" db:"archived_at"`
+	DeletedAt  int64 `json:"deleted_at" db:"deleted_at"`
 }
 
 // ToModel converts a persisted Event to a model.Event.

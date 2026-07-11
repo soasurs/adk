@@ -50,6 +50,10 @@ var migrations = []migration{
 		version: 5,
 		up:      migrationV5SQL,
 	},
+	{
+		version: 6,
+		up:      migrationV6SQL,
+	},
 }
 
 // InitSchema creates or updates the necessary tables and indexes for the

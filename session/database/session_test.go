@@ -167,7 +167,11 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	var versions []int
 	err = db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version")
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 3, 4, 5}, versions)
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, versions)
+	var eventColumnNames []string
+	require.NoError(t, db.SelectContext(ctx, &eventColumnNames, "SELECT name FROM pragma_table_info('events')"))
+	assert.Contains(t, eventColumnNames, "archived_at")
+	assert.NotContains(t, eventColumnNames, "compacted_at")
 
 	service, err := NewDatabaseSessionService(db)
 	require.NoError(t, err)
@@ -364,7 +368,7 @@ func TestSQLite_DatabaseSession_ToolCallThoughtSignature_RoundTrip(t *testing.T)
 	assert.Equal(t, ev.ToolCalls[0], evs[0].ToolCalls[0])
 }
 
-func TestSQLite_DatabaseSession_CompactEvents(t *testing.T) {
+func TestSQLite_DatabaseSession_ArchiveEventsBefore(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
@@ -384,24 +388,22 @@ func TestSQLite_DatabaseSession_CompactEvents(t *testing.T) {
 	require.NoError(t, session.CreateEvent(ctx, ev3))
 	require.NoError(t, session.CreateEvent(ctx, ev4))
 
-	summaryEvent := newTestEvent(100, "summary")
-	summaryEvent.Role = "system"
-
-	// Archive ev1 and ev2; keep ev3 and ev4 as structured events.
-	err = session.CompactEvents(ctx, 3, summaryEvent)
+	// Archive ev1 and ev2; keep ev3 and ev4 active.
+	err = session.ArchiveEventsBefore(ctx, 3)
 	assert.NoError(t, err)
 
-	// Active history: kept events + summary (ordered by created_at ASC).
 	evs, err := session.ListEvents(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, evs, 3)
+	assert.Len(t, evs, 2)
 	assert.Equal(t, int64(3), evs[0].EventID)
 	assert.Equal(t, int64(4), evs[1].EventID)
-	assert.Equal(t, int64(100), evs[2].EventID)
 
+	archived, err := session.ListArchivedEvents(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{1, 2}, []int64{archived[0].EventID, archived[1].EventID})
 }
 
-func TestSQLite_DatabaseSession_CompactEvents_ArchiveAll(t *testing.T) {
+func TestSQLite_DatabaseSession_ArchiveEventsBefore_ArchiveAll(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
@@ -414,19 +416,16 @@ func TestSQLite_DatabaseSession_CompactEvents_ArchiveAll(t *testing.T) {
 	require.NoError(t, session.CreateEvent(ctx, newTestEvent(1, "hello")))
 	require.NoError(t, session.CreateEvent(ctx, newTestEvent(2, "hi")))
 
-	summaryEvent := newTestEvent(100, "summary")
-
-	// splitEventID=0 archives all.
-	err = session.CompactEvents(ctx, 0, summaryEvent)
+	// eventID=0 archives all.
+	err = session.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
 	evs, err := session.ListEvents(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, evs, 1)
-	assert.Equal(t, int64(100), evs[0].EventID)
+	assert.Empty(t, evs)
 }
 
-func TestSQLite_DatabaseSession_CompactEvents_Empty(t *testing.T) {
+func TestSQLite_DatabaseSession_ArchiveEventsBefore_Empty(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
@@ -436,17 +435,12 @@ func TestSQLite_DatabaseSession_CompactEvents_Empty(t *testing.T) {
 	session, err := NewDatabaseSession(ctx, db, newTestSessionRequest(sessionID))
 	require.NoError(t, err)
 
-	summaryEvent := newTestEvent(100, "summary")
-
-	// Compacting an empty session (splitEventID=0) just inserts the summary.
-	err = session.CompactEvents(ctx, 0, summaryEvent)
+	err = session.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
 	evs, err := session.GetEvents(ctx, 10, 0)
 	assert.NoError(t, err)
-	assert.Len(t, evs, 1)
-	assert.Equal(t, int64(100), evs[0].EventID)
-
+	assert.Empty(t, evs)
 }
 
 func TestSQLite_DatabaseSession_ListEvents(t *testing.T) {
@@ -494,7 +488,7 @@ func TestSQLite_DatabaseSession_IsolatesEventsBySession(t *testing.T) {
 	assert.Equal(t, "session two", evs2[0].Content)
 }
 
-func TestSQLite_DatabaseSession_CompactEvents_MultipleRounds(t *testing.T) {
+func TestSQLite_DatabaseSession_ArchiveEventsBefore_MultipleRounds(t *testing.T) {
 	db := setupSQLiteTestDB(t)
 	defer db.Close()
 
@@ -507,21 +501,64 @@ func TestSQLite_DatabaseSession_CompactEvents_MultipleRounds(t *testing.T) {
 	require.NoError(t, sess.CreateEvent(ctx, newTestEvent(1, "a")))
 	require.NoError(t, sess.CreateEvent(ctx, newTestEvent(2, "b")))
 
-	// First compaction: archive all, insert summary1.
-	err = sess.CompactEvents(ctx, 0, newTestEvent(10, "summary1"))
+	err = sess.ArchiveEventsBefore(ctx, 0)
 	require.NoError(t, err)
 
 	require.NoError(t, sess.CreateEvent(ctx, newTestEvent(3, "c")))
 
-	// Second compaction: archive summary1+c, insert summary2.
-	err = sess.CompactEvents(ctx, 0, newTestEvent(20, "summary2"))
+	err = sess.ArchiveEventsBefore(ctx, 0)
 	require.NoError(t, err)
 
-	// Active: only summary2.
 	active, err := sess.ListEvents(ctx)
 	assert.NoError(t, err)
+	assert.Empty(t, active)
+
+	archived, err := sess.ListArchivedEvents(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, archived, 3)
+}
+
+func TestSQLite_DatabaseSession_ArchiveEventsBefore_MissingBoundary(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
+	require.NoError(t, err)
+	require.NoError(t, sess.CreateEvent(ctx, newTestEvent(1, "a")))
+
+	err = sess.ArchiveEventsBefore(ctx, 99)
+
+	assert.ErrorIs(t, err, adksession.ErrArchiveBoundaryNotFound)
+	active, listErr := sess.ListEvents(ctx)
+	require.NoError(t, listErr)
 	assert.Len(t, active, 1)
-	assert.Equal(t, int64(20), active[0].EventID)
+}
+
+func TestSQLite_DatabaseSession_ArchiveEventsBefore_UsesConversationOrder(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	sess, err := NewDatabaseSession(ctx, db, newTestSessionRequest("session-1"))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		id        int64
+		createdAt int64
+	}{{id: 100, createdAt: 1}, {id: 1, createdAt: 2}, {id: 50, createdAt: 3}} {
+		ev := newTestEvent(tc.id, "event")
+		ev.CreatedAt = tc.createdAt
+		require.NoError(t, sess.CreateEvent(ctx, ev))
+	}
+
+	require.NoError(t, sess.ArchiveEventsBefore(ctx, 1))
+	active, err := sess.ListEvents(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{1, 50}, []int64{active[0].EventID, active[1].EventID})
+	archived, err := sess.ListArchivedEvents(ctx)
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	assert.Equal(t, int64(100), archived[0].EventID)
 }
 
 func TestSQLite_DatabaseSession_GetSessionID(t *testing.T) {

@@ -37,8 +37,11 @@ type Config struct {
 	// lookup failures and terminal tool execution errors. Returning an error
 	// aborts execution.
 	AfterToolCall func(ctx context.Context, call *ToolCall, result *ToolCallResult) error
-	// Instruction is prepended as a system message on every Run call.
+	// Instruction is included in the leading system message for every LLM call.
 	Instruction string
+	// InstructionProvider builds an ephemeral instruction before each LLM call.
+	// Its output affects only the current request and is never persisted.
+	InstructionProvider InstructionProvider
 	// GenerateConfig controls optional LLM generation parameters.
 	GenerateConfig *model.GenerateConfig
 	// MaxIterations limits the number of LLM calls in the tool-call loop.
@@ -145,50 +148,18 @@ func (a *LlmAgent) Description() string {
 // yielded as complete events. Iteration ends when the LLM stops calling tools.
 func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
-		// Find the last system message in the session history, which is the most
-		// recent compaction summary. Earlier system messages, if any, have already
-		// been subsumed by a subsequent compaction and should be dropped.
-		lastSummaryIdx := -1
-		for i := len(events) - 1; i >= 0; i-- {
-			if events[i].Content.Role == model.RoleSystem {
-				lastSummaryIdx = i
-				break
-			}
-		}
-
-		// Build the leading system message by merging the agent instruction with
-		// the compaction summary (if present).
-		systemParts := make([]string, 0, 2)
-		if a.config.Instruction != "" {
-			systemParts = append(systemParts, a.config.Instruction)
-		}
-		if lastSummaryIdx >= 0 {
-			systemParts = append(systemParts, events[lastSummaryIdx].Content.Content)
-		}
-
-		history := make([]model.Content, 0, len(events)+1)
-		if len(systemParts) > 0 {
-			history = append(history, model.Content{
-				Role:    model.RoleSystem,
-				Content: strings.Join(systemParts, "\n\n"),
-			})
-		}
-
 		// Append all non-system event content, preserving conversation order.
-		// All session-sourced system events are dropped here: the last one has
-		// been merged above, and earlier ones are stale compaction artifacts.
+		// System instructions are owned by Config.Instruction and
+		// InstructionProvider rather than the durable conversation ledger.
+		conversation := make([]model.Content, 0, len(events))
 		for _, event := range events {
 			if event.Content.Role == model.RoleSystem {
 				continue
 			}
-			history = append(history, event.Content)
+			conversation = append(conversation, cloneContent(event.Content))
 		}
 
-		req := &model.LLMRequest{
-			Model:    a.config.Model.Name(),
-			Contents: history,
-			Tools:    a.config.Tools,
-		}
+		modelName := a.config.Model.Name()
 
 		iteration := 0
 		for {
@@ -196,14 +167,14 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			iterationCtx, iterationSpan := adktrace.Start(ctx, adktrace.Event{
 				Kind:      adktrace.KindLLMIteration,
 				AgentName: a.Name(),
-				Model:     req.Model,
+				Model:     modelName,
 				Iteration: iteration,
 				Stream:    a.config.Stream,
 			})
 			iterationEnd := adktrace.Event{
 				Kind:      adktrace.KindLLMIteration,
 				AgentName: a.Name(),
-				Model:     req.Model,
+				Model:     modelName,
 				Iteration: iteration,
 				Stream:    a.config.Stream,
 			}
@@ -213,6 +184,43 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				iterationSpan.End(iterationCtx, iterationEnd)
 				yield(nil, err)
 				return
+			}
+
+			dynamicInstruction := ""
+			if a.config.InstructionProvider != nil {
+				var err error
+				dynamicInstruction, err = a.config.InstructionProvider(iterationCtx, InstructionInput{
+					AgentName:    a.Name(),
+					Iteration:    iteration,
+					Conversation: cloneContents(conversation),
+				})
+				if err != nil {
+					err = fmt.Errorf("llmagent: build instruction: %w", err)
+					iterationEnd.Err = err
+					iterationSpan.End(iterationCtx, iterationEnd)
+					yield(nil, err)
+					return
+				}
+			}
+
+			systemParts := make([]string, 0, 2)
+			for _, instruction := range []string{a.config.Instruction, dynamicInstruction} {
+				if instruction != "" {
+					systemParts = append(systemParts, instruction)
+				}
+			}
+			requestContents := make([]model.Content, 0, len(conversation)+1)
+			if len(systemParts) > 0 {
+				requestContents = append(requestContents, model.Content{
+					Role:    model.RoleSystem,
+					Content: strings.Join(systemParts, "\n\n"),
+				})
+			}
+			requestContents = append(requestContents, cloneContents(conversation)...)
+			req := &model.LLMRequest{
+				Model:    modelName,
+				Contents: requestContents,
+				Tools:    append([]tool.Tool(nil), a.config.Tools...),
 			}
 			call := &LLMCall{
 				AgentName:      a.Name(),
@@ -224,7 +232,7 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			llmCtx, llmSpan := adktrace.Start(iterationCtx, adktrace.Event{
 				Kind:      adktrace.KindLLMCall,
 				AgentName: a.Name(),
-				Model:     req.Model,
+				Model:     modelName,
 				Iteration: iteration,
 				Stream:    a.config.Stream,
 			})
@@ -333,15 +341,13 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
+			conversation = append(conversation, cloneContent(completeResp.Content))
 
 			// No tool calls — generation is complete.
 			if completeResp.FinishReason != model.FinishReasonToolCalls {
 				iterationSpan.End(iterationCtx, iterationEnd)
 				return
 			}
-
-			// Append the assistant content before executing tools.
-			req.Contents = append(req.Contents, completeResp.Content)
 
 			// Execute all tool calls in parallel, preserving original order.
 			toolCtx, cancelTools := context.WithCancel(iterationCtx)
@@ -372,12 +378,13 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 			}
 
 			for _, toolEvent := range toolEvents {
+				toolContent := cloneContent(toolEvent.Content)
 				if !yield(&toolEvent, nil) {
 					iterationEnd.StoppedEarly = true
 					iterationSpan.End(iterationCtx, iterationEnd)
 					return
 				}
-				req.Contents = append(req.Contents, toolEvent.Content)
+				conversation = append(conversation, toolContent)
 			}
 			iterationSpan.End(iterationCtx, iterationEnd)
 		}

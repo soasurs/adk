@@ -33,7 +33,7 @@ const eventColumns = `
 	usage_details,
 	created_at,
 	updated_at,
-	compacted_at,
+	archived_at,
 	deleted_at
 `
 
@@ -46,9 +46,10 @@ type queries struct {
 	deleteEvent         string
 	getEvents           string
 	listEvents          string
-	listCompactedEvents string
-	compactActiveEvents string
-	compactEventsBefore string
+	listArchivedEvents  string
+	getArchiveBoundary  string
+	archiveActiveEvents string
+	archiveEventsBefore string
 }
 
 // buildQueries constructs SQL expressions using the provided table names.
@@ -98,7 +99,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 				usage_details,
 				created_at,
 				updated_at,
-				compacted_at,
+				archived_at,
 				deleted_at
 			)
 			VALUES (
@@ -119,7 +120,7 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
-				AND compacted_at = 0
+				AND archived_at = 0
 			ORDER BY created_at ASC, event_id ASC
 			LIMIT $2 OFFSET $3
 		`,
@@ -128,31 +129,39 @@ func buildQueries(sessionsTable, eventsTable string) *queries {
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
 				AND deleted_at = 0
-				AND compacted_at = 0
+				AND archived_at = 0
 			ORDER BY created_at ASC, event_id ASC
 		`,
-		listCompactedEvents: `
+		listArchivedEvents: `
 			SELECT ` + eventColumns + `
 			FROM ` + eventsTable + `
 			WHERE session_id = $1
-				AND compacted_at > 0
+				AND archived_at > 0
 				AND deleted_at = 0
 			ORDER BY created_at ASC, event_id ASC
 		`,
-		compactActiveEvents: `
-			UPDATE ` + eventsTable + `
-			SET compacted_at = $1
-			WHERE session_id = $2
+		getArchiveBoundary: `
+			SELECT created_at
+			FROM ` + eventsTable + `
+			WHERE session_id = $1
+				AND event_id = $2
 				AND deleted_at = 0
-				AND compacted_at = 0
+				AND archived_at = 0
 		`,
-		compactEventsBefore: `
+		archiveActiveEvents: `
 			UPDATE ` + eventsTable + `
-			SET compacted_at = $1
+			SET archived_at = $1
 			WHERE session_id = $2
 				AND deleted_at = 0
-				AND compacted_at = 0
-				AND event_id < $3
+				AND archived_at = 0
+		`,
+		archiveEventsBefore: `
+			UPDATE ` + eventsTable + `
+			SET archived_at = $1
+			WHERE session_id = $2
+				AND deleted_at = 0
+				AND archived_at = 0
+				AND (created_at < $3 OR (created_at = $3 AND event_id < $4))
 		`,
 	}
 }
@@ -279,6 +288,15 @@ func migrationV5SQL(t migrationTables) []string {
 				deleted_at,
 				session_id
 			)
+		`,
+	}
+}
+
+func migrationV6SQL(t migrationTables) []string {
+	return []string{
+		`
+			ALTER TABLE ` + t.events + `
+			RENAME COLUMN compacted_at TO archived_at
 		`,
 	}
 }

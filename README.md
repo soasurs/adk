@@ -50,7 +50,6 @@ go get github.com/soasurs/adk
 | `session/event` | Persisted event representation |
 | `session/memory` | In-memory session backend |
 | `session/database` | SQL database session backend for SQLite and PostgreSQL |
-| `session/compaction` | Reference config for manual compaction |
 | `tool` | Tool interface, structured calls/results, and typed function helpers |
 | `tool/builtin` | Built-in tools |
 | `tool/mcp` | MCP tool bridge |
@@ -188,6 +187,13 @@ missing, `Run` returns `runner.ErrToolExecutionUnknown` (with details in
 `runner.ToolExecutionUnknownError`), leaves the session unchanged, and does not
 invoke the agent. The runner does not automatically retry or synthesize a
 result because the external side effect may already have happened.
+
+### Dynamic system instructions
+
+`llmagent.InstructionProvider` builds an ephemeral system instruction before
+each LLM invocation. Its output affects only the current request and is never
+persisted. See [Dynamic System Instructions](docs/dynamic-instruction.md) for
+the API contract, lifecycle, cache considerations, and examples.
 
 ### `model.LLM`
 
@@ -422,28 +428,25 @@ page, _ := sess.GetEvents(ctx, 50, 0)
 _ = sess.DeleteEvent(ctx, events[0].EventID)
 ```
 
-## Manual Compaction
+## Event Archival
 
-ADK does not automatically summarize or compact history. Applications decide
-when to summarize old events and then persist that state with `CompactEvents`.
+ADK can archive old session events, but it does not summarize them or decide
+when archival should happen. Applications own any summary generation, storage,
+and injection policy.
 
 ```go
 events, _ := sess.ListEvents(ctx)
 
-splitID := events[4].EventID // first event to keep
-summary := &event.Event{
-    EventID:   nextID(),
-    Author:    "compactor",
-    Role:      string(model.RoleSystem),
-    Content:   "Summary of earlier conversation...",
-    CreatedAt: time.Now().UnixMilli(),
-    UpdatedAt: time.Now().UnixMilli(),
-}
+boundaryEventID := events[4].EventID // first event to keep
+_ = sess.ArchiveEventsBefore(ctx, boundaryEventID)
 
-_ = sess.CompactEvents(ctx, splitID, summary)
+archived, _ := sess.ListArchivedEvents(ctx)
 ```
 
-Partial events are never persisted and therefore never need compaction.
+Passing zero archives all active events. A non-zero boundary must identify an
+active event and remains active itself. Archival never creates or deletes
+events. Applications should coordinate archival with concurrent runs. Partial
+events are never persisted and therefore never need archival.
 
 ## Agent Composition
 
