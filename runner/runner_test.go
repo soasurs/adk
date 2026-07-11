@@ -600,8 +600,11 @@ func (s *errSession) GetEvents(_ context.Context, _, _ int64) ([]*event.Event, e
 func (s *errSession) ListEvents(_ context.Context) ([]*event.Event, error) {
 	return nil, errors.New("errSession")
 }
+func (s *errSession) ListArchivedEvents(_ context.Context) ([]*event.Event, error) {
+	return nil, errors.New("errSession")
+}
 func (s *errSession) DeleteEvent(_ context.Context, _ int64) error { return errors.New("errSession") }
-func (s *errSession) CompactEvents(_ context.Context, _ int64, _ *event.Event) error {
+func (s *errSession) ArchiveEventsBefore(_ context.Context, _ int64) error {
 	return errors.New("errSession")
 }
 
@@ -615,10 +618,9 @@ func (s *recordingScopedLockService) LockRun(_ context.Context, key session.RunL
 	return func() {}, nil
 }
 
-// TestRunner_Run_WithCompaction verifies that compaction of memory session works
-// correctly: after CompactEvents, subsequent runner.Run calls receive only
-// the kept messages plus the summary, not the archived messages.
-func TestRunner_Run_WithCompaction(t *testing.T) {
+// TestRunner_Run_WithArchivedHistory verifies that archived events are omitted
+// from subsequent Runner.Run calls.
+func TestRunner_Run_WithArchivedHistory(t *testing.T) {
 	// Create an agent that always responds with "ok" and includes usage data.
 	agentWithUsage := &mockAgent{
 		name:        "agent-with-usage",
@@ -657,41 +659,30 @@ func TestRunner_Run_WithCompaction(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Check message count before compaction.
+	// Check event count before archival.
 	sess, err := svc.GetSession(ctx, sessionID)
 	require.NoError(t, err)
 	msgsBefore, err := sess.ListEvents(ctx)
 	require.NoError(t, err)
 	// 4 turns × (user + assistant) = 8 messages.
-	assert.Equal(t, 8, len(msgsBefore), "expected 8 messages before compaction")
+	assert.Equal(t, 8, len(msgsBefore), "expected 8 events before archival")
 
-	// Compact: archive first 2 rounds (4 messages), keep last 2 rounds (4 messages).
-	// Find the splitEventID: the 5th message (first message of the 3rd round).
-	splitEventID := msgsBefore[4].EventID
-	summaryMsg := &event.Event{
-		EventID:   99999,
-		Role:      "system",
-		Content:   "summary of rounds 1-2",
-		CreatedAt: msgsBefore[0].CreatedAt,
-		UpdatedAt: msgsBefore[0].UpdatedAt,
-	}
-
-	err = sess.CompactEvents(ctx, splitEventID, summaryMsg)
+	// Archive the first 2 rounds and keep the last 2 rounds active.
+	boundaryEventID := msgsBefore[4].EventID
+	err = sess.ArchiveEventsBefore(ctx, boundaryEventID)
 	require.NoError(t, err)
 
-	// Check message count after compaction.
+	// Only the four kept events remain active.
 	msgsAfter, err := sess.ListEvents(ctx)
 	require.NoError(t, err)
-	// kept (4) + summary (1) = 5 messages.
-	assert.Equal(t, 5, len(msgsAfter), "expected 5 messages after compaction")
+	assert.Equal(t, 4, len(msgsAfter), "expected 4 active events after archival")
 
-	// Run one more turn — agent should receive only the kept + summary messages.
-	_, err = collectRun(t, r, sessionID, model.Content{Content: "after compaction"})
+	// Run one more turn — the agent receives only kept events plus the new user event.
+	_, err = collectRun(t, r, sessionID, model.Content{Content: "after archival"})
 	require.NoError(t, err)
 
-	// Agent's captured messages should be: 5 (kept + summary) + 1 (new user) = 6.
-	assert.Equal(t, 6, len(agentWithUsage.capturedMessages),
-		"agent should receive kept messages + summary + new user input")
+	assert.Equal(t, 5, len(agentWithUsage.capturedMessages),
+		"agent should receive kept events plus new user input")
 }
 
 // TestRunner_Run_SessionNotFound verifies that Run returns a descriptive error

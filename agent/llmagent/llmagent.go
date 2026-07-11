@@ -148,26 +148,9 @@ func (a *LlmAgent) Description() string {
 // yielded as complete events. Iteration ends when the LLM stops calling tools.
 func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*model.Event, error] {
 	return func(yield func(*model.Event, error) bool) {
-		// Find the last system message in the session history, which is the most
-		// recent compaction summary. Earlier system messages, if any, have already
-		// been subsumed by a subsequent compaction and should be dropped.
-		lastSummaryIdx := -1
-		for i := len(events) - 1; i >= 0; i-- {
-			if events[i].Content.Role == model.RoleSystem {
-				lastSummaryIdx = i
-				break
-			}
-		}
-
-		latestSummary := ""
-		if lastSummaryIdx >= 0 {
-			latestSummary = events[lastSummaryIdx].Content.Content
-		}
-
 		// Append all non-system event content, preserving conversation order.
-		// All session-sourced system events are dropped here: the last one has
-		// been retained as latestSummary, and earlier ones are stale compaction
-		// artifacts.
+		// System instructions are owned by Config.Instruction and
+		// InstructionProvider rather than the durable conversation ledger.
 		conversation := make([]model.Content, 0, len(events))
 		for _, event := range events {
 			if event.Content.Role == model.RoleSystem {
@@ -220,8 +203,8 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				}
 			}
 
-			systemParts := make([]string, 0, 3)
-			for _, instruction := range []string{a.config.Instruction, dynamicInstruction, latestSummary} {
+			systemParts := make([]string, 0, 2)
+			for _, instruction := range []string{a.config.Instruction, dynamicInstruction} {
 				if instruction != "" {
 					systemParts = append(systemParts, instruction)
 				}

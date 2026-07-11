@@ -141,7 +141,7 @@ func TestMemorySession_GetEvents_StableOrder(t *testing.T) {
 	})
 }
 
-func TestMemorySession_CompactEvents(t *testing.T) {
+func TestMemorySession_ArchiveEventsBefore(t *testing.T) {
 	sessionID := "session-1"
 
 	session := NewMemorySession(newMemorySessionRequest(sessionID))
@@ -157,22 +157,23 @@ func TestMemorySession_CompactEvents(t *testing.T) {
 	session.CreateEvent(ctx, msg3)
 	session.CreateEvent(ctx, msg4)
 
-	summaryMsg := newTestMessage(100, "summary")
-
-	// Archive msg1 and msg2; keep msg3 and msg4 as structured messages.
-	err := session.CompactEvents(ctx, 3, summaryMsg)
+	// Archive msg1 and msg2; keep msg3 and msg4 active.
+	err := session.ArchiveEventsBefore(ctx, 3)
 	assert.NoError(t, err)
+	assert.NoError(t, session.ArchiveEventsBefore(ctx, 3), "archival should be idempotent")
 
-	// Active history: kept messages + summary appended.
 	msgs, err := session.ListEvents(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, msgs, 3)
+	assert.Len(t, msgs, 2)
 	assert.Equal(t, int64(3), msgs[0].EventID)
 	assert.Equal(t, int64(4), msgs[1].EventID)
-	assert.Equal(t, int64(100), msgs[2].EventID)
+
+	archived, err := session.ListArchivedEvents(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{1, 2}, []int64{archived[0].EventID, archived[1].EventID})
 }
 
-func TestMemorySession_CompactEvents_ArchiveAll(t *testing.T) {
+func TestMemorySession_ArchiveEventsBefore_ArchiveAll(t *testing.T) {
 	sessionID := "session-1"
 
 	session := NewMemorySession(newMemorySessionRequest(sessionID))
@@ -181,35 +182,31 @@ func TestMemorySession_CompactEvents_ArchiveAll(t *testing.T) {
 	session.CreateEvent(ctx, newTestMessage(1, "hello"))
 	session.CreateEvent(ctx, newTestMessage(2, "hi"))
 
-	summaryMsg := newTestMessage(100, "summary")
-
-	// splitEventID=0 archives everything.
-	err := session.CompactEvents(ctx, 0, summaryMsg)
+	// eventID=0 archives everything.
+	err := session.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
 	msgs, err := session.ListEvents(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, msgs, 1)
-	assert.Equal(t, int64(100), msgs[0].EventID)
+	assert.Empty(t, msgs)
+
+	archived, err := session.ListArchivedEvents(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, archived, 2)
 }
 
-func TestMemorySession_CompactEvents_Empty(t *testing.T) {
+func TestMemorySession_ArchiveEventsBefore_Empty(t *testing.T) {
 	sessionID := "session-1"
 
 	session := NewMemorySession(newMemorySessionRequest(sessionID))
 	ctx := t.Context()
 
-	summaryMsg := newTestMessage(100, "summary")
-
-	// Compacting an empty session (splitEventID=0) just inserts the summary.
-	err := session.CompactEvents(ctx, 0, summaryMsg)
+	err := session.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
 	msgs, err := session.GetEvents(ctx, 10, 0)
 	assert.NoError(t, err)
-	assert.Len(t, msgs, 1)
-	assert.Equal(t, int64(100), msgs[0].EventID)
-
+	assert.Empty(t, msgs)
 }
 
 func TestMemorySession_ListEvents(t *testing.T) {
@@ -227,7 +224,7 @@ func TestMemorySession_ListEvents(t *testing.T) {
 	assert.Len(t, msgs, 5)
 }
 
-func TestMemorySession_CompactEvents_MultipleRounds(t *testing.T) {
+func TestMemorySession_ArchiveEventsBefore_MultipleRounds(t *testing.T) {
 	sessionID := "session-1"
 
 	sess := NewMemorySession(newMemorySessionRequest(sessionID))
@@ -236,19 +233,35 @@ func TestMemorySession_CompactEvents_MultipleRounds(t *testing.T) {
 	sess.CreateEvent(ctx, newTestMessage(1, "a"))
 	sess.CreateEvent(ctx, newTestMessage(2, "b"))
 
-	// First compaction: archive all (splitEventID=0), insert summary1.
-	err := sess.CompactEvents(ctx, 0, newTestMessage(10, "summary1"))
+	err := sess.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
 	sess.CreateEvent(ctx, newTestMessage(3, "c"))
 
-	// Second compaction: archive summary1+c, insert summary2.
-	err = sess.CompactEvents(ctx, 0, newTestMessage(20, "summary2"))
+	err = sess.ArchiveEventsBefore(ctx, 0)
 	assert.NoError(t, err)
 
-	// Active: only summary2.
 	active, err := sess.ListEvents(ctx)
 	assert.NoError(t, err)
+	assert.Empty(t, active)
+
+	archived, err := sess.ListArchivedEvents(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, archived, 3)
+}
+
+func TestMemorySession_ArchiveEventsBefore_MissingBoundary(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+	assert.NoError(t, sess.CreateEvent(ctx, newTestMessage(1, "a")))
+
+	err := sess.ArchiveEventsBefore(ctx, 99)
+
+	assert.ErrorIs(t, err, adksession.ErrArchiveBoundaryNotFound)
+	var boundaryErr *adksession.ArchiveBoundaryNotFoundError
+	assert.ErrorAs(t, err, &boundaryErr)
+	assert.Equal(t, int64(99), boundaryErr.EventID)
+	active, listErr := sess.ListEvents(ctx)
+	assert.NoError(t, listErr)
 	assert.Len(t, active, 1)
-	assert.Equal(t, int64(20), active[0].EventID)
 }

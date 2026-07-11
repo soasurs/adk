@@ -31,7 +31,6 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `session` | `Session` and `SessionService` interfaces, including owner-scoped listing |
 | `session/memory` | In-memory session (tests / ephemeral use) |
 | `session/database` | SQL database-backed session with schema migration; SQLite and PostgreSQL are tested |
-| `session/compaction` | `compaction.Config` reference type for manual context management |
 | `session/event` | `event.Event` — persisted form of `model.Event` |
 | `tool` | `Tool` interface, `Definition`, structured `Call`/`Result`, and typed function helpers |
 | `tool/builtin` | Ready-made tools (e.g. code execution) |
@@ -97,7 +96,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Tool failure boundary** — `tool.Result{IsError: true}` is a handled failure whose content is safe for the model, and the tool-call loop continues. A non-nil Go `error` means no valid result was produced; ignore the accompanying `Result`, cancel sibling calls, and terminate the current run. Never convert an arbitrary Go error into model-visible content.
 - **OpenAI Responses state ownership** — `openai.NewResponses` must keep `store=false` by default and send ADK-provided history statelessly. Only enable OpenAI-managed response storage or conversation state through explicit OpenAI adapter options.
 - **Dynamic instructions are ephemeral** — `llmagent.InstructionProvider` runs once before each permitted LLM invocation and receives an isolated, system-free canonical conversation. Its output is request-only: build a fresh deeply copied request per iteration and never yield or persist the dynamic instruction.
-- **Manual compaction** — the SDK performs no automatic compaction. Call `session.CompactEvents(ctx, splitEventID, summaryEvent)` to archive old events and insert a summary. `splitEventID=0` archives all active events.
+- **Event archival is policy-neutral** — `session.ArchiveEventsBefore` only marks old events as archived. It never creates a summary or deletes events; applications own summary generation, storage, and injection. A zero boundary archives all active events.
 - **Tracing is observational** — `trace.Tracer` spans are side-channel observability and must not change execution semantics. Keep OTel exporter/SDK setup application-owned, preserve span context propagation through Runner → Agent → LLM/tool calls, and do not attach session/user/app identifiers to OTel spans unless the caller explicitly enables sensitive attributes.
 
 ## Coding Style
@@ -124,7 +123,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 
 - Exported: `PascalCase` — `LlmAgent`, `ToolCall`, `FinishReasonStop`, `RoleSystem`.
 - Unexported: `camelCase` — `memorySession`, `toolCallAcc`, `defaultMaxTokens`.
-- Package names: short, lowercase — `runner`, `llmagent`, `agentool`, `compaction`.
+- Package names: short, lowercase — `runner`, `llmagent`, `agentool`.
 - Error messages: lowercase, no trailing punctuation, `<package>: <action>: ` prefix — `"openai: convert tools: %w"`.
 - Constants: `PascalCase` exported (`RoleSystem`), `camelCase` unexported (`defaultMaxTokens`).
 

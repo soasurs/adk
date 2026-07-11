@@ -17,7 +17,7 @@ type memorySession struct {
 	appID     string
 	userID    string
 	createdAt int64
-	events    []*event.Event // all events: active (compacted_at=0, deleted_at=0) + archived
+	events    []*event.Event // all events: active (archived_at=0, deleted_at=0) + archived
 }
 
 func NewMemorySession(req session.CreateSessionRequest) session.Session {
@@ -59,7 +59,7 @@ func (s *memorySession) DeleteEvent(ctx context.Context, eventID int64) error {
 	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
 	for _, ev := range s.events {
-		if ev.EventID == eventID && ev.CompactedAt == 0 && ev.DeletedAt == 0 {
+		if ev.EventID == eventID && ev.DeletedAt == 0 {
 			ev.DeletedAt = now
 			break
 		}
@@ -84,12 +84,12 @@ func (s *memorySession) ListEvents(ctx context.Context) ([]*event.Event, error) 
 	return s.activeEvents(), nil
 }
 
-func (s *memorySession) ListCompactedEvents(ctx context.Context) ([]*event.Event, error) {
+func (s *memorySession) ListArchivedEvents(ctx context.Context) ([]*event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*event.Event, 0)
 	for _, ev := range s.events {
-		if ev.CompactedAt > 0 && ev.DeletedAt == 0 {
+		if ev.ArchivedAt > 0 && ev.DeletedAt == 0 {
 			out = append(out, cloneEvent(ev))
 		}
 	}
@@ -97,44 +97,43 @@ func (s *memorySession) ListCompactedEvents(ctx context.Context) ([]*event.Event
 	return out, nil
 }
 
-func (s *memorySession) CompactEvents(ctx context.Context, splitEventID int64, summaryEvent *event.Event) error {
+func (s *memorySession) ArchiveEventsBefore(ctx context.Context, eventID int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
 
-	// Determine the index of the first active event to keep.
 	active := s.activeEvents()
-	splitIdx := len(active) // default: archive all active messages
-	if splitEventID > 0 {
+	archiveEnd := len(active)
+	if eventID != 0 {
+		archiveEnd = -1
 		for i, ev := range active {
-			if ev.EventID == splitEventID {
-				splitIdx = i
+			if ev.EventID == eventID {
+				archiveEnd = i
 				break
 			}
 		}
+		if archiveEnd < 0 {
+			return &session.ArchiveBoundaryNotFoundError{EventID: eventID}
+		}
 	}
 
-	// Set CompactedAt on stored active events before the split point.
-	for _, activeEvent := range active[:splitIdx] {
+	for _, activeEvent := range active[:archiveEnd] {
 		for _, stored := range s.events {
 			if stored.EventID == activeEvent.EventID {
-				stored.CompactedAt = now
+				stored.ArchivedAt = now
 				break
 			}
 		}
 	}
-
-	// Append the summary as a new active event.
-	s.events = append(s.events, cloneEvent(summaryEvent))
 	return nil
 }
 
-// activeEvents returns all events with CompactedAt == 0 and DeletedAt == 0,
+// activeEvents returns all events with ArchivedAt == 0 and DeletedAt == 0,
 // preserving insertion order. Must be called with s.mu held (read or write).
 func (s *memorySession) activeEvents() []*event.Event {
 	out := make([]*event.Event, 0, len(s.events))
 	for _, ev := range s.events {
-		if ev.CompactedAt == 0 && ev.DeletedAt == 0 {
+		if ev.ArchivedAt == 0 && ev.DeletedAt == 0 {
 			out = append(out, cloneEvent(ev))
 		}
 	}

@@ -108,7 +108,7 @@ func runInstructionAgent(t *testing.T, a *LlmAgent, contents []model.Content) ([
 	return events, nil
 }
 
-func TestInstructionProvider_NilPreservesStaticSummaryStreamingAndToolLoop(t *testing.T) {
+func TestInstructionProvider_NilPreservesStaticInstructionStreamingAndToolLoop(t *testing.T) {
 	t.Parallel()
 
 	echo := &instructionTool{name: "echo", run: func(context.Context, tool.Call) (tool.Result, error) {
@@ -130,9 +130,8 @@ func TestInstructionProvider_NilPreservesStaticSummaryStreamingAndToolLoop(t *te
 	}).(*LlmAgent)
 
 	events, err := runInstructionAgent(t, a, []model.Content{
-		{Role: model.RoleSystem, Content: "old summary"},
+		{Role: model.RoleSystem, Content: "ignored system event"},
 		{Role: model.RoleUser, Content: "hello"},
-		{Role: model.RoleSystem, Content: "latest summary"},
 	})
 
 	require.NoError(t, err)
@@ -144,9 +143,9 @@ func TestInstructionProvider_NilPreservesStaticSummaryStreamingAndToolLoop(t *te
 	callCount, requests := llm.snapshot()
 	assert.Equal(t, 2, callCount)
 	require.Len(t, requests, 2)
-	assert.Equal(t, "static\n\nlatest summary", requests[0].Contents[0].Content)
+	assert.Equal(t, "static", requests[0].Contents[0].Content)
 	assert.Equal(t, model.RoleUser, requests[0].Contents[1].Role)
-	assert.Equal(t, "static\n\nlatest summary", requests[1].Contents[0].Content)
+	assert.Equal(t, "static", requests[1].Contents[0].Content)
 	require.Len(t, requests[1].Contents, 4)
 	assert.Equal(t, model.RoleAssistant, requests[1].Contents[2].Role)
 	assert.Equal(t, model.RoleTool, requests[1].Contents[3].Role)
@@ -196,8 +195,8 @@ func TestInstructionProvider_SystemMessageOrderAndEmptyOutput(t *testing.T) {
 		dynamic  string
 		expected string
 	}{
-		{name: "dynamic instruction", dynamic: "dynamic", expected: "static\n\ndynamic\n\nsummary"},
-		{name: "empty dynamic instruction", dynamic: "", expected: "static\n\nsummary"},
+		{name: "dynamic instruction", dynamic: "dynamic", expected: "static\n\ndynamic"},
+		{name: "empty dynamic instruction", dynamic: "", expected: "static"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			llm := &instructionScriptLLM{name: "script", calls: [][]*model.LLMResponse{{instructionStopResponse("done")}}}
@@ -211,7 +210,7 @@ func TestInstructionProvider_SystemMessageOrderAndEmptyOutput(t *testing.T) {
 			}).(*LlmAgent)
 
 			_, err := runInstructionAgent(t, a, []model.Content{
-				{Role: model.RoleSystem, Content: "summary"},
+				{Role: model.RoleSystem, Content: "ignored system event"},
 				{Role: model.RoleUser, Content: "go"},
 			})
 
@@ -642,15 +641,13 @@ func TestInstructionProvider_ConcurrentRunsShareStatelessProvider(t *testing.T) 
 	var wg sync.WaitGroup
 	errs := make(chan error, runs)
 	for i := range runs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for _, err := range a.Run(t.Context(), model.EventsFromContents([]model.Content{{Role: model.RoleUser, Content: fmt.Sprintf("run-%d", i)}})) {
 				if err != nil {
 					errs <- err
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

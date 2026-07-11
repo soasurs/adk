@@ -26,17 +26,18 @@ import (
 	"github.com/soasurs/adk/model/openai"
 	"github.com/soasurs/adk/runner"
 	"github.com/soasurs/adk/session"
-	"github.com/soasurs/adk/session/compaction"
 	"github.com/soasurs/adk/session/memory"
 	"github.com/soasurs/adk/tool"
 	"github.com/soasurs/adk/tool/mcp"
 )
 
 const (
-	exaMCPEndpoint = "https://mcp.exa.ai/mcp"
-	defaultModel   = "gpt-4o-mini"
-	sessionID      = "chat-session"
-	sepWidth       = 52
+	exaMCPEndpoint   = "https://mcp.exa.ai/mcp"
+	defaultModel     = "gpt-4o-mini"
+	sessionID        = "chat-session"
+	sepWidth         = 52
+	archiveAtTokens  = 7000
+	keepRecentRounds = 1
 )
 
 // apiKeyTransport injects an API key header into every HTTP request.
@@ -138,26 +139,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── 5. Compaction (Manual) ────────────────────────────────────────────────
-	// Compaction is now the responsibility of the user. The SDK provides only
-	// Session.CompactEvents to persist the archival state.
+	// ── 5. Archival policy (application-owned) ────────────────────────────────
+	// The SDK only archives events. Applications decide when to archive and how
+	// to generate, store, and inject any summary.
 	//
-	// Users can implement their own compaction strategy by:
-	// 1. Monitoring session growth (e.g., when PromptTokens exceed a threshold)
-	// 2. Deciding which events to archive (e.g., keep last N rounds)
-	// 3. Generating a summary (e.g., via LLM)
-	// 4. Calling session.CompactEvents(ctx, splitEventID, summaryEvent)
+	// A custom context-management strategy can:
+	// 1. Monitor session growth (e.g., when PromptTokens exceed a threshold)
+	// 2. Decide which events to archive (e.g., keep last N rounds)
+	// 3. Generate and store a summary if desired
+	// 4. Call session.ArchiveEventsBefore(ctx, boundaryEventID)
 	//
-	// Example compaction strategies:
+	// Example archival policies:
 	// - Token-based: Archive when sum of tokens exceeds MaxTokens
 	// - Rounds-based: Keep only the last N conversation rounds
 	// - Time-based: Archive events older than T hours
 	// - Hybrid: Combine multiple heuristics
-	compactCfg := compaction.Config{
-		MaxTokens:        7000,
-		KeepRecentRounds: 1,
-	}
-
 	// ── Header ────────────────────────────────────────────────────────────────
 	toolNames := make([]string, len(tools))
 	for i, t := range tools {
@@ -166,7 +162,7 @@ func main() {
 	sep()
 	fmt.Printf(" model   : %s\n", modelName)
 	fmt.Printf(" context : max %d tokens · keep last %d rounds\n",
-		compactCfg.MaxTokens, compactCfg.KeepRecentRounds)
+		archiveAtTokens, keepRecentRounds)
 	fmt.Printf(" tools   : %s\n", strings.Join(toolNames, ", "))
 	sep()
 	fmt.Println(`Type a message, or "exit" to quit.`)
@@ -266,16 +262,16 @@ func main() {
 				}
 				if promptTokens > 0 || completionTokens > 0 {
 					fmt.Printf("  tokens: prompt=%d  completion=%d  (threshold=%d)\n\n",
-						promptTokens, completionTokens, compactCfg.MaxTokens)
+						promptTokens, completionTokens, archiveAtTokens)
 				}
 
-				// ── Compaction (Manual) ────────────────────────────────────────
-				// Users can implement custom compaction logic here.
-				// Example: check if promptTokens > compactCfg.MaxTokens:
+				// ── Archival (application-owned) ───────────────────────────────
+				// Applications can implement custom context management here.
+				// Example: check if promptTokens > archiveAtTokens:
 				//   1. Identify which events to archive
-				//   2. Generate a summary via LLM
-				//   3. Call sess.CompactEvents(ctx, splitEventID, summaryEvent)
-				_ = msgs // Use msgs to implement custom compaction logic
+				//   2. Persist a summary externally if desired
+				//   3. Call sess.ArchiveEventsBefore(ctx, boundaryEventID)
+				_ = msgs // Use msgs to implement custom archival logic
 			}
 		}
 
