@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/bwmarrin/snowflake v0.3.0
 	github.com/google/jsonschema-go v0.4.2
+	github.com/huandu/go-sqlbuilder v1.42.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/mattn/go-sqlite3 v1.14.34
@@ -30,6 +31,8 @@ require (
 	github.com/google/s2a-go v0.1.8 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/huandu/go-clone v1.7.3 // indirect
+	github.com/huandu/xstrings v1.4.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

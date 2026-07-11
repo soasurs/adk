@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -54,4 +55,43 @@ func (ss *memorySessionService) GetSession(ctx context.Context, sessionID string
 		return nil, nil
 	}
 	return ss.sessions[i], nil
+}
+
+func (ss *memorySessionService) ListSessions(ctx context.Context, req session.ListSessionsRequest) ([]session.Session, error) {
+	req, err := req.Normalize()
+	if err != nil {
+		return nil, err
+	}
+
+	ss.mu.RLock()
+	sessions := make([]session.Session, 0, len(ss.sessions))
+	for _, sess := range ss.sessions {
+		if sess.GetAppID() == req.AppID && sess.GetUserID() == req.UserID {
+			sessions = append(sessions, sess)
+		}
+	}
+	ss.mu.RUnlock()
+
+	slices.SortFunc(sessions, func(a, b session.Session) int {
+		var n int
+		switch req.SortBy {
+		case session.SessionSortByCreatedAt:
+			n = cmp.Compare(a.GetCreatedAt(), b.GetCreatedAt())
+		case session.SessionSortBySessionID:
+			n = cmp.Compare(a.GetSessionID(), b.GetSessionID())
+		}
+		if n == 0 {
+			n = cmp.Compare(a.GetSessionID(), b.GetSessionID())
+		}
+		if req.SortOrder == session.SortDescending {
+			return -n
+		}
+		return n
+	})
+
+	if req.Offset >= int64(len(sessions)) {
+		return []session.Session{}, nil
+	}
+	end := min(req.Offset+req.Limit, int64(len(sessions)))
+	return sessions[req.Offset:end], nil
 }

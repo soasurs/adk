@@ -17,7 +17,6 @@ type databaseSession struct {
 	AppID     string   `json:"app_id" db:"app_id"`
 	UserID    string   `json:"user_id" db:"user_id"`
 	CreatedAt int64    `json:"created_at" db:"created_at"`
-	UpdatedAt int64    `json:"updated_at" db:"updated_at"`
 	DeletedAt int64    `json:"deleted_at" db:"deleted_at"`
 }
 
@@ -32,15 +31,16 @@ func NewDatabaseSession(ctx context.Context, db *sqlx.DB, req session.CreateSess
 }
 
 func newDatabaseSession(ctx context.Context, db *sqlx.DB, req session.CreateSessionRequest, q *queries) (session.Session, error) {
+	now := time.Now().UnixMilli()
 	s := &databaseSession{
 		db:        db,
 		q:         q,
 		SessionID: req.SessionID,
 		AppID:     req.AppID,
 		UserID:    req.UserID,
-		CreatedAt: time.Now().UnixMilli(),
+		CreatedAt: now,
 	}
-	_, err := db.ExecContext(ctx, q.createSession, s.SessionID, s.AppID, s.UserID, s.CreatedAt, s.UpdatedAt, s.DeletedAt)
+	_, err := db.ExecContext(ctx, q.createSession, s.SessionID, s.AppID, s.UserID, s.CreatedAt, s.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +57,10 @@ func (s *databaseSession) GetAppID() string {
 
 func (s *databaseSession) GetUserID() string {
 	return s.UserID
+}
+
+func (s *databaseSession) GetCreatedAt() int64 {
+	return s.CreatedAt
 }
 
 func (s *databaseSession) CreateEvent(ctx context.Context, ev *event.Event) error {

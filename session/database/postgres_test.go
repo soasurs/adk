@@ -99,7 +99,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"SELECT version FROM "+f.prefix+"schema_migrations ORDER BY version",
 		)
 		require.NoError(t, err)
-		assert.Equal(t, []int{1, 2, 3, 4}, versions)
+		assert.Equal(t, []int{1, 2, 3, 4, 5}, versions)
 	})
 
 	t.Run("creates expected column types", func(t *testing.T) {
@@ -141,6 +141,21 @@ func TestPostgres_InitSchema(t *testing.T) {
 		assert.Equal(t, "text", columns["session_id"])
 		assert.Equal(t, "text", columns["turn_id"])
 		assert.Equal(t, "text", columns["usage_details"])
+
+		var sessionColumns []string
+		err = f.db.SelectContext(
+			t.Context(),
+			&sessionColumns,
+			`
+				SELECT column_name
+				FROM information_schema.columns
+				WHERE table_schema = current_schema()
+					AND table_name = $1
+			`,
+			f.prefix+"sessions",
+		)
+		require.NoError(t, err)
+		assert.NotContains(t, sessionColumns, "updated_at")
 	})
 
 	t.Run("supports custom table names", func(t *testing.T) {
@@ -231,6 +246,32 @@ func TestPostgres_DatabaseSessionService_GetSession(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, sess)
 	})
+}
+
+func TestPostgres_DatabaseSessionService_ListSessions(t *testing.T) {
+	f := newPostgresFixture(t)
+	ctx := t.Context()
+
+	for _, req := range []session.CreateSessionRequest{
+		{SessionID: "session-b", AppID: "chat", UserID: "user-1"},
+		{SessionID: "session-a", AppID: "chat", UserID: "user-1"},
+		{SessionID: "other-user", AppID: "chat", UserID: "user-2"},
+	} {
+		_, err := f.service.CreateSession(ctx, req)
+		require.NoError(t, err)
+	}
+
+	sessions, err := f.service.ListSessions(ctx, session.ListSessionsRequest{
+		AppID:     "chat",
+		UserID:    "user-1",
+		Limit:     1,
+		Offset:    1,
+		SortBy:    session.SessionSortBySessionID,
+		SortOrder: session.SortAscending,
+	})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "session-b", sessions[0].GetSessionID())
 }
 
 func TestPostgres_DatabaseSessionService_DeleteSession(t *testing.T) {

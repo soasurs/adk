@@ -28,7 +28,7 @@ Guidance for autonomous coding agents working in `github.com/soasurs/adk`.
 | `model/anthropic` | Anthropic adapter |
 | `model/retry` | `retry.Seq2` — exponential-backoff wrapper for `iter.Seq2` |
 | `runner` | Ties `Agent` + `SessionService` together for multi-turn conversations |
-| `session` | `Session` and `SessionService` interfaces |
+| `session` | `Session` and `SessionService` interfaces, including owner-scoped listing |
 | `session/memory` | In-memory session (tests / ephemeral use) |
 | `session/database` | SQL database-backed session with schema migration; SQLite and PostgreSQL are tested |
 | `session/compaction` | `compaction.Config` reference type for manual context management |
@@ -90,6 +90,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Partial vs complete events** — `Event.Partial=true` fragments are forwarded to the caller for real-time display but **never persisted**. Complete events are saved while a run is active; if the run fails or the caller stops early, `Runner` removes the current turn's saved events so incomplete history is not replayed.
 - **Turn IDs** — `Event.TurnID` groups all events produced by one `Runner.Run` call. It is a correlation identifier, not an ordering key or an automatic resume checkpoint. Older persisted events may have an empty `TurnID`; keep replay compatible.
 - **Stateless agents** — agents hold no conversation state; all history is supplied by `Runner` via `SessionService` on every call.
+- **Session listing** — `ListSessions` is scoped by `app_id/user_id`, uses limit/offset pagination, and applies a stable `session_id` tiebreaker to configurable creation-time or ID ordering.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.
 - **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; tool outputs use `tool.Result` / `model.ToolResult` with text fallback, structured JSON, and `IsError`. Do not collapse arguments or results back into plain strings except at provider-specific API boundaries.

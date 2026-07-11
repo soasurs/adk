@@ -37,6 +37,7 @@ func TestMemorySession_CreateEvent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, int64(1), msgs[0].EventID)
+	assert.Positive(t, session.GetCreatedAt())
 }
 
 func TestMemorySession_DeleteEvent(t *testing.T) {

@@ -15,6 +15,8 @@ type Session interface {
 	GetAppID() string
 	// GetUserID returns the end user that owns the session.
 	GetUserID() string
+	// GetCreatedAt returns the Unix millisecond timestamp when the session was created.
+	GetCreatedAt() int64
 	CreateEvent(ctx context.Context, event *event.Event) error
 	// GetEvents returns a paginated slice of active (non-compacted, non-deleted) events
 	// sorted by created_at ASC.

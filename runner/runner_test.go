@@ -580,6 +580,9 @@ func (e *errSessionService) DeleteSession(_ context.Context, _ string) error { r
 func (e *errSessionService) GetSession(_ context.Context, _ string) (session.Session, error) {
 	return nil, e.err
 }
+func (e *errSessionService) ListSessions(_ context.Context, _ session.ListSessionsRequest) ([]session.Session, error) {
+	return nil, e.err
+}
 
 // errSession satisfies session.Session for errSessionService (never actually used).
 type errSession struct{}
@@ -587,6 +590,7 @@ type errSession struct{}
 func (s *errSession) GetSessionID() string { return "" }
 func (s *errSession) GetAppID() string     { return "" }
 func (s *errSession) GetUserID() string    { return "" }
+func (s *errSession) GetCreatedAt() int64  { return 0 }
 func (s *errSession) CreateEvent(_ context.Context, _ *event.Event) error {
 	return errors.New("errSession")
 }
