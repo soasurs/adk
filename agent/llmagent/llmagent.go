@@ -352,7 +352,7 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 				wg.Add(1)
 				go func(i int, tc model.ToolCall) {
 					defer wg.Done()
-					toolEvent, err := a.runToolCall(toolCtx, iteration, i, tc)
+					toolEvent, err := a.runToolCall(toolCtx, cancelTools, iteration, i, tc)
 					if err != nil {
 						toolErrs[i] = err
 						cancelTools()
@@ -385,7 +385,9 @@ func (a *LlmAgent) Run(ctx context.Context, events []model.Event) iter.Seq2[*mod
 }
 
 // runToolCall executes a single tool call and returns the resulting tool event.
-func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc model.ToolCall) (event model.Event, err error) {
+// It cancels the parallel tool batch before invoking hooks for an execution
+// failure so hook latency cannot delay sibling cancellation.
+func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFunc, iteration, toolIndex int, tc model.ToolCall) (event model.Event, err error) {
 	ctx, toolSpan := adktrace.Start(ctx, adktrace.Event{
 		Kind:       adktrace.KindToolCall,
 		AgentName:  a.Name(),
@@ -451,6 +453,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 				Err:      executionErr,
 				Duration: toolEnd.Duration,
 			}
+			cancelTools()
 			return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
 		}
 		toolEnd.IsError = skipResult.Result.IsError
@@ -494,6 +497,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, iteration, toolIndex int, tc
 			Err:      executionErr,
 			Duration: toolEnd.Duration,
 		}
+		cancelTools()
 		return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
 	}
 	event = model.Event{
