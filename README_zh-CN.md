@@ -16,6 +16,7 @@
 - 自动 tool-call 循环和结构化 tool result
 - 顺序、并行以及 agent-as-tool 组合
 - 基于 `iter.Seq2` 的原生 Go 流式输出
+- Agent Skills 解析、发现、catalog 渲染和按需加载
 - 内存、SQLite 和 PostgreSQL 会话后端
 - MCP 工具，以及面向 span 的 `slog`/OpenTelemetry tracing
 
@@ -84,6 +85,7 @@ func main() {
 | [会话与 Event 归档](docs/sessions_zh-CN.md) | 内存与 SQL 后端、归属、分页、持久化和归档 |
 | [Tracing](docs/tracing_zh-CN.md) | `slog`、OpenTelemetry、span 层级和敏感属性 |
 | [动态 System Instruction](docs/dynamic-instruction_zh-CN.md) | 请求级 instruction、生命周期、缓存和示例 |
+| [Agent Skills](docs/skills_zh-CN.md) | SKILL.md 加载、catalog 注入、激活工具和资源安全 |
 
 完整 API 文档见
 [`pkg.go.dev`](https://pkg.go.dev/github.com/soasurs/adk)。
@@ -96,6 +98,7 @@ func main() {
 | 模型 | `model`, `model/openai`, `model/deepseek`, `model/gemini`, `model/anthropic` |
 | 会话 | `session`, `session/event`, `session/memory`, `session/database` |
 | 工具 | `tool`, `tool/builtin`, `tool/mcp` |
+| Skills | `skill` |
 | 运行时与可观测性 | `runner`, `trace`, `trace/otel` |
 
 ## 许可证

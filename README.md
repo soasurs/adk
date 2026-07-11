@@ -18,6 +18,7 @@ Module path: `github.com/soasurs/adk` · Go version: `1.26+`
 - Automatic tool-call loops and structured tool results
 - Sequential, parallel, and agent-as-tool composition
 - Native Go streaming with `iter.Seq2`
+- Agent Skills parsing, discovery, catalog rendering, and on-demand loading
 - In-memory, SQLite, and PostgreSQL session backends
 - MCP tools and span-oriented `slog`/OpenTelemetry tracing
 
@@ -86,6 +87,7 @@ See [`examples/chat`](examples/chat) for a runnable chat application.
 | [Sessions and Event Archival](docs/sessions.md) | Memory and SQL backends, ownership, pagination, persistence, and archival |
 | [Tracing](docs/tracing.md) | `slog`, OpenTelemetry, span hierarchy, and sensitive attributes |
 | [Dynamic System Instructions](docs/dynamic-instruction.md) | Request-scoped instructions, lifecycle, caching, and examples |
+| [Agent Skills](docs/skills.md) | SKILL.md loading, catalog injection, activation tools, and resource safety |
 
 API documentation is available on
 [`pkg.go.dev`](https://pkg.go.dev/github.com/soasurs/adk).
@@ -98,6 +100,7 @@ API documentation is available on
 | Models | `model`, `model/openai`, `model/deepseek`, `model/gemini`, `model/anthropic` |
 | Sessions | `session`, `session/event`, `session/memory`, `session/database` |
 | Tools | `tool`, `tool/builtin`, `tool/mcp` |
+| Skills | `skill` |
 | Runtime and observability | `runner`, `trace`, `trace/otel` |
 
 ## License
