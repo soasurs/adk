@@ -93,6 +93,9 @@ func (ss *memorySessionService) ListSessions(ctx context.Context, req session.Li
 	if req.Offset >= int64(len(sessions)) {
 		return []session.Session{}, nil
 	}
-	end := min(req.Offset+req.Limit, int64(len(sessions)))
+	end := int64(len(sessions))
+	if req.Limit < end-req.Offset {
+		end = req.Offset + req.Limit
+	}
 	return sessions[req.Offset:end], nil
 }

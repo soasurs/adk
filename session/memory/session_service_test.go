@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -136,6 +137,13 @@ func TestMemorySessionService_ListSessions(t *testing.T) {
 			name: "returns empty slice when offset exceeds count",
 			req:  adksession.ListSessionsRequest{AppID: "chat", UserID: "user-1", Offset: 10},
 			want: []string{},
+		},
+		{
+			name: "handles maximum limit without overflow",
+			req: adksession.ListSessionsRequest{
+				AppID: "chat", UserID: "user-1", Limit: math.MaxInt64, Offset: 1,
+			},
+			want: []string{"session-a", "session-b"},
 		},
 	}
 
