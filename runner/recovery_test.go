@@ -163,7 +163,7 @@ func TestRunner_Run_BlocksWhenToolExecutionIsUnknown(t *testing.T) {
 	assert.Equal(t, before, after, "blocked run must leave the session unchanged")
 }
 
-func TestRunner_Run_EarlyBreakAfterToolCallsBlocksNextRun(t *testing.T) {
+func TestRunner_Run_EarlyBreakAfterToolCallsRollsBackTurn(t *testing.T) {
 	var runCount atomic.Int32
 	a := &mockAgent{
 		name:        "tool-agent",
@@ -197,17 +197,25 @@ func TestRunner_Run_EarlyBreakAfterToolCallsBlocksNextRun(t *testing.T) {
 		break
 	}
 
-	_, runErr := collectRun(t, r, sessionID, model.Content{Content: "second turn"})
-	assert.ErrorIs(t, runErr, ErrToolExecutionUnknown)
-	assert.Equal(t, int32(1), runCount.Load(), "agent must not run again")
-
 	sess, err := r.session.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
+	afterBreak, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, afterBreak, "early stop must roll back the incomplete turn")
+
+	msgs, runErr := collectRun(t, r, sessionID, model.Content{Content: "second turn"})
+	require.NoError(t, runErr)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
+	assert.Equal(t, model.RoleTool, msgs[1].Role)
+	assert.Equal(t, int32(2), runCount.Load(), "rolled-back history must allow the agent to run again")
+
 	events, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	require.Len(t, events, 2)
+	require.Len(t, events, 3)
 	assert.Equal(t, string(model.RoleUser), events[0].Role)
 	assert.Equal(t, string(model.RoleAssistant), events[1].Role)
+	assert.Equal(t, string(model.RoleTool), events[2].Role)
 }
 
 func TestRunner_Run_ContinuesWhenToolCallsHaveDurableResults(t *testing.T) {
