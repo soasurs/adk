@@ -3,7 +3,6 @@ package tool
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -11,14 +10,14 @@ import (
 )
 
 // Handler is a strongly typed Go function wrapped as a Tool by NewFunc. Return
-// a FuncError for a handled failure that is safe to send to the model; other
+// a HandledError for a handled failure that is safe to send to the model; other
 // errors are terminal.
 type Handler[In, Out any] func(context.Context, In) (Out, error)
 
 // NewFunc wraps a strongly typed Go function as a Tool. If Definition does not
 // provide schemas, they are inferred from In and Out. Ordinary Handler errors
-// propagate as terminal Tool errors, while FuncError becomes a Result with
-// IsError set.
+// propagate to the caller. LlmAgent recognizes HandledError as a completed,
+// model-visible failure; other errors are terminal.
 func NewFunc[In, Out any](def Definition, handler Handler[In, Out]) (Tool, error) {
 	if handler == nil {
 		return nil, fmt.Errorf("tool %q: handler must not be nil", def.Name)
@@ -51,30 +50,23 @@ func (t *funcTool[In, Out]) Definition() Definition {
 	return t.def
 }
 
-func (t *funcTool[In, Out]) Run(ctx context.Context, call Call) (Result, error) {
+func (t *funcTool[In, Out]) Run(ctx context.Context, call Call) (*Result, error) {
 	var input In
 	if err := json.Unmarshal(call.Arguments, &input); err != nil {
-		return Result{
-			Content: fmt.Sprintf("error: parse arguments: %s", err.Error()),
-			IsError: true,
-		}, nil
+		return nil, NewHandledError(fmt.Sprintf("error: parse arguments: %s", err.Error()))
 	}
 
 	output, err := t.handler(ctx, input)
 	if err != nil {
-		var funcErr *FuncError
-		if errors.As(err, &funcErr) && funcErr != nil {
-			return funcErr.result(), nil
-		}
-		return Result{}, fmt.Errorf("tool %q: run handler: %w", t.def.Name, err)
+		return nil, fmt.Errorf("tool %q: run handler: %w", t.def.Name, err)
 	}
 
 	raw, err := json.Marshal(output)
 	if err != nil {
-		return Result{}, fmt.Errorf("tool %q: marshal result: %w", t.def.Name, err)
+		return nil, fmt.Errorf("tool %q: marshal result: %w", t.def.Name, err)
 	}
 
-	return Result{
+	return &Result{
 		Content:           resultContent(output, raw),
 		StructuredContent: raw,
 	}, nil

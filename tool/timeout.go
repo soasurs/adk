@@ -26,7 +26,7 @@ func (w *withTimeout) Definition() Definition {
 	return w.inner.Definition()
 }
 
-func (w *withTimeout) Run(ctx context.Context, call Call) (Result, error) {
+func (w *withTimeout) Run(ctx context.Context, call Call) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 	return w.inner.Run(ctx, call)

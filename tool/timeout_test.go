@@ -22,12 +22,12 @@ func (s *stubTool) Definition() tool.Definition {
 	return tool.Definition{Name: "stub", Description: "stub", InputSchema: &jsonschema.Schema{}}
 }
 
-func (s *stubTool) Run(ctx context.Context, _ tool.Call) (tool.Result, error) {
+func (s *stubTool) Run(ctx context.Context, _ tool.Call) (*tool.Result, error) {
 	select {
 	case <-time.After(s.sleep):
-		return tool.Result{Content: "ok"}, nil
+		return &tool.Result{Content: "ok"}, nil
 	case <-ctx.Done():
-		return tool.Result{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 

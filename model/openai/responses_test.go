@@ -37,11 +37,13 @@ func TestConvertResponsesInput_HistoryWithToolCall(t *testing.T) {
 		},
 		{
 			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolCallID:        "call_1",
-				Name:              "Echo",
-				Content:           "hi",
-				StructuredContent: json.RawMessage(`{"message":"hi"}`),
+			ToolResponse: &model.ToolResponse{
+				ToolCallID: "call_1",
+				Name:       "Echo",
+				Outcome: &tool.Result{
+					Content:           "hi",
+					StructuredContent: json.RawMessage(`{"message":"hi"}`),
+				},
 			},
 		},
 	})

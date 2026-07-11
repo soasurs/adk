@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // InstructionProvider builds an ephemeral system instruction for one LLM
@@ -50,12 +51,15 @@ func cloneContent(content model.Content) model.Content {
 			}
 		}
 	}
-	if content.ToolResult != nil {
-		result := *content.ToolResult
-		if content.ToolResult.StructuredContent != nil {
-			result.StructuredContent = append([]byte(nil), content.ToolResult.StructuredContent...)
+	if content.ToolResponse != nil {
+		response := *content.ToolResponse
+		switch outcome := content.ToolResponse.Outcome.(type) {
+		case *tool.Result:
+			response.Outcome = outcome.Clone()
+		case *tool.HandledError:
+			response.Outcome = outcome.Clone()
 		}
-		out.ToolResult = &result
+		out.ToolResponse = &response
 	}
 	return out
 }

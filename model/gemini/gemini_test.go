@@ -366,10 +366,12 @@ func TestConvertMessages_Tool_StructuredResult(t *testing.T) {
 		},
 		{
 			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolCallID:        "call_1",
-				Name:              "Weather",
-				StructuredContent: json.RawMessage(`{"temperature":23,"condition":"clear"}`),
+			ToolResponse: &model.ToolResponse{
+				ToolCallID: "call_1",
+				Name:       "Weather",
+				Outcome: &tool.Result{
+					StructuredContent: json.RawMessage(`{"temperature":23,"condition":"clear"}`),
+				},
 			},
 		},
 	})
@@ -393,12 +395,13 @@ func TestConvertMessages_Tool_StructuredErrorResult(t *testing.T) {
 		},
 		{
 			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolCallID:        "call_1",
-				Name:              "Weather",
-				Content:           "weather service unavailable",
-				StructuredContent: json.RawMessage(`{"code":"unavailable","retry_after":30}`),
-				IsError:           true,
+			ToolResponse: &model.ToolResponse{
+				ToolCallID: "call_1",
+				Name:       "Weather",
+				Outcome: &tool.HandledError{
+					Content:           "weather service unavailable",
+					StructuredContent: json.RawMessage(`{"code":"unavailable","retry_after":30}`),
+				},
 			},
 		},
 	})
@@ -597,12 +600,10 @@ func TestGenerateContent_Generate_WithTool(t *testing.T) {
 				Role:       model.RoleTool,
 				Content:    result.Content,
 				ToolCallID: tc.ID,
-				ToolResult: &model.ToolResult{
-					ToolCallID:        tc.ID,
-					Name:              tc.Name,
-					Content:           result.Content,
-					StructuredContent: result.StructuredContent,
-					IsError:           result.IsError,
+				ToolResponse: &model.ToolResponse{
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Outcome:    result,
 				},
 			})
 		}
@@ -713,12 +714,10 @@ func TestVertexAI_Generate_WithTool(t *testing.T) {
 				Role:       model.RoleTool,
 				Content:    result.Content,
 				ToolCallID: tc.ID,
-				ToolResult: &model.ToolResult{
-					ToolCallID:        tc.ID,
-					Name:              tc.Name,
-					Content:           result.Content,
-					StructuredContent: result.StructuredContent,
-					IsError:           result.IsError,
+				ToolResponse: &model.ToolResponse{
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Outcome:    result,
 				},
 			})
 		}

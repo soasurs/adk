@@ -9,7 +9,7 @@ Tools receive raw JSON arguments and return provider-neutral results:
 ```go
 type Tool interface {
     Definition() Definition
-    Run(ctx context.Context, call Call) (Result, error)
+    Run(ctx context.Context, call Call) (*Result, error)
 }
 ```
 
@@ -29,7 +29,7 @@ weatherTool, err := tool.NewFunc(tool.Definition{
     Name: "weather", Description: "Get a weather forecast.",
 }, func(ctx context.Context, input weatherInput) (weatherOutput, error) {
     if input.City == "" {
-        return weatherOutput{}, tool.NewFuncError("city is required")
+        return weatherOutput{}, tool.NewHandledError("city is required")
     }
     return weatherOutput{City: input.City, Forecast: "clear"}, nil
 })
@@ -40,13 +40,14 @@ Pass tools through `llmagent.Config.Tools`. `Result.Content` is the text fallbac
 
 ## Failure semantics
 
-The two failure channels have different meanings:
+The three outcomes have different meanings:
 
-- `tool.Result{IsError: true}, nil` is an expected, handled failure safe for the
-  model. With `tool.NewFunc`, return `tool.NewFuncError(...)` for this case.
-- A non-nil Go `error` means no valid result exists. `LlmAgent` discards any
-  accompanying result, cancels sibling calls, and terminates the run without
-  exposing the error text to the model.
+- `*tool.Result, nil` is a successful result. A nil result with a nil error is invalid.
+- `nil, *tool.HandledError` is an expected, completed failure safe for the
+  model. Create one with `tool.NewHandledError(...)`.
+- Any other non-nil Go `error` means no valid outcome exists. `LlmAgent`
+  discards any accompanying result, cancels sibling calls, and terminates the
+  run without exposing the error text to the model.
 
 ADK does not automatically retry tool calls because they may have side effects.
 Place safe retries inside the tool or an explicit wrapper.

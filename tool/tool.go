@@ -31,21 +31,48 @@ type Call struct {
 type Result struct {
 	// Content is the plain-text fallback returned to providers that do not
 	// support structured tool results.
-	Content string
+	Content string `json:"content,omitempty"`
 	// StructuredContent is the raw JSON result returned by the tool.
-	StructuredContent json.RawMessage
-	// IsError reports that the invocation completed with a handled failure whose
-	// content is safe to send back to the model as a tool response.
-	IsError bool
+	StructuredContent json.RawMessage `json:"structured_content,omitempty"`
+}
+
+func (*Result) isOutcome() {}
+
+// Text returns the plain-text form used by providers that do not support
+// structured tool results.
+func (r *Result) Text() string {
+	if r == nil {
+		return ""
+	}
+	if r.Content != "" {
+		return r.Content
+	}
+	return string(r.StructuredContent)
+}
+
+// Clone returns an independent copy of r.
+func (r *Result) Clone() *Result {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.StructuredContent = append(json.RawMessage(nil), r.StructuredContent...)
+	return &clone
+}
+
+// Outcome is a completed tool invocation outcome. The only implementations
+// are Result for success and HandledError for a model-visible failure.
+type Outcome interface {
+	isOutcome()
+	Text() string
 }
 
 // Tool is a provider-agnostic interface for tools that can be invoked by an LLM.
 type Tool interface {
 	// Definition returns the tool's metadata used by the LLM to understand and call the tool.
 	Definition() Definition
-	// Run executes the tool call and returns a provider-neutral result. A Result
-	// with IsError set is a handled failure that may be sent to the model. A
-	// non-nil error means the invocation did not produce a valid result; callers
-	// must ignore the Result and terminate the current execution.
-	Run(ctx context.Context, call Call) (Result, error)
+	// Run executes the tool call and returns a provider-neutral result. A
+	// HandledError is a completed, model-visible failure. Any other non-nil error
+	// is terminal. A nil result with a nil error is invalid.
+	Run(ctx context.Context, call Call) (*Result, error)
 }

@@ -15,6 +15,14 @@ import (
 	"github.com/soasurs/adk/tool"
 )
 
+func requireHandledError(t *testing.T, result *tool.Result, err error) *tool.HandledError {
+	t.Helper()
+	assert.Nil(t, result)
+	var handledErr *tool.HandledError
+	require.ErrorAs(t, err, &handledErr)
+	return handledErr
+}
+
 func TestNewLoadTool_ReturnsStructuredSkill(t *testing.T) {
 	catalog := loadTestCatalog(t)
 	loadTool, err := skill.NewLoadTool(catalog, skill.WithLoadToolName("activate_skill"))
@@ -27,7 +35,7 @@ func TestNewLoadTool_ReturnsStructuredSkill(t *testing.T) {
 		Arguments: json.RawMessage(`{"name":"pdf-processing"}`),
 	})
 	require.NoError(t, runErr)
-	assert.False(t, result.IsError)
+	require.NotNil(t, result)
 	assert.JSONEq(t, `{
         "name": "pdf-processing",
         "description": "Process PDFs.",
@@ -42,9 +50,8 @@ func TestNewLoadTool_UnknownSkillIsHandled(t *testing.T) {
 	loadTool, err := skill.NewLoadTool(loadTestCatalog(t))
 	require.NoError(t, err)
 	result, runErr := loadTool.Run(t.Context(), tool.Call{Arguments: json.RawMessage(`{"name":"missing"}`)})
-	require.NoError(t, runErr)
-	assert.True(t, result.IsError)
-	assert.JSONEq(t, `{"code":"skill_not_found","message":"skill \"missing\" is not available"}`, string(result.StructuredContent))
+	handledErr := requireHandledError(t, result, runErr)
+	assert.JSONEq(t, `{"code":"skill_not_found","message":"skill \"missing\" is not available"}`, string(handledErr.StructuredContent))
 }
 
 func TestNewReadResourceTool_ReadsIndexedText(t *testing.T) {
@@ -58,7 +65,7 @@ func TestNewReadResourceTool_ReadsIndexedText(t *testing.T) {
         "path":"references/guide.md"
     }`)})
 	require.NoError(t, runErr)
-	assert.False(t, result.IsError)
+	require.NotNil(t, result)
 	assert.JSONEq(t, `{
         "skill":"pdf-processing",
         "path":"references/guide.md",
@@ -92,9 +99,8 @@ func TestNewReadResourceTool_ModelVisibleFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, runErr := readTool.Run(t.Context(), tool.Call{Arguments: json.RawMessage(tt.arguments)})
-			require.NoError(t, runErr)
-			assert.True(t, result.IsError)
-			assert.Contains(t, string(result.StructuredContent), tt.code)
+			handledErr := requireHandledError(t, result, runErr)
+			assert.Contains(t, string(handledErr.StructuredContent), tt.code)
 		})
 	}
 }
@@ -109,9 +115,8 @@ func TestNewReadResourceTool_ParsedSkillHasNoResourceSource(t *testing.T) {
 	require.NoError(t, err)
 
 	result, runErr := readTool.Run(t.Context(), tool.Call{Arguments: json.RawMessage(`{"skill":"example","path":"reference.txt"}`)})
-	require.NoError(t, runErr)
-	assert.True(t, result.IsError)
-	assert.Contains(t, string(result.StructuredContent), "resources_unavailable")
+	handledErr := requireHandledError(t, result, runErr)
+	assert.Contains(t, string(handledErr.StructuredContent), "resources_unavailable")
 }
 
 func TestNewReadResourceTool_MissingIndexedFileIsTerminal(t *testing.T) {

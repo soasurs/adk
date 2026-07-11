@@ -486,8 +486,8 @@ func convertMessageWithOptions(m model.Content, opts providerOptions) (goopenai.
 		return goopenai.ChatCompletionMessageParamUnion{OfAssistant: &asst}, nil
 
 	case model.RoleTool:
-		toolResult := m.ToolResultValue()
-		return goopenai.ToolMessage(toolResult.Text(), toolResult.ToolCallID), nil
+		toolResponse := m.ToolResponseValue()
+		return goopenai.ToolMessage(toolResponse.Text(), toolResponse.ToolCallID), nil
 
 	default:
 		return goopenai.ChatCompletionMessageParamUnion{}, fmt.Errorf("unknown role: %q", m.Role)

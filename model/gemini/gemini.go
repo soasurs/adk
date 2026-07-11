@@ -363,16 +363,16 @@ func convertMessages(msgs []model.Content) ([]*genai.Content, *genai.Content, er
 			var parts []*genai.Part
 			for i < len(msgs) && msgs[i].Role == model.RoleTool {
 				tm := msgs[i]
-				result := tm.ToolResultValue()
-				name := result.Name
+				response := tm.ToolResponseValue()
+				name := response.Name
 				if name == "" {
-					name = toolCallNames[result.ToolCallID]
+					name = toolCallNames[response.ToolCallID]
 				}
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
-						ID:       result.ToolCallID,
+						ID:       response.ToolCallID,
 						Name:     name,
-						Response: convertToolResultResponse(result),
+						Response: convertToolResponse(response),
 					},
 				})
 				i++
@@ -387,23 +387,27 @@ func convertMessages(msgs []model.Content) ([]*genai.Content, *genai.Content, er
 	return contents, sysInstruction, nil
 }
 
-func convertToolResultResponse(result model.ToolResult) map[string]any {
-	if result.IsError {
-		response := map[string]any{"error": result.Text()}
-		if details, ok := decodeStructuredContent(result.StructuredContent); ok {
-			response["details"] = details
+func convertToolResponse(response model.ToolResponse) map[string]any {
+	switch outcome := response.Outcome.(type) {
+	case *tool.HandledError:
+		result := map[string]any{"error": outcome.Text()}
+		if details, ok := decodeStructuredContent(outcome.StructuredContent); ok {
+			result["details"] = details
 		}
-		return response
-	}
-	if len(result.StructuredContent) > 0 {
-		if value, ok := decodeStructuredContent(result.StructuredContent); ok {
-			if response, ok := value.(map[string]any); ok {
-				return response
+		return result
+	case *tool.Result:
+		if len(outcome.StructuredContent) > 0 {
+			if value, ok := decodeStructuredContent(outcome.StructuredContent); ok {
+				if result, ok := value.(map[string]any); ok {
+					return result
+				}
+				return map[string]any{"result": value}
 			}
-			return map[string]any{"result": value}
 		}
+		return map[string]any{"output": outcome.Text()}
+	default:
+		return map[string]any{"output": response.Text()}
 	}
-	return map[string]any{"output": result.Text()}
 }
 
 func decodeStructuredContent(raw json.RawMessage) (any, bool) {

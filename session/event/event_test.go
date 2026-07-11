@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/tool"
 )
 
 // TestParts_ValueScan verifies that Parts serializes to JSON and deserializes back correctly.
@@ -147,28 +148,82 @@ func TestFromModel_ToModel_ToolCallThoughtSignature(t *testing.T) {
 	assert.Equal(t, original.Content.ToolCalls[0], restored.Content.ToolCalls[0])
 }
 
-func TestFromModel_ToModel_ToolResult(t *testing.T) {
+func TestFromModel_ToModel_ToolResponse(t *testing.T) {
 	original := model.Event{
 		Author: "lookup",
 		Content: model.Content{
 			Role:    model.RoleTool,
 			Content: `{"temperature":23}`,
-			ToolResult: &model.ToolResult{
-				ToolCallID:        "call-1",
-				Name:              "lookup",
-				Content:           `{"temperature":23}`,
-				StructuredContent: json.RawMessage(`{"temperature":23}`),
+			ToolResponse: &model.ToolResponse{
+				ToolCallID: "call-1",
+				Name:       "lookup",
+				Outcome: &tool.Result{
+					Content:           `{"temperature":23}`,
+					StructuredContent: json.RawMessage(`{"temperature":23}`),
+				},
 			},
 		},
 	}
 
 	restored := FromModel(original).ToModel()
 
-	require.NotNil(t, restored.Content.ToolResult)
-	assert.Equal(t, "call-1", restored.Content.ToolResult.ToolCallID)
-	assert.Equal(t, "lookup", restored.Content.ToolResult.Name)
-	assert.JSONEq(t, `{"temperature":23}`, string(restored.Content.ToolResult.StructuredContent))
+	require.NotNil(t, restored.Content.ToolResponse)
+	assert.Equal(t, "call-1", restored.Content.ToolResponse.ToolCallID)
+	assert.Equal(t, "lookup", restored.Content.ToolResponse.Name)
+	result, ok := restored.Content.ToolResponse.Outcome.(*tool.Result)
+	require.True(t, ok)
+	assert.JSONEq(t, `{"temperature":23}`, string(result.StructuredContent))
 	assert.Equal(t, "call-1", restored.Content.ToolCallID)
+}
+
+func TestFromModel_ToModel_HandledToolResponse(t *testing.T) {
+	original := model.Event{
+		Author: "lookup",
+		Content: model.Content{
+			Role: model.RoleTool,
+			ToolResponse: &model.ToolResponse{
+				ToolCallID: "call-1",
+				Name:       "lookup",
+				Outcome: &tool.HandledError{
+					Content:           "not available",
+					StructuredContent: json.RawMessage(`{"code":"not_available"}`),
+				},
+			},
+		},
+	}
+
+	stored := FromModel(original)
+	value, err := stored.ToolResponse.Value()
+	require.NoError(t, err)
+	assert.NotContains(t, value, "is_error")
+	assert.Contains(t, value, `"error"`)
+
+	restored := stored.ToModel()
+	require.NotNil(t, restored.Content.ToolResponse)
+	failure, ok := restored.Content.ToolResponse.Outcome.(*tool.HandledError)
+	require.True(t, ok)
+	assert.Equal(t, "not available", failure.Content)
+	assert.JSONEq(t, `{"code":"not_available"}`, string(failure.StructuredContent))
+}
+
+func TestToolResponse_ScanLegacyIsError(t *testing.T) {
+	var response ToolResponse
+	err := response.Scan(`{"tool_call_id":"call-1","name":"lookup","content":"not available","structured_content":{"code":"not_available"},"is_error":true}`)
+	require.NoError(t, err)
+	require.NotNil(t, response.Error)
+	assert.Nil(t, response.Result)
+	assert.Equal(t, "not available", response.Error.Content)
+	assert.JSONEq(t, `{"code":"not_available"}`, string(response.Error.StructuredContent))
+}
+
+func TestToolResponse_ValueRejectsInvalidOutcomeCount(t *testing.T) {
+	for _, response := range []ToolResponse{
+		{ToolCallID: "call-1"},
+		{ToolCallID: "call-1", Result: &tool.Result{}, Error: tool.NewHandledError("failed")},
+	} {
+		_, err := response.Value()
+		require.Error(t, err)
+	}
 }
 
 func TestUsageDetails_ValueScan(t *testing.T) {

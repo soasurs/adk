@@ -30,9 +30,9 @@ type Config struct {
 	// fails. All hooks run and their errors are joined.
 	AfterLLMCalls []AfterLLMCall
 	// BeforeToolCalls run in order immediately before each tool invocation. The
-	// first non-nil result skips the remaining hooks and the actual tool call. A
-	// returned ToolCallResult with Err set, or a non-nil error return, aborts
-	// execution.
+	// first non-nil override skips the remaining hooks and the actual tool call.
+	// A HandledError completes the call with a model-visible failure; any other
+	// non-nil error aborts execution.
 	BeforeToolCalls []BeforeToolCall
 	// AfterToolCalls run in order after each tool invocation completes, including
 	// handled lookup failures and terminal tool execution errors. All hooks run
@@ -442,8 +442,13 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		if event.Content.Role != "" {
 			toolEnd.EventAuthor = event.Author
 			toolEnd.EventRole = event.Content.Role
-			if event.Content.ToolResult != nil {
-				toolEnd.IsError = event.Content.ToolResult.IsError
+			if response := event.Content.ToolResponse; response != nil {
+				switch response.Outcome.(type) {
+				case *tool.Result:
+					toolEnd.ToolOutcome = adktrace.ToolOutcomeSuccess
+				case *tool.HandledError:
+					toolEnd.ToolOutcome = adktrace.ToolOutcomeFailure
+				}
 			}
 		}
 		if err != nil {
@@ -472,51 +477,41 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		Tool:       t,
 		Definition: def,
 	}
-	skipResult, err := a.beforeToolCall(ctx, call)
-	if err != nil {
-		return model.Event{}, err
-	}
-
 	startedAt := time.Now()
-	if skipResult != nil {
+	override, beforeErr := a.beforeToolCall(ctx, call)
+	if beforeErr != nil {
+		return a.finishToolError(ctx, cancelTools, call, tc, beforeErr, time.Since(startedAt))
+	}
+	if override != nil {
 		toolEnd.Attributes = map[string]any{"skipped": true}
-		toolEnd.Duration = time.Since(startedAt)
-		if skipResult.Err != nil {
-			executionErr := fmt.Errorf("llmagent: skip tool %q: %w", tc.Name, skipResult.Err)
-			callResult := &ToolCallResult{
-				Err:      executionErr,
-				Duration: toolEnd.Duration,
-			}
+		if override.Outcome == nil {
+			executionErr := fmt.Errorf("llmagent: before tool %q returned an override without an outcome", tc.Name)
 			cancelTools()
-			return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
+			return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, &ToolCallResult{
+				Err:      executionErr,
+				Duration: time.Since(startedAt),
+			}))
 		}
-		toolEnd.IsError = skipResult.Result.IsError
-		if hookErr := a.afterToolCall(ctx, call, skipResult); hookErr != nil {
+		event, response, responseErr := toolResponseEvent(tc, override.Outcome)
+		if responseErr != nil {
+			cancelTools()
+			return model.Event{}, joinAfterToolCallError(tc.Name, responseErr, a.afterToolCall(ctx, call, &ToolCallResult{
+				Err:      responseErr,
+				Duration: time.Since(startedAt),
+			}))
+		}
+		if hookErr := a.afterToolCall(ctx, call, &ToolCallResult{
+			Response: response,
+			Duration: time.Since(startedAt),
+		}); hookErr != nil {
 			return model.Event{}, joinAfterToolCallError(tc.Name, nil, hookErr)
 		}
-		return skipResult.Event, nil
+		toolEnd.Duration = time.Since(startedAt)
+		return event, nil
 	}
 
 	if !ok {
-		toolErr := &ToolNotFoundError{Name: tc.Name}
-		result := tool.Result{
-			Content: toolErr.Error(),
-			IsError: true,
-		}
-		event := model.Event{
-			Author:  tc.Name,
-			Content: toolResultContent(tc, result),
-		}
-		if err := a.afterToolCall(ctx, call, &ToolCallResult{
-			Event:    event,
-			Result:   result,
-			Duration: time.Since(startedAt),
-		}); err != nil {
-			return model.Event{}, joinAfterToolCallError(tc.Name, nil, err)
-		}
-		toolEnd.Duration = time.Since(startedAt)
-		toolEnd.IsError = true
-		return event, nil
+		return a.finishToolError(ctx, cancelTools, call, tc, tool.NewHandledError((&ToolNotFoundError{Name: tc.Name}).Error()), time.Since(startedAt))
 	}
 
 	result, toolErr := t.Run(ctx, tool.Call{
@@ -525,29 +520,87 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		Arguments: toolCallArguments(tc.Arguments),
 	})
 	if toolErr != nil {
-		toolEnd.Duration = time.Since(startedAt)
-		executionErr := fmt.Errorf("llmagent: run tool %q: %w", tc.Name, toolErr)
-		callResult := &ToolCallResult{
-			Err:      executionErr,
-			Duration: toolEnd.Duration,
-		}
-		cancelTools()
-		return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, callResult))
+		return a.finishToolError(ctx, cancelTools, call, tc, fmt.Errorf("llmagent: run tool %q: %w", tc.Name, toolErr), time.Since(startedAt))
 	}
-	event = model.Event{
-		Author:  t.Definition().Name,
-		Content: toolResultContent(tc, result),
+	if result == nil {
+		executionErr := fmt.Errorf("llmagent: run tool %q: nil result without error", tc.Name)
+		cancelTools()
+		return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, &ToolCallResult{
+			Err:      executionErr,
+			Duration: time.Since(startedAt),
+		}))
+	}
+	event, response, responseErr := toolResponseEvent(tc, result)
+	if responseErr != nil {
+		cancelTools()
+		return model.Event{}, responseErr
 	}
 	if hookErr := a.afterToolCall(ctx, call, &ToolCallResult{
-		Event:    event,
-		Result:   result,
+		Response: response,
 		Duration: time.Since(startedAt),
 	}); hookErr != nil {
 		return model.Event{}, joinAfterToolCallError(tc.Name, nil, hookErr)
 	}
 	toolEnd.Duration = time.Since(startedAt)
-	toolEnd.IsError = result.IsError
 	return event, nil
+}
+
+func (a *LlmAgent) finishToolError(
+	ctx context.Context,
+	cancelTools context.CancelFunc,
+	call *ToolCall,
+	tc model.ToolCall,
+	err error,
+	duration time.Duration,
+) (model.Event, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
+	if handled, ok := asHandledToolError(err); ok {
+		event, response, responseErr := toolResponseEvent(tc, handled)
+		if responseErr != nil {
+			cancelTools()
+			return model.Event{}, responseErr
+		}
+		if hookErr := a.afterToolCall(ctx, call, &ToolCallResult{
+			Response: response,
+			Duration: duration,
+		}); hookErr != nil {
+			return model.Event{}, joinAfterToolCallError(tc.Name, nil, hookErr)
+		}
+		return event, nil
+	}
+
+	cancelTools()
+	return model.Event{}, joinAfterToolCallError(tc.Name, err, a.afterToolCall(ctx, call, &ToolCallResult{
+		Err:      err,
+		Duration: duration,
+	}))
+}
+
+func asHandledToolError(err error) (*tool.HandledError, bool) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || containsJoinedError(err) {
+		return nil, false
+	}
+	var handled *tool.HandledError
+	if !errors.As(err, &handled) || handled == nil {
+		return nil, false
+	}
+	return handled, true
+}
+
+func containsJoinedError(err error) bool {
+	for err != nil {
+		if _, ok := err.(interface{ Unwrap() []error }); ok {
+			return true
+		}
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = unwrapper.Unwrap()
+	}
+	return false
 }
 
 func firstToolCallError(errs []error) error {
@@ -593,23 +646,36 @@ func addUsageToTraceEvent(event *adktrace.Event, usage *model.TokenUsage) {
 	event.TotalTokens = usage.TotalTokens
 }
 
-func toolResultContent(tc model.ToolCall, result tool.Result) model.Content {
-	content := result.Content
-	if content == "" && len(result.StructuredContent) > 0 {
-		content = string(result.StructuredContent)
+func toolResponseEvent(tc model.ToolCall, outcome tool.Outcome) (model.Event, *model.ToolResponse, error) {
+	var cloned tool.Outcome
+	switch outcome := outcome.(type) {
+	case *tool.Result:
+		if outcome == nil {
+			return model.Event{}, nil, fmt.Errorf("llmagent: tool %q returned a nil result", tc.Name)
+		}
+		cloned = outcome.Clone()
+	case *tool.HandledError:
+		if outcome == nil {
+			return model.Event{}, nil, fmt.Errorf("llmagent: tool %q returned a nil handled error", tc.Name)
+		}
+		cloned = outcome.Clone()
+	default:
+		return model.Event{}, nil, fmt.Errorf("llmagent: tool %q returned unsupported outcome %T", tc.Name, outcome)
 	}
-	return model.Content{
-		Role:       model.RoleTool,
-		Content:    content,
+	response := &model.ToolResponse{
 		ToolCallID: tc.ID,
-		ToolResult: &model.ToolResult{
-			ToolCallID:        tc.ID,
-			Name:              tc.Name,
-			Content:           content,
-			StructuredContent: result.StructuredContent,
-			IsError:           result.IsError,
-		},
+		Name:       tc.Name,
+		Outcome:    cloned,
 	}
+	return model.Event{
+		Author: tc.Name,
+		Content: model.Content{
+			Role:         model.RoleTool,
+			Content:      response.Text(),
+			ToolCallID:   tc.ID,
+			ToolResponse: response,
+		},
+	}, response, nil
 }
 
 func (a *LlmAgent) beforeLLMCall(ctx context.Context, call *LLMCall) (*model.LLMResponse, error) {
@@ -632,7 +698,7 @@ func (a *LlmAgent) afterLLMCall(ctx context.Context, call *LLMCall, result *LLMC
 	return errors.Join(errs...)
 }
 
-func (a *LlmAgent) beforeToolCall(ctx context.Context, call *ToolCall) (*ToolCallResult, error) {
+func (a *LlmAgent) beforeToolCall(ctx context.Context, call *ToolCall) (*ToolCallOverride, error) {
 	for _, hook := range a.config.BeforeToolCalls {
 		result, err := hook(ctx, call)
 		if err != nil || result != nil {

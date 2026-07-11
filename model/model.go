@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 
 	"github.com/soasurs/adk/tool"
@@ -113,32 +114,75 @@ type ToolCall struct {
 	ThoughtSignature []byte
 }
 
-// ToolResult represents the result returned for one tool invocation.
-type ToolResult struct {
-	// ToolCallID links this result to the ToolCall.ID it answers.
+// ToolResponse represents the completed outcome of one tool invocation.
+type ToolResponse struct {
+	// ToolCallID links this response to the ToolCall.ID it answers.
 	ToolCallID string
-	// Name is the tool name associated with the result.
+	// Name is the tool name associated with the response.
 	Name string
-	// Content is the plain-text fallback for providers that do not support
-	// structured tool results.
-	Content string
-	// StructuredContent is the raw JSON result returned by the tool.
-	StructuredContent json.RawMessage
-	// IsError reports that the tool invocation completed with a handled failure
-	// whose content is safe to return to the model as a tool response.
-	IsError bool
+	// Outcome is either a successful *tool.Result or a model-visible
+	// *tool.HandledError.
+	Outcome tool.Outcome
 }
 
 // Text returns the plain-text form that should be used when a provider does
 // not support structured tool results.
-func (r ToolResult) Text() string {
-	if r.Content != "" {
-		return r.Content
+func (r ToolResponse) Text() string {
+	if r.Outcome == nil {
+		return ""
 	}
-	if len(r.StructuredContent) > 0 {
-		return string(r.StructuredContent)
+	return r.Outcome.Text()
+}
+
+// MarshalJSON encodes the sealed outcome as exactly one result or error field.
+func (r ToolResponse) MarshalJSON() ([]byte, error) {
+	var wire struct {
+		ToolCallID string             `json:"tool_call_id"`
+		Name       string             `json:"name,omitempty"`
+		Result     *tool.Result       `json:"result,omitempty"`
+		Error      *tool.HandledError `json:"error,omitempty"`
 	}
-	return ""
+	wire.ToolCallID = r.ToolCallID
+	wire.Name = r.Name
+	switch outcome := r.Outcome.(type) {
+	case *tool.Result:
+		if outcome == nil {
+			return nil, fmt.Errorf("model: tool response contains a nil result")
+		}
+		wire.Result = outcome
+	case *tool.HandledError:
+		if outcome == nil {
+			return nil, fmt.Errorf("model: tool response contains a nil handled error")
+		}
+		wire.Error = outcome
+	default:
+		return nil, fmt.Errorf("model: tool response contains unsupported outcome %T", r.Outcome)
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON decodes a tool response containing exactly one result or error.
+func (r *ToolResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ToolCallID string             `json:"tool_call_id"`
+		Name       string             `json:"name,omitempty"`
+		Result     *tool.Result       `json:"result,omitempty"`
+		Error      *tool.HandledError `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if (wire.Result == nil) == (wire.Error == nil) {
+		return fmt.Errorf("model: tool response must contain exactly one outcome")
+	}
+	r.ToolCallID = wire.ToolCallID
+	r.Name = wire.Name
+	if wire.Result != nil {
+		r.Outcome = wire.Result
+	} else {
+		r.Outcome = wire.Error
+	}
+	return nil
 }
 
 // TokenUsage holds the token consumption statistics for a single LLM call.
@@ -199,30 +243,30 @@ type Content struct {
 	ReasoningContent string
 	// ToolCalls is populated when Role is RoleAssistant and the model requests tool invocations.
 	ToolCalls []ToolCall
-	// ToolResult is populated when Role is RoleTool.
-	ToolResult *ToolResult
+	// ToolResponse is populated when Role is RoleTool.
+	ToolResponse *ToolResponse
 	// ToolCallID links a RoleTool message back to the ToolCall.ID it is
 	// responding to. It is kept as a text fallback for simple callers; when
-	// ToolResult is non-nil, ToolResult.ToolCallID takes precedence.
+	// ToolResponse is non-nil, ToolResponse.ToolCallID takes precedence.
 	ToolCallID string
 }
 
-// ToolResultValue returns the explicit tool result when present, otherwise it
-// builds one from the legacy RoleTool fallback fields.
-func (c Content) ToolResultValue() ToolResult {
-	if c.ToolResult != nil {
-		result := *c.ToolResult
-		if result.ToolCallID == "" {
-			result.ToolCallID = c.ToolCallID
+// ToolResponseValue returns the explicit tool response when present, otherwise
+// it builds a successful response from the legacy RoleTool fallback fields.
+func (c Content) ToolResponseValue() ToolResponse {
+	if c.ToolResponse != nil {
+		response := *c.ToolResponse
+		if response.ToolCallID == "" {
+			response.ToolCallID = c.ToolCallID
 		}
-		if result.Content == "" {
-			result.Content = c.Content
+		if response.Outcome == nil && c.Content != "" {
+			response.Outcome = &tool.Result{Content: c.Content}
 		}
-		return result
+		return response
 	}
-	return ToolResult{
+	return ToolResponse{
 		ToolCallID: c.ToolCallID,
-		Content:    c.Content,
+		Outcome:    &tool.Result{Content: c.Content},
 	}
 }
 

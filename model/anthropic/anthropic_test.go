@@ -577,12 +577,10 @@ func TestMessages_Generate_WithTool(t *testing.T) {
 				Role:       model.RoleTool,
 				Content:    result.Content,
 				ToolCallID: tc.ID,
-				ToolResult: &model.ToolResult{
-					ToolCallID:        tc.ID,
-					Name:              tc.Name,
-					Content:           result.Content,
-					StructuredContent: result.StructuredContent,
-					IsError:           result.IsError,
+				ToolResponse: &model.ToolResponse{
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Outcome:    result,
 				},
 			})
 		}

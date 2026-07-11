@@ -148,7 +148,7 @@ func (s *spanWrapper) End(_ context.Context, event adktrace.Event) {
 	if event.Err != nil {
 		s.span.RecordError(event.Err)
 		s.span.SetStatus(codes.Error, event.Err.Error())
-	} else if event.IsError {
+	} else if event.ToolOutcome == adktrace.ToolOutcomeFailure {
 		s.span.SetStatus(codes.Error, "adk operation reported an error")
 	}
 	opts := []oteltrace.SpanEndOption(nil)
@@ -234,9 +234,7 @@ func defaultAttributes(event adktrace.Event) []attribute.KeyValue {
 	if event.StoppedEarly {
 		attrs = append(attrs, attribute.Bool("adk.stopped_early", true))
 	}
-	if event.IsError {
-		attrs = append(attrs, attribute.Bool("adk.is_error", true))
-	}
+	addString("adk.tool.outcome", string(event.ToolOutcome))
 	for key, value := range event.Attributes {
 		if attr, ok := attributeValue("adk.attr."+key, value); ok {
 			attrs = append(attrs, attr)

@@ -93,8 +93,8 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - **Session listing** — `ListSessions` is scoped by `app_id/user_id`, uses limit/offset pagination, and applies a stable `session_id` tiebreaker to configurable creation-time or ID ordering.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
 - **Provider neutrality** — `model.LLM`, `tool.Tool`, and `session.Session` are the three abstraction points. Provider-specific code lives exclusively in sub-packages.
-- **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; tool outputs use `tool.Result` / `model.ToolResult` with text fallback, structured JSON, and `IsError`. Do not collapse arguments or results back into plain strings except at provider-specific API boundaries.
-- **Tool failure boundary** — `tool.Result{IsError: true}` is a handled failure whose content is safe for the model, and the tool-call loop continues. A non-nil Go `error` means no valid result was produced; ignore the accompanying `Result`, cancel sibling calls, and terminate the current run. Never convert an arbitrary Go error into model-visible content.
+- **Structured tool boundary** — tool-call arguments are raw JSON (`json.RawMessage`) in `model.ToolCall` and `tool.Call`; successful outputs use `*tool.Result`, handled failures use `*tool.HandledError`, and completed history uses `model.ToolResponse` with a sealed `tool.Outcome`. Do not collapse arguments or outcomes back into plain strings except at provider-specific API boundaries.
+- **Tool failure boundary** — `*tool.HandledError` is a completed failure whose content is safe for the model, and the tool-call loop continues. Any other non-nil Go `error` means no valid outcome was produced; ignore an accompanying result, cancel sibling calls, and terminate the current run. Never convert an arbitrary Go error into model-visible content.
 - **OpenAI Responses state ownership** — `openai.NewResponses` must keep `store=false` by default and send ADK-provided history statelessly. Only enable OpenAI-managed response storage or conversation state through explicit OpenAI adapter options.
 - **Dynamic instructions are ephemeral** — `llmagent.InstructionProvider` runs once before each permitted LLM invocation and receives an isolated, system-free canonical conversation. Its output is request-only: build a fresh deeply copied request per iteration and never yield or persist the dynamic instruction.
 - **Skills use progressive disclosure** — `skill` discovers and validates `SKILL.md`, renders a metadata-only catalog, and provides optional loading/resource tools. Applications own `InstructionProvider` injection and tool registration; `llmagent.Config` has no skill-specific field. Skill scripts may be read as text but are never executed by the package.
@@ -118,8 +118,8 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 - `*bool` only for tri-state fields where nil means "provider decides" (`EnableThinking *bool`).
 - Provider-specific generation controls stay in adapter packages; OpenAI Responses callers should use `openai.WithResponses...` options, and DeepSeek callers should use `deepseek.WithThinkingEnabled` and `deepseek.WithReasoningEffort` rather than importing Chat-specific `model/openai` options.
 - Decorator pattern for tool wrappers: `tool.WithTimeout` wraps any `Tool` as a private struct.
-- Prefer `tool.NewFunc[In, Out]` for application tools so input/output schemas are inferred from Go types. Return `tool.NewFuncError` only for handled failures that are safe for the model; ordinary handler errors are terminal. Custom tools should implement `Run(ctx, tool.Call) (tool.Result, error)`.
-- Use `tool.Result{IsError: true}` for handled model-visible tool failures. Reserve Go `error` returns for SDK, transport, serialization, framework, cancellation, or timeout failures that must terminate the current run.
+- Prefer `tool.NewFunc[In, Out]` for application tools so input/output schemas are inferred from Go types. Return `tool.NewHandledError` only for handled failures that are safe for the model; ordinary handler errors are terminal. Custom tools should implement `Run(ctx, tool.Call) (*tool.Result, error)`.
+- Use `tool.NewHandledError` for handled model-visible tool failures. Reserve other Go `error` values for SDK, transport, serialization, framework, cancellation, or timeout failures that must terminate the current run.
 
 ### Naming
 
@@ -133,7 +133,7 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 
 - Return errors; do not panic in library code except for construction-time invariants.
 - Wrap external errors with `%w` to preserve the chain for `errors.Is`/`errors.As`.
-- At the `tool.Tool` boundary, a non-nil error always wins; discard any accompanying `tool.Result` and do not expose its content to the model.
+- At the `tool.Tool` boundary, a non-nil error always invalidates any accompanying `*tool.Result`. Convert only `*tool.HandledError` into a model-visible outcome; all other errors are terminal.
 - Structured error types pair with a sentinel for `errors.Is` matching via `Unwrap()`:
   ```go
   var ErrSessionNotFound = errors.New("runner: session not found")
