@@ -261,6 +261,10 @@ func (c Content) ToolResponseValue() ToolResponse {
 		}
 		if response.Outcome == nil && c.Content != "" {
 			response.Outcome = &tool.Result{Content: c.Content}
+		} else if response.Text() == "" && c.Content != "" {
+			// Outcome is present but produces empty text (e.g. &tool.Result{}).
+			// Preserve existing outcome but supply c.Content as fallback text.
+			response.Outcome = &tool.Result{Content: c.Content}
 		}
 		return response
 	}

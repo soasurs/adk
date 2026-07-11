@@ -44,6 +44,79 @@ func TestToolResponse_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToolResponseValue_EmptyOutcomeFallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  Content
+		wantText string
+	}{
+		{
+			name:     "nil tool response uses c.Content",
+			content:  Content{Role: RoleTool, ToolCallID: "c-1", Content: "legacy fallback", ToolResponse: nil},
+			wantText: "legacy fallback",
+		},
+		{
+			name: "explicit empty result uses c.Content",
+			content: Content{
+				Role:       RoleTool,
+				Content:    "text fallback",
+				ToolCallID: "c-2",
+				ToolResponse: &ToolResponse{
+					ToolCallID: "c-2",
+					Name:       "echo",
+					Outcome:    &tool.Result{},
+				},
+			},
+			wantText: "text fallback",
+		},
+		{
+			name: "non-empty result preserved",
+			content: Content{
+				Role:    RoleTool,
+				Content: "should not be used",
+				ToolResponse: &ToolResponse{
+					ToolCallID: "c-3",
+					Name:       "echo",
+					Outcome:    &tool.Result{Content: "explicit content"},
+				},
+			},
+			wantText: "explicit content",
+		},
+		{
+			name: "structured content only no fallback needed",
+			content: Content{
+				Role:    RoleTool,
+				Content: "",
+				ToolResponse: &ToolResponse{
+					ToolCallID: "c-4",
+					Name:       "echo",
+					Outcome:    &tool.Result{StructuredContent: json.RawMessage(`{"k":"v"}`)},
+				},
+			},
+			wantText: `{"k":"v"}`,
+		},
+		{
+			name: "handled error not overwritten by c.Content",
+			content: Content{
+				Role:    RoleTool,
+				Content: "should not be used",
+				ToolResponse: &ToolResponse{
+					ToolCallID: "c-5",
+					Name:       "lookup",
+					Outcome:    tool.NewHandledError("record not found"),
+				},
+			},
+			wantText: "record not found",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := tt.content.ToolResponseValue()
+			assert.Equal(t, tt.wantText, response.Text())
+		})
+	}
+}
+
 func TestToolResponse_JSONRejectsMissingOrAmbiguousOutcome(t *testing.T) {
 	for _, data := range []string{
 		`{"tool_call_id":"call-1"}`,

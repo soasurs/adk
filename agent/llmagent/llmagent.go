@@ -438,6 +438,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		ToolCallID: tc.ID,
 		ToolIndex:  toolIndex,
 	}
+	startedAt := time.Now()
 	defer func() {
 		if event.Content.Role != "" {
 			toolEnd.EventAuthor = event.Author
@@ -453,6 +454,9 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		}
 		if err != nil {
 			toolEnd.Err = err
+		}
+		if toolEnd.Duration == 0 {
+			toolEnd.Duration = time.Since(startedAt)
 		}
 		toolSpan.End(ctx, toolEnd)
 	}()
@@ -477,7 +481,6 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		Tool:       t,
 		Definition: def,
 	}
-	startedAt := time.Now()
 	override, beforeErr := a.beforeToolCall(ctx, call)
 	if beforeErr != nil {
 		return a.finishToolError(ctx, cancelTools, call, tc, beforeErr, time.Since(startedAt))
@@ -523,12 +526,7 @@ func (a *LlmAgent) runToolCall(ctx context.Context, cancelTools context.CancelFu
 		return a.finishToolError(ctx, cancelTools, call, tc, fmt.Errorf("llmagent: run tool %q: %w", tc.Name, toolErr), time.Since(startedAt))
 	}
 	if result == nil {
-		executionErr := fmt.Errorf("llmagent: run tool %q: nil result without error", tc.Name)
-		cancelTools()
-		return model.Event{}, joinAfterToolCallError(tc.Name, executionErr, a.afterToolCall(ctx, call, &ToolCallResult{
-			Err:      executionErr,
-			Duration: time.Since(startedAt),
-		}))
+		return a.finishToolError(ctx, cancelTools, call, tc, fmt.Errorf("llmagent: run tool %q: nil result without error", tc.Name), time.Since(startedAt))
 	}
 	event, response, responseErr := toolResponseEvent(tc, result)
 	if responseErr != nil {
