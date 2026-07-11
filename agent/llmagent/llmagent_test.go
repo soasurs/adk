@@ -1743,6 +1743,58 @@ func TestLlmAgent_ParallelToolErrorsPreferNonCancellationCause(t *testing.T) {
 	}
 }
 
+func TestLlmAgent_ParallelToolErrorCancelsBeforeAfterHook(t *testing.T) {
+	started := make(chan struct{})
+	blocking := &outcomeTool{
+		name: "blocking",
+		run: func(ctx context.Context, _ tool.Call) (tool.Result, error) {
+			close(started)
+			<-ctx.Done()
+			return tool.Result{}, ctx.Err()
+		},
+	}
+	rootErr := errors.New("dependency failed")
+	failing := &outcomeTool{
+		name: "failing",
+		run: func(context.Context, tool.Call) (tool.Result, error) {
+			<-started
+			return tool.Result{}, rootErr
+		},
+	}
+	mock := &mockLLM{
+		name: "mock-parallel-tool-error-hook",
+		responses: []*model.LLMResponse{
+			{
+				Content: model.Content{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "tc-1", Name: "blocking", Arguments: json.RawMessage(`{}`)},
+						{ID: "tc-2", Name: "failing", Arguments: json.RawMessage(`{}`)},
+					},
+				},
+				FinishReason: model.FinishReasonToolCalls,
+			},
+		},
+	}
+	a := New(Config{
+		Name:  "parallel-tool-error-hook-agent",
+		Model: mock,
+		Tools: []tool.Tool{blocking, failing},
+		AfterToolCall: func(ctx context.Context, call *ToolCall, result *ToolCallResult) error {
+			if call.Request.Name == "failing" {
+				assert.ErrorIs(t, ctx.Err(), context.Canceled)
+				assert.ErrorIs(t, result.Err, rootErr)
+			}
+			return nil
+		},
+	}).(*LlmAgent)
+
+	msgs, err := collectMessages(t, a, []model.Content{{Role: model.RoleUser, Content: "run tools"}})
+
+	require.ErrorIs(t, err, rootErr)
+	require.Len(t, msgs, 1)
+}
+
 // ---------------------------------------------------------------------------
 // ToolTimeout tests
 // ---------------------------------------------------------------------------
