@@ -189,6 +189,34 @@ missing, `Run` returns `runner.ErrToolExecutionUnknown` (with details in
 invoke the agent. The runner does not automatically retry or synthesize a
 result because the external side effect may already have happened.
 
+### Dynamic system instructions
+
+Use `InstructionProvider` when an `LlmAgent` needs an ephemeral system
+instruction that is rebuilt before each LLM invocation:
+
+```go
+agent := llmagent.New(llmagent.Config{
+    Name:        "assistant",
+    Model:       llm,
+    Instruction: "You are a helpful assistant.",
+    InstructionProvider: func(ctx context.Context, input llmagent.InstructionInput) (string, error) {
+        return fmt.Sprintf("Use verbosity level %d.", currentVerbosity()), nil
+    },
+})
+```
+
+The provider receives an isolated copy of the non-system conversation. Its
+output is combined with the static instruction and latest compaction summary
+for the current request only; it is not yielded, persisted, or cached by the
+SDK. This is a dynamic system-instruction hook, not context storage. Stable
+facts should normally be represented by user, assistant, or tool events.
+
+Changing provider output reduces prompt-cache reuse from the first differing
+token onward. Avoid unnecessary timestamps, random values, and per-iteration
+changes when cache stability matters. ADK neither caches provider output nor
+implements provider-specific cache controls; callers choose the tradeoff
+between dynamic guidance and a stable prompt prefix.
+
 ### `model.LLM`
 
 ```go
