@@ -3,6 +3,7 @@ package skill
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -40,9 +41,7 @@ func cloneMap[K comparable, V any](input map[K]V) map[K]V {
 		return nil
 	}
 	cloned := make(map[K]V, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, input)
 	return cloned
 }
 
