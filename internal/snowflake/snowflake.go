@@ -4,8 +4,15 @@ import (
 	"errors"
 	"hash/fnv"
 	"net"
+	"sync"
 
 	"github.com/bwmarrin/snowflake"
+)
+
+var (
+	nodeOnce sync.Once
+	node     *snowflake.Node
+	nodeErr  error
 )
 
 func init() {
@@ -14,7 +21,15 @@ func init() {
 	snowflake.StepBits = 8
 }
 
+// New returns the process-global Snowflake node used for event identifiers.
 func New() (*snowflake.Node, error) {
+	nodeOnce.Do(func() {
+		node, nodeErr = newNode()
+	})
+	return node, nodeErr
+}
+
+func newNode() (*snowflake.Node, error) {
 	addresses, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, err
