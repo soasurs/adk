@@ -600,7 +600,13 @@ func (s *errSession) GetEvents(_ context.Context, _, _ int64) ([]*event.Event, e
 func (s *errSession) ListEvents(_ context.Context) ([]*event.Event, error) {
 	return nil, errors.New("errSession")
 }
+func (s *errSession) ListTurns(_ context.Context) ([]*session.Turn, error) {
+	return nil, errors.New("errSession")
+}
 func (s *errSession) ListArchivedEvents(_ context.Context) ([]*event.Event, error) {
+	return nil, errors.New("errSession")
+}
+func (s *errSession) ListArchivedTurns(_ context.Context) ([]*session.Turn, error) {
 	return nil, errors.New("errSession")
 }
 func (s *errSession) DeleteEvent(_ context.Context, _ int64) error { return errors.New("errSession") }

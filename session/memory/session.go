@@ -84,17 +84,22 @@ func (s *memorySession) ListEvents(ctx context.Context) ([]*event.Event, error) 
 	return s.activeEvents(), nil
 }
 
+func (s *memorySession) ListTurns(ctx context.Context) ([]*session.Turn, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return session.GroupEventsByTurn(s.activeEvents()), nil
+}
+
 func (s *memorySession) ListArchivedEvents(ctx context.Context) ([]*event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*event.Event, 0)
-	for _, ev := range s.events {
-		if ev.ArchivedAt > 0 && ev.DeletedAt == 0 {
-			out = append(out, cloneEvent(ev))
-		}
-	}
-	sortEvents(out)
-	return out, nil
+	return s.archivedEvents(), nil
+}
+
+func (s *memorySession) ListArchivedTurns(ctx context.Context) ([]*session.Turn, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return session.GroupEventsByTurn(s.archivedEvents()), nil
 }
 
 func (s *memorySession) ArchiveEventsBefore(ctx context.Context, eventID int64) error {
@@ -134,6 +139,20 @@ func (s *memorySession) activeEvents() []*event.Event {
 	out := make([]*event.Event, 0, len(s.events))
 	for _, ev := range s.events {
 		if ev.ArchivedAt == 0 && ev.DeletedAt == 0 {
+			out = append(out, cloneEvent(ev))
+		}
+	}
+	sortEvents(out)
+	return out
+}
+
+// archivedEvents returns all events with ArchivedAt > 0 and DeletedAt == 0,
+// sorted by created_at ASC with event_id as a stable tiebreaker. Must be
+// called with s.mu held (read or write).
+func (s *memorySession) archivedEvents() []*event.Event {
+	out := make([]*event.Event, 0)
+	for _, ev := range s.events {
+		if ev.ArchivedAt > 0 && ev.DeletedAt == 0 {
 			out = append(out, cloneEvent(ev))
 		}
 	}
