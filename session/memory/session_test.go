@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	adksession "github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/event"
@@ -222,6 +223,233 @@ func TestMemorySession_ListEvents(t *testing.T) {
 	msgs, err := sess.ListEvents(ctx)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 5)
+}
+
+func TestMemorySession_ListTurns_Empty(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	turns, err := sess.ListTurns(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
+func TestMemorySession_ListTurns_SingleTurn(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "hello")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "world")
+	ev2.TurnID = "turn-1"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-1", turns[0].TurnID)
+	require.Len(t, turns[0].Events, 2)
+	assert.Equal(t, int64(1), turns[0].Events[0].EventID)
+	assert.Equal(t, int64(2), turns[0].Events[1].EventID)
+}
+
+func TestMemorySession_ListTurns_MultipleTurns(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-1"
+	ev3 := newTestMessage(3, "c")
+	ev3.TurnID = "turn-2"
+	ev4 := newTestMessage(4, "d")
+	ev4.TurnID = "turn-2"
+	ev5 := newTestMessage(5, "e")
+	ev5.TurnID = "turn-2"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+	require.NoError(t, sess.CreateEvent(ctx, ev3))
+	require.NoError(t, sess.CreateEvent(ctx, ev4))
+	require.NoError(t, sess.CreateEvent(ctx, ev5))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 2)
+
+	assert.Equal(t, "turn-1", turns[0].TurnID)
+	assert.Len(t, turns[0].Events, 2)
+	assert.Equal(t, int64(1), turns[0].Events[0].EventID)
+	assert.Equal(t, int64(2), turns[0].Events[1].EventID)
+
+	assert.Equal(t, "turn-2", turns[1].TurnID)
+	require.Len(t, turns[1].Events, 3)
+	assert.Equal(t, int64(3), turns[1].Events[0].EventID)
+	assert.Equal(t, int64(4), turns[1].Events[1].EventID)
+	assert.Equal(t, int64(5), turns[1].Events[2].EventID)
+}
+
+func TestMemorySession_ListTurns_EmptyTurnID(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = ""
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = ""
+	ev3 := newTestMessage(3, "c")
+	ev3.TurnID = "turn-1"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+	require.NoError(t, sess.CreateEvent(ctx, ev3))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 2)
+
+	assert.Equal(t, "", turns[0].TurnID)
+	assert.Len(t, turns[0].Events, 2)
+
+	assert.Equal(t, "turn-1", turns[1].TurnID)
+	assert.Len(t, turns[1].Events, 1)
+}
+
+func TestMemorySession_ListTurns_NonContiguousTurns(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-2"
+	ev3 := newTestMessage(3, "c")
+	ev3.TurnID = "turn-1"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+	require.NoError(t, sess.CreateEvent(ctx, ev3))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 3)
+	assert.Equal(t, "turn-1", turns[0].TurnID)
+	assert.Equal(t, "turn-2", turns[1].TurnID)
+	assert.Equal(t, "turn-1", turns[2].TurnID)
+}
+
+func TestMemorySession_ListTurns_ExcludesArchived(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-1"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+
+	require.NoError(t, sess.ArchiveEventsBefore(ctx, 0))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
+func TestMemorySession_ListTurns_ExcludesDeleted(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-1"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+
+	require.NoError(t, sess.DeleteEvent(ctx, 1))
+
+	turns, err := sess.ListTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Len(t, turns[0].Events, 1)
+	assert.Equal(t, int64(2), turns[0].Events[0].EventID)
+}
+
+func TestMemorySession_ListArchivedTurns_Empty(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	turns, err := sess.ListArchivedTurns(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
+func TestMemorySession_ListArchivedTurns(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-1"
+	ev3 := newTestMessage(3, "c")
+	ev3.TurnID = "turn-2"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+	require.NoError(t, sess.CreateEvent(ctx, ev3))
+
+	require.NoError(t, sess.ArchiveEventsBefore(ctx, 3))
+
+	turns, err := sess.ListArchivedTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-1", turns[0].TurnID)
+	require.Len(t, turns[0].Events, 2)
+	assert.Equal(t, int64(1), turns[0].Events[0].EventID)
+	assert.Equal(t, int64(2), turns[0].Events[1].EventID)
+}
+
+func TestMemorySession_ListArchivedTurns_MultipleTurns(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-2"
+	ev3 := newTestMessage(3, "c")
+	ev3.TurnID = "turn-3"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+	require.NoError(t, sess.CreateEvent(ctx, ev3))
+
+	require.NoError(t, sess.ArchiveEventsBefore(ctx, 0))
+
+	turns, err := sess.ListArchivedTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 3)
+	assert.Equal(t, "turn-1", turns[0].TurnID)
+	assert.Equal(t, "turn-2", turns[1].TurnID)
+	assert.Equal(t, "turn-3", turns[2].TurnID)
+}
+
+func TestMemorySession_ListArchivedTurns_ExcludesActive(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	ctx := t.Context()
+
+	ev1 := newTestMessage(1, "a")
+	ev1.TurnID = "turn-1"
+	ev2 := newTestMessage(2, "b")
+	ev2.TurnID = "turn-2"
+	require.NoError(t, sess.CreateEvent(ctx, ev1))
+	require.NoError(t, sess.CreateEvent(ctx, ev2))
+
+	require.NoError(t, sess.ArchiveEventsBefore(ctx, 2))
+
+	turns, err := sess.ListArchivedTurns(ctx)
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-1", turns[0].TurnID)
 }
 
 func TestMemorySession_ArchiveEventsBefore_MultipleRounds(t *testing.T) {
