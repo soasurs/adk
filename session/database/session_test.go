@@ -73,6 +73,69 @@ func TestSQLite_InitSchema_RemovesSessionUpdatedAt(t *testing.T) {
 	assert.NotContains(t, names, "updated_at")
 }
 
+func TestSQLite_DatabaseSession_TurnLifecycle(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	sess, err := NewDatabaseSession(t.Context(), db, newTestSessionRequest("session-1"))
+	require.NoError(t, err)
+	turns := sess.(adksession.TurnStore)
+	require.NoError(t, turns.BeginTurn(t.Context(), adksession.Turn{
+		ID:        "turn-1",
+		Status:    adksession.TurnRunning,
+		StartedAt: 1,
+	}))
+	require.NoError(t, turns.FinalizeTurn(t.Context(), "turn-1", adksession.TurnOutcome{
+		Status: adksession.TurnFailed,
+		Reason: adksession.TurnReasonAgentError,
+		Failure: &adksession.TurnFailure{
+			Code:    "provider_unavailable",
+			Message: "provider is temporarily unavailable",
+			Stage:   adksession.TurnFailureStageProvider,
+		},
+	}))
+
+	turn, err := turns.GetTurn(t.Context(), "turn-1")
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, adksession.TurnFailed, turn.Status)
+	assert.Equal(t, adksession.TurnReasonAgentError, turn.Reason)
+	require.NotNil(t, turn.Failure)
+	assert.Equal(t, "provider_unavailable", turn.Failure.Code)
+	assert.Equal(t, "provider is temporarily unavailable", turn.Failure.Message)
+	assert.Equal(t, adksession.TurnFailureStageProvider, turn.Failure.Stage)
+	assert.Positive(t, turn.FinishedAt)
+	assert.ErrorIs(t, turns.FinalizeTurn(t.Context(), "turn-1", adksession.TurnOutcome{
+		Status: adksession.TurnCompleted,
+	}), adksession.ErrTurnStateConflict)
+}
+
+func TestSQLite_InitSchema_BackfillsDurableTurns(t *testing.T) {
+	db := setupSQLiteTestDB(t)
+	defer db.Close()
+
+	sess, err := NewDatabaseSession(t.Context(), db, newTestSessionRequest("session-1"))
+	require.NoError(t, err)
+	ev := newTestEvent(1, "legacy")
+	ev.TurnID = "turn-legacy"
+	require.NoError(t, sess.CreateEvent(t.Context(), ev))
+
+	_, err = db.ExecContext(t.Context(), "DROP TABLE turns")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "DELETE FROM schema_migrations WHERE version >= 7")
+	require.NoError(t, err)
+	require.NoError(t, InitSchema(t.Context(), db))
+
+	turns := sess.(adksession.TurnStore)
+	turn, err := turns.GetTurn(t.Context(), "turn-legacy")
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, adksession.TurnCompleted, turn.Status)
+	assert.Nil(t, turn.Failure)
+	assert.Equal(t, ev.CreatedAt, turn.StartedAt)
+	assert.Equal(t, ev.UpdatedAt, turn.FinishedAt)
+}
+
 func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	db, err := sqlx.Connect("sqlite3", ":memory:")
 	require.NoError(t, err)
@@ -83,6 +146,7 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	tables := migrationTables{
 		sessions:   defaultSessionsTable,
 		events:     defaultEventsTable,
+		turns:      defaultTurnsTable,
 		migrations: defaultMigrationsTable,
 	}
 	_, err = db.ExecContext(ctx, createMigrationsTableSQL(tables.migrations))
@@ -167,7 +231,7 @@ func TestSQLite_InitSchema_AddsTurnIDToExistingSchema(t *testing.T) {
 	var versions []int
 	err = db.SelectContext(ctx, &versions, "SELECT version FROM schema_migrations ORDER BY version")
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, versions)
+	assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8}, versions)
 	var eventColumnNames []string
 	require.NoError(t, db.SelectContext(ctx, &eventColumnNames, "SELECT name FROM pragma_table_info('events')"))
 	assert.Contains(t, eventColumnNames, "archived_at")

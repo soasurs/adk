@@ -19,14 +19,16 @@ import (
 
 // Runner coordinates a stateless Agent with a SessionService. It loads
 // conversation history from the session, forwards it to the agent, and
-// persists complete yielded events back to the session. If a run fails or the
-// caller stops consuming it early, Runner removes the events created for that
-// incomplete turn so they are not replayed as conversation history.
+// persists complete yielded events back to the session. Sessions implementing
+// session.TurnStore preserve failed and interrupted turns durably; other
+// implementations retain the legacy rollback behavior.
 type Runner struct {
-	agent      agent.Agent
-	session    session.SessionService
-	snowflaker *snowflake.Node
-	tracer     adktrace.Tracer
+	agent             agent.Agent
+	session           session.SessionService
+	snowflaker        *snowflake.Node
+	tracer            adktrace.Tracer
+	projector         Projector
+	failureClassifier FailureClassifier
 }
 
 // New creates a Runner backed by the given agent and session service.
@@ -36,10 +38,12 @@ func New(a agent.Agent, s session.SessionService, opts ...Option) (*Runner, erro
 		return nil, err
 	}
 	r := &Runner{
-		agent:      a,
-		session:    s,
-		snowflaker: node,
-		tracer:     adktrace.DiscardTracer{},
+		agent:             a,
+		session:           s,
+		snowflaker:        node,
+		tracer:            adktrace.DiscardTracer{},
+		projector:         NewDefaultProjector(),
+		failureClassifier: DefaultFailureClassifier,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -51,8 +55,9 @@ func New(a agent.Agent, s session.SessionService, opts ...Option) (*Runner, erro
 // input, invokes the agent, and yields each produced Event to the caller.
 // Complete events (Event.Partial=false) are persisted to the session; partial
 // streaming fragments are forwarded to the caller for real-time display but
-// are not persisted. If the agent returns an error or the caller stops
-// iteration early, events already persisted for the current turn are removed.
+// are not persisted. Durable Turn stores retain events when execution fails or
+// iteration stops early and use a safe projection when constructing later LLM
+// context. Other stores remove events created by an incomplete turn.
 // The caller iterates the returned sequence and decides whether to continue the
 // conversation by calling Run again.
 //
@@ -89,22 +94,64 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 		if unlock != nil {
 			defer unlock()
 		}
-		turnEventIDs := make([]int64, 0)
-		rollback := func(cause error) error {
-			rollbackErr := rollbackTurnEvents(ctx, sess, turnEventIDs)
-			turnEventIDs = nil
-			if cause == nil {
-				return rollbackErr
-			}
-			if rollbackErr == nil {
-				return cause
-			}
-			return errors.Join(cause, rollbackErr)
-		}
 		info.AppID = sess.GetAppID()
 		info.UserID = sess.GetUserID()
 		ctx = adktrace.ContextWithRunInfo(ctx, info)
 		runEnd = runEnd.WithRunInfo(info)
+
+		turnEventIDs := make([]int64, 0)
+		turns, durableTurns := sess.(session.TurnStore)
+		if durableTurns && unlock != nil {
+			if err := withTurnCleanupContext(ctx, func(cleanupCtx context.Context) error {
+				return turns.InterruptRunningTurns(cleanupCtx, session.TurnReasonAbandoned)
+			}); err != nil {
+				runEnd.Err = err
+				yield(nil, err)
+				return
+			}
+		}
+		if durableTurns {
+			err := turns.BeginTurn(ctx, session.Turn{
+				ID:        info.TurnID,
+				SessionID: sessionID,
+				Status:    session.TurnRunning,
+				StartedAt: time.Now().UnixMilli(),
+			})
+			if err != nil {
+				runEnd.Err = err
+				yield(nil, err)
+				return
+			}
+		}
+		failTurn := func(cause error, stage session.TurnFailureStage) error {
+			if durableTurns {
+				finalizeErr := withTurnCleanupContext(ctx, func(cleanupCtx context.Context) error {
+					return finalizeFailedTurn(
+						cleanupCtx,
+						turns,
+						info.TurnID,
+						cause,
+						stage,
+						r.failureClassifier,
+					)
+				})
+				return errors.Join(cause, finalizeErr)
+			}
+			rollbackErr := rollbackTurnEvents(ctx, sess, turnEventIDs)
+			turnEventIDs = nil
+			return errors.Join(cause, rollbackErr)
+		}
+		interruptTurn := func() error {
+			if durableTurns {
+				return withTurnCleanupContext(ctx, func(cleanupCtx context.Context) error {
+					return turns.FinalizeTurn(cleanupCtx, info.TurnID, session.TurnOutcome{
+						Status: session.TurnInterrupted,
+						Reason: session.TurnReasonConsumerStopped,
+					})
+				})
+			}
+			return rollbackTurnEvents(ctx, sess, turnEventIDs)
+		}
 
 		// Load all previous active events from the session.
 		loadCtx, loadSpan := adktrace.Start(ctx, adktrace.Event{
@@ -117,16 +164,37 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			Err:        err,
 		})
 		if err != nil {
+			err = failTurn(err, session.TurnFailureStagePersistence)
 			runEnd.Err = err
 			yield(nil, err)
 			return
 		}
 
-		events := make([]model.Event, 0, len(persisted)+1)
-		for _, ev := range persisted {
-			events = append(events, ev.ToModel())
+		var listedTurns []*session.Turn
+		if durableTurns {
+			listedTurns, err = turns.ListTurns(ctx)
+			if err != nil {
+				err = failTurn(
+					fmt.Errorf("runner: list turns: %w", err),
+					session.TurnFailureStagePersistence,
+				)
+				runEnd.Err = err
+				yield(nil, err)
+				return
+			}
 		}
-		if err := findUnknownToolExecution(sessionID, events); err != nil {
+		events, err := r.projector.Project(ctx, ProjectionInput{
+			Turns:  listedTurns,
+			Events: persisted,
+		})
+		if err != nil {
+			err = failTurn(err, session.TurnFailureStageAgent)
+			runEnd.Err = err
+			yield(nil, err)
+			return
+		}
+		if protocolErr := ValidateToolProtocol(events); protocolErr != nil {
+			err = failTurn(protocolErr, session.TurnFailureStageTool)
 			runEnd.Err = err
 			yield(nil, err)
 			return
@@ -141,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			Content: userContent,
 		})
 		if err != nil {
-			err = rollback(err)
+			err = failTurn(err, session.TurnFailureStagePersistence)
 			runEnd.Err = err
 			yield(nil, err)
 			return
@@ -165,7 +233,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 
 		for event, err := range r.agent.Run(agentCtx, events) {
 			if err != nil {
-				err = rollback(err)
+				err = failTurn(err, session.TurnFailureStageAgent)
 				agentEnd.Err = err
 				runEnd.Err = err
 				yield(nil, err)
@@ -178,7 +246,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			if !event.Partial {
 				persistedEvent, err := r.persistEvent(ctx, sess, *event)
 				if err != nil {
-					err = rollback(err)
+					err = failTurn(err, session.TurnFailureStagePersistence)
 					agentEnd.Err = err
 					runEnd.Err = err
 					yield(nil, err)
@@ -190,10 +258,22 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userInput model.Cont
 			if !yield(event, nil) {
 				agentEnd.StoppedEarly = true
 				runEnd.StoppedEarly = true
-				if err := rollback(nil); err != nil {
+				if err := interruptTurn(); err != nil {
 					agentEnd.Err = err
 					runEnd.Err = err
 				}
+				return
+			}
+		}
+		if durableTurns {
+			if err := withTurnCleanupContext(ctx, func(cleanupCtx context.Context) error {
+				return turns.FinalizeTurn(cleanupCtx, info.TurnID, session.TurnOutcome{
+					Status: session.TurnCompleted,
+				})
+			}); err != nil {
+				agentEnd.Err = err
+				runEnd.Err = err
+				yield(nil, err)
 				return
 			}
 		}

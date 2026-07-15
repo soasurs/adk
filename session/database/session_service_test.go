@@ -386,6 +386,7 @@ func TestSQLite_DatabaseSessionService_InvalidTableName(t *testing.T) {
 	}{
 		{"empty sessions table", []Option{WithSessionsTable("")}},
 		{"empty events table", []Option{WithEventsTable("")}},
+		{"empty turns table", []Option{WithTurnsTable("")}},
 		{"spaces in name", []Option{WithSessionsTable("my sessions")}},
 		{"SQL injection attempt", []Option{WithSessionsTable("sessions; DROP TABLE sessions")}},
 		{"starts with digit", []Option{WithSessionsTable("1sessions")}},

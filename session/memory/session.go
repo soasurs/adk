@@ -3,6 +3,7 @@ package memory
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ type memorySession struct {
 	userID    string
 	createdAt int64
 	events    []*event.Event // all events: active (archived_at=0, deleted_at=0) + archived
+	turns     map[string]*session.Turn
 }
 
 func NewMemorySession(req session.CreateSessionRequest) session.Session {
@@ -28,6 +30,7 @@ func NewMemorySession(req session.CreateSessionRequest) session.Session {
 		userID:    req.UserID,
 		createdAt: now,
 		events:    make([]*event.Event, 0),
+		turns:     make(map[string]*session.Turn),
 	}
 }
 
@@ -128,6 +131,97 @@ func (s *memorySession) ArchiveEventsBefore(ctx context.Context, eventID int64) 
 	return nil
 }
 
+func (s *memorySession) BeginTurn(_ context.Context, turn session.Turn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if turn.ID == "" {
+		return fmt.Errorf("memory: begin turn: turn ID is empty")
+	}
+	if turn.SessionID != "" && turn.SessionID != s.sessionID {
+		return fmt.Errorf("memory: begin turn: session ID %q does not match %q", turn.SessionID, s.sessionID)
+	}
+	if turn.Status != session.TurnRunning {
+		return fmt.Errorf("memory: begin turn: status must be %q", session.TurnRunning)
+	}
+	if _, exists := s.turns[turn.ID]; exists {
+		return fmt.Errorf("memory: begin turn %q: already exists", turn.ID)
+	}
+	turn.SessionID = s.sessionID
+	turn.Reason = ""
+	turn.Failure = nil
+	turn.FinishedAt = 0
+	s.turns[turn.ID] = cloneTurn(&turn)
+	return nil
+}
+
+func (s *memorySession) FinalizeTurn(_ context.Context, turnID string, outcome session.TurnOutcome) error {
+	if err := outcome.Validate(); err != nil {
+		return err
+	}
+	return s.finalizeTurn(turnID, outcome)
+}
+
+func (s *memorySession) GetTurn(_ context.Context, turnID string) (*session.Turn, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	turn := s.turns[turnID]
+	if turn == nil {
+		return nil, nil
+	}
+	return cloneTurn(turn), nil
+}
+
+func (s *memorySession) ListTurns(_ context.Context) ([]*session.Turn, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	turns := make([]*session.Turn, 0, len(s.turns))
+	for _, turn := range s.turns {
+		turns = append(turns, cloneTurn(turn))
+	}
+	slices.SortFunc(turns, func(a, b *session.Turn) int {
+		if n := cmp.Compare(a.StartedAt, b.StartedAt); n != 0 {
+			return n
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
+	return turns, nil
+}
+
+func (s *memorySession) InterruptRunningTurns(_ context.Context, reason session.TurnReason) error {
+	if err := (session.TurnOutcome{Status: session.TurnInterrupted, Reason: reason}).Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UnixMilli()
+	for _, turn := range s.turns {
+		if turn.Status == session.TurnRunning {
+			turn.Status = session.TurnInterrupted
+			turn.Reason = reason
+			turn.Failure = nil
+			turn.FinishedAt = now
+		}
+	}
+	return nil
+}
+
+func (s *memorySession) finalizeTurn(turnID string, outcome session.TurnOutcome) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turn := s.turns[turnID]
+	if turn == nil {
+		return &session.TurnNotFoundError{TurnID: turnID}
+	}
+	if turn.Status != session.TurnRunning {
+		return &session.TurnStateConflictError{TurnID: turnID, Status: turn.Status}
+	}
+	turn.Status = outcome.Status
+	turn.Reason = outcome.Reason
+	turn.Failure = cloneTurnFailure(outcome.Failure)
+	turn.FinishedAt = time.Now().UnixMilli()
+	return nil
+}
+
 // activeEvents returns all events with ArchivedAt == 0 and DeletedAt == 0,
 // preserving insertion order. Must be called with s.mu held (read or write).
 func (s *memorySession) activeEvents() []*event.Event {
@@ -157,5 +251,22 @@ func cloneEvent(ev *event.Event) *event.Event {
 	out := *ev
 	out.Parts = append(event.Parts(nil), ev.Parts...)
 	out.ToolCalls = append(event.ToolCalls(nil), ev.ToolCalls...)
+	return &out
+}
+
+func cloneTurn(turn *session.Turn) *session.Turn {
+	if turn == nil {
+		return nil
+	}
+	out := *turn
+	out.Failure = cloneTurnFailure(turn.Failure)
+	return &out
+}
+
+func cloneTurnFailure(failure *session.TurnFailure) *session.TurnFailure {
+	if failure == nil {
+		return nil
+	}
+	out := *failure
 	return &out
 }

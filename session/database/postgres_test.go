@@ -99,7 +99,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 			"SELECT version FROM "+f.prefix+"schema_migrations ORDER BY version",
 		)
 		require.NoError(t, err)
-		assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, versions)
+		assert.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8}, versions)
 	})
 
 	t.Run("creates expected column types", func(t *testing.T) {
@@ -173,6 +173,7 @@ func TestPostgres_InitSchema(t *testing.T) {
 		opts := []Option{
 			WithSessionsTable("adk_custom_sessions"),
 			WithEventsTable("adk_custom_events"),
+			WithTurnsTable("adk_custom_turns"),
 			WithMigrationsTable("adk_custom_schema_migrations"),
 		}
 		require.NoError(t, InitSchema(t.Context(), db, opts...))
@@ -665,6 +666,7 @@ func cleanupPostgresTables(t *testing.T, db *sqlx.DB, prefix string) {
 	defer cancel()
 	_, err := db.ExecContext(ctx, `
 		DROP TABLE IF EXISTS `+prefix+`events;
+		DROP TABLE IF EXISTS `+prefix+`turns;
 		DROP TABLE IF EXISTS `+prefix+`sessions;
 		DROP TABLE IF EXISTS `+prefix+`schema_migrations;
 	`)

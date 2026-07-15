@@ -49,22 +49,42 @@ Request-only behavior such as a dynamic system instruction is added after this
 projection and is not written back to the event ledger. See
 [Dynamic System Instructions](dynamic-instruction.md).
 
-## Turns and rollback
+## Durable turns
 
 Every `Runner.Run` call creates a `TurnID` shared by the user event and all agent
 events from that call. It is a correlation identifier, not an ordering key or
 an automatic resume checkpoint.
 
-`Runner` persists complete events while the agent runs. If the agent fails or
-the caller stops consuming the sequence early, the runner removes events saved
-for that incomplete turn. This prevents a partial tool protocol from being
-replayed as valid history.
+Sessions implementing `session.TurnStore` record each run as `running` and
+finalize it as `completed`, `failed`, or `interrupted`. Complete events remain
+durable when a run fails or the caller stops consuming it. Before a later LLM
+call, Runner projects failed and interrupted turns into safe context: closed
+event sequences are retained, unsafe suffixes beginning with an unmatched tool
+call are omitted, and an ephemeral status notice is added. The notice is never
+written back to the event ledger.
 
-Before starting another turn, the runner also verifies that every durable
-assistant tool call has a matching durable tool result. A missing result returns
-`runner.ErrToolExecutionUnknown`, leaves the session unchanged, and does not
-invoke the agent. ADK cannot safely retry automatically because the external
-side effect may already have happened.
+Projection is a public, reusable boundary. `runner.NewDefaultProjector` applies
+the same durable-Turn rules used by Runner, and `runner.WithProjector` installs
+a custom implementation. Applications can use the default projector when
+building compaction summaries. Runner always applies
+`runner.ValidateToolProtocol` after projection, including custom projectors.
+
+Terminal Turns may contain a structured `TurnFailure` with a stable code,
+display-safe message, and failure stage. Runner never persists an arbitrary
+`error.Error()` value. The default classifier trusts typed errors implementing
+`session.TurnFailureProvider`; applications can install a safe classifier with
+`runner.WithFailureClassifier`. Display-safe failure messages are not injected
+into model context by the default projector.
+
+Turn and event writes are individually atomic but do not share a transaction
+covering the full run. After acquiring a session run lock, Runner recovers any
+old `running` turns as `interrupted/abandoned`. Session implementations without
+`TurnStore` retain the legacy incomplete-turn rollback behavior.
+
+Before invoking an agent, Runner verifies that the projected context has no
+unmatched assistant tool calls. A missing result outside a recoverable durable
+Turn projection returns `runner.ErrToolExecutionUnknown`. ADK cannot safely
+retry an unknown external side effect automatically.
 
 ## Streaming
 
@@ -84,4 +104,7 @@ for event, err := range r.Run(ctx, sessionID, input) {
 ```
 
 Consume the sequence until it finishes unless you intentionally want to cancel
-the run. Stopping early triggers incomplete-turn cleanup.
+the run. With durable Turns, stopping early preserves complete events and marks
+the Turn `interrupted/consumer_stopped`. Partial fragments remain transport-only
+and may disappear after disconnection. Legacy Session implementations retain
+incomplete-turn rollback.
