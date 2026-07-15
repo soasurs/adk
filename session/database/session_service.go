@@ -38,12 +38,12 @@ func WithRunLocker(locker session.RunScopedLocker) Option {
 	}
 }
 
-// WithTablePrefix sets a prefix for the sessions, events, and migrations table names.
-// For example, WithTablePrefix("myapp_") will use tables "myapp_sessions", "myapp_events", and "myapp_schema_migrations".
+// WithTablePrefix sets a prefix for all managed table names.
 func WithTablePrefix(prefix string) Option {
 	return func(s *databaseSessionService) {
 		s.sessionsTable = prefix + defaultSessionsTable
 		s.eventsTable = prefix + defaultEventsTable
+		s.turnsTable = prefix + defaultTurnsTable
 		s.migrationsTable = prefix + defaultMigrationsTable
 	}
 }
@@ -62,6 +62,13 @@ func WithEventsTable(name string) Option {
 	}
 }
 
+// WithTurnsTable overrides the turns table name.
+func WithTurnsTable(name string) Option {
+	return func(s *databaseSessionService) {
+		s.turnsTable = name
+	}
+}
+
 // WithMigrationsTable overrides the schema migrations table name.
 func WithMigrationsTable(name string) Option {
 	return func(s *databaseSessionService) {
@@ -73,6 +80,7 @@ type databaseSessionService struct {
 	db                  *sqlx.DB
 	sessionsTable       string
 	eventsTable         string
+	turnsTable          string
 	migrationsTable     string
 	q                   *queries
 	runLockerConfigured bool
@@ -91,9 +99,9 @@ func (ss *lockingDatabaseSessionService) LockRun(ctx context.Context, key sessio
 // NewDatabaseSessionService creates a new SQL database-backed SessionService.
 // The caller owns the *sqlx.DB and its driver configuration. SQLite and
 // PostgreSQL are covered by this package's tests.
-// By default it uses the table names "sessions" and "events".
-// Use Option functions such as WithTablePrefix, WithSessionsTable, or WithEventsTable
-// to customise the table names and avoid conflicts in shared databases.
+// By default it uses the table names "sessions", "events", and "turns".
+// Use table Option functions to customise the names and avoid conflicts in
+// shared databases.
 // Use WithRunLocker to serialize Runner turns with an application-provided
 // distributed lock.
 // Returns an error if any configured table name is not a valid SQL identifier.
@@ -102,6 +110,7 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 		db:              db,
 		sessionsTable:   defaultSessionsTable,
 		eventsTable:     defaultEventsTable,
+		turnsTable:      defaultTurnsTable,
 		migrationsTable: defaultMigrationsTable,
 	}
 	for _, opt := range opts {
@@ -113,13 +122,16 @@ func NewDatabaseSessionService(db *sqlx.DB, opts ...Option) (session.SessionServ
 	if err := validateTableName(svc.eventsTable); err != nil {
 		return nil, err
 	}
+	if err := validateTableName(svc.turnsTable); err != nil {
+		return nil, err
+	}
 	if err := validateTableName(svc.migrationsTable); err != nil {
 		return nil, err
 	}
 	if svc.runLockerConfigured && svc.runLocker == nil {
 		return nil, errors.New("database: run locker is nil")
 	}
-	svc.q = buildQueries(svc.sessionsTable, svc.eventsTable)
+	svc.q = buildQueries(svc.sessionsTable, svc.eventsTable, svc.turnsTable)
 	if svc.runLocker != nil {
 		return &lockingDatabaseSessionService{
 			databaseSessionService: svc,

@@ -11,13 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/session"
 )
 
-func TestFindUnknownToolExecution(t *testing.T) {
+func TestInspectToolProtocol(t *testing.T) {
 	toolCalls := func(turnID string, eventID int64, calls ...model.ToolCall) model.Event {
 		return model.Event{
-			ID:     eventID,
-			TurnID: turnID,
+			ID:        eventID,
+			SessionID: "session-1",
+			TurnID:    turnID,
 			Content: model.Content{
 				Role:      model.RoleAssistant,
 				ToolCalls: calls,
@@ -88,22 +90,50 @@ func TestFindUnknownToolExecution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			unknown := findUnknownToolExecution("session-1", tt.events)
+			issues := InspectToolProtocol(tt.events)
 			if tt.wantEventID == 0 {
-				assert.Nil(t, unknown)
+				assert.Empty(t, issues)
 				return
 			}
 
-			require.NotNil(t, unknown)
-			assert.Equal(t, "session-1", unknown.SessionID)
-			assert.Equal(t, tt.wantEventID, unknown.EventID)
-			callIDs := make([]string, len(unknown.ToolCalls))
-			for i, call := range unknown.ToolCalls {
+			require.Len(t, issues, 1)
+			assert.Equal(t, "session-1", issues[0].SessionID)
+			assert.Equal(t, tt.wantEventID, issues[0].EventID)
+			callIDs := make([]string, len(issues[0].ToolCalls))
+			for i, call := range issues[0].ToolCalls {
 				callIDs[i] = call.ID
 			}
 			assert.Equal(t, tt.wantCallIDs, callIDs)
 		})
 	}
+}
+
+func TestInspectToolProtocol_ReturnsAllIssues(t *testing.T) {
+	events := []model.Event{
+		{
+			ID:     1,
+			TurnID: "turn-1",
+			Content: model.Content{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "call-1", Name: "first"}},
+			},
+		},
+		{TurnID: "turn-2", Content: model.Content{Role: model.RoleUser, Content: "next"}},
+		{
+			ID:     2,
+			TurnID: "turn-2",
+			Content: model.Content{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "call-2", Name: "second"}},
+			},
+		},
+	}
+
+	issues := InspectToolProtocol(events)
+	require.Len(t, issues, 2)
+	assert.Equal(t, int64(1), issues[0].EventID)
+	assert.Equal(t, int64(2), issues[1].EventID)
+	assert.ErrorIs(t, ValidateToolProtocol(events), ErrToolExecutionUnknown)
 }
 
 func TestRunner_Run_BlocksWhenToolExecutionIsUnknown(t *testing.T) {
@@ -160,10 +190,16 @@ func TestRunner_Run_BlocksWhenToolExecutionIsUnknown(t *testing.T) {
 
 	after, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, before, after, "blocked run must leave the session unchanged")
+	assert.Equal(t, before, after, "blocked run must leave the event ledger unchanged")
+	turns, err := sess.(session.TurnStore).ListTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 2)
+	require.NotNil(t, turns[1].Failure)
+	assert.Equal(t, "tool_execution_unknown", turns[1].Failure.Code)
+	assert.Equal(t, session.TurnFailureStageTool, turns[1].Failure.Stage)
 }
 
-func TestRunner_Run_EarlyBreakAfterToolCallsRollsBackTurn(t *testing.T) {
+func TestRunner_Run_EarlyBreakAfterToolCallsProjectsSafePrefix(t *testing.T) {
 	var runCount atomic.Int32
 	a := &mockAgent{
 		name:        "tool-agent",
@@ -201,21 +237,33 @@ func TestRunner_Run_EarlyBreakAfterToolCallsRollsBackTurn(t *testing.T) {
 	require.NoError(t, err)
 	afterBreak, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, afterBreak, "early stop must roll back the incomplete turn")
+	require.Len(t, afterBreak, 2)
+	turn, err := sess.(session.TurnStore).GetTurn(t.Context(), afterBreak[0].TurnID)
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnInterrupted, turn.Status)
 
 	msgs, runErr := collectRun(t, r, sessionID, model.Content{Content: "second turn"})
 	require.NoError(t, runErr)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, model.RoleAssistant, msgs[0].Role)
 	assert.Equal(t, model.RoleTool, msgs[1].Role)
-	assert.Equal(t, int32(2), runCount.Load(), "rolled-back history must allow the agent to run again")
+	assert.Equal(t, int32(2), runCount.Load())
+	require.Len(t, a.capturedMessages, 3)
+	assert.Equal(t, "first turn", a.capturedMessages[0].Content.Content)
+	assert.Equal(t, model.RoleUser, a.capturedMessages[1].Content.Role)
+	assert.Contains(t, a.capturedMessages[1].Content.Content, "interrupted")
+	assert.Equal(t, "second turn", a.capturedMessages[2].Content.Content)
+	assert.Empty(t, a.capturedMessages[1].Content.ToolCalls)
 
 	events, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	require.Len(t, events, 3)
+	require.Len(t, events, 5)
 	assert.Equal(t, string(model.RoleUser), events[0].Role)
 	assert.Equal(t, string(model.RoleAssistant), events[1].Role)
-	assert.Equal(t, string(model.RoleTool), events[2].Role)
+	assert.Equal(t, string(model.RoleUser), events[2].Role)
+	assert.Equal(t, string(model.RoleAssistant), events[3].Role)
+	assert.Equal(t, string(model.RoleTool), events[4].Role)
 }
 
 func TestRunner_Run_ContinuesWhenToolCallsHaveDurableResults(t *testing.T) {

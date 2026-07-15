@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	adksession "github.com/soasurs/adk/session"
 	"github.com/soasurs/adk/session/event"
@@ -264,4 +265,79 @@ func TestMemorySession_ArchiveEventsBefore_MissingBoundary(t *testing.T) {
 	active, listErr := sess.ListEvents(ctx)
 	assert.NoError(t, listErr)
 	assert.Len(t, active, 1)
+}
+
+func TestMemorySession_TurnLifecycle(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	turns := sess.(adksession.TurnStore)
+	ctx := t.Context()
+
+	require.NoError(t, turns.BeginTurn(ctx, adksession.Turn{
+		ID:        "turn-1",
+		SessionID: "session-1",
+		Status:    adksession.TurnRunning,
+		StartedAt: 1,
+	}))
+	require.NoError(t, turns.FinalizeTurn(ctx, "turn-1", adksession.TurnOutcome{
+		Status: adksession.TurnCompleted,
+	}))
+
+	turn, err := turns.GetTurn(ctx, "turn-1")
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, adksession.TurnCompleted, turn.Status)
+	assert.Positive(t, turn.FinishedAt)
+	assert.ErrorIs(t, turns.FinalizeTurn(ctx, "turn-1", adksession.TurnOutcome{
+		Status: adksession.TurnFailed,
+		Reason: adksession.TurnReasonAgentError,
+	}), adksession.ErrTurnStateConflict)
+}
+
+func TestMemorySession_InterruptRunningTurns(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	turns := sess.(adksession.TurnStore)
+	ctx := t.Context()
+	require.NoError(t, turns.BeginTurn(ctx, adksession.Turn{
+		ID:        "turn-1",
+		Status:    adksession.TurnRunning,
+		StartedAt: 1,
+	}))
+
+	require.NoError(t, turns.InterruptRunningTurns(ctx, adksession.TurnReasonAbandoned))
+	turn, err := turns.GetTurn(ctx, "turn-1")
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, adksession.TurnInterrupted, turn.Status)
+	assert.Equal(t, adksession.TurnReasonAbandoned, turn.Reason)
+}
+
+func TestMemorySession_TurnFailureIsCloned(t *testing.T) {
+	sess := NewMemorySession(newMemorySessionRequest("session-1"))
+	turns := sess.(adksession.TurnStore)
+	ctx := t.Context()
+	require.NoError(t, turns.BeginTurn(ctx, adksession.Turn{
+		ID:        "turn-1",
+		Status:    adksession.TurnRunning,
+		StartedAt: 1,
+	}))
+	failure := &adksession.TurnFailure{
+		Code:    "provider_unavailable",
+		Message: "safe",
+		Stage:   adksession.TurnFailureStageProvider,
+	}
+	require.NoError(t, turns.FinalizeTurn(ctx, "turn-1", adksession.TurnOutcome{
+		Status:  adksession.TurnFailed,
+		Reason:  adksession.TurnReasonAgentError,
+		Failure: failure,
+	}))
+	failure.Message = "mutated"
+
+	turn, err := turns.GetTurn(ctx, "turn-1")
+	require.NoError(t, err)
+	require.NotNil(t, turn.Failure)
+	assert.Equal(t, "safe", turn.Failure.Message)
+	turn.Failure.Message = "mutated again"
+	turn, err = turns.GetTurn(ctx, "turn-1")
+	require.NoError(t, err)
+	assert.Equal(t, "safe", turn.Failure.Message)
 }

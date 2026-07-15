@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -20,6 +21,18 @@ type databaseSession struct {
 	UserID    string   `json:"user_id" db:"user_id"`
 	CreatedAt int64    `json:"created_at" db:"created_at"`
 	DeletedAt int64    `json:"deleted_at" db:"deleted_at"`
+}
+
+type databaseTurn struct {
+	TurnID         string                   `db:"turn_id"`
+	SessionID      string                   `db:"session_id"`
+	Status         session.TurnStatus       `db:"status"`
+	Reason         session.TurnReason       `db:"reason"`
+	FailureCode    string                   `db:"failure_code"`
+	FailureMessage string                   `db:"failure_message"`
+	FailureStage   session.TurnFailureStage `db:"failure_stage"`
+	StartedAt      int64                    `db:"started_at"`
+	FinishedAt     int64                    `db:"finished_at"`
 }
 
 // NewDatabaseSession creates a new session in the database using default table names.
@@ -151,4 +164,126 @@ func (s *databaseSession) ArchiveEventsBefore(ctx context.Context, eventID int64
 	}
 
 	return tx.Commit()
+}
+
+func (s *databaseSession) BeginTurn(ctx context.Context, turn session.Turn) error {
+	if turn.ID == "" {
+		return fmt.Errorf("database: begin turn: turn ID is empty")
+	}
+	if turn.SessionID != "" && turn.SessionID != s.SessionID {
+		return fmt.Errorf("database: begin turn: session ID %q does not match %q", turn.SessionID, s.SessionID)
+	}
+	if turn.Status != session.TurnRunning {
+		return fmt.Errorf("database: begin turn: status must be %q", session.TurnRunning)
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		s.q.createTurn,
+		s.SessionID,
+		turn.ID,
+		turn.Status,
+		"",
+		turn.StartedAt,
+		0,
+	)
+	return err
+}
+
+func (s *databaseSession) FinalizeTurn(ctx context.Context, turnID string, outcome session.TurnOutcome) error {
+	if err := outcome.Validate(); err != nil {
+		return err
+	}
+	return s.finalizeTurn(ctx, turnID, outcome)
+}
+
+func (s *databaseSession) GetTurn(ctx context.Context, turnID string) (*session.Turn, error) {
+	turn := new(databaseTurn)
+	err := s.db.GetContext(ctx, turn, s.q.getTurn, s.SessionID, turnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return turn.toSession(), nil
+}
+
+func (s *databaseSession) ListTurns(ctx context.Context) ([]*session.Turn, error) {
+	stored := make([]*databaseTurn, 0)
+	if err := s.db.SelectContext(ctx, &stored, s.q.listTurns, s.SessionID); err != nil {
+		return nil, err
+	}
+	turns := make([]*session.Turn, 0, len(stored))
+	for _, turn := range stored {
+		turns = append(turns, turn.toSession())
+	}
+	return turns, nil
+}
+
+func (s *databaseSession) InterruptRunningTurns(ctx context.Context, reason session.TurnReason) error {
+	if err := (session.TurnOutcome{Status: session.TurnInterrupted, Reason: reason}).Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, s.q.interruptRunning, reason, time.Now().UnixMilli(), s.SessionID)
+	return err
+}
+
+func (s *databaseSession) finalizeTurn(
+	ctx context.Context,
+	turnID string,
+	outcome session.TurnOutcome,
+) error {
+	var failure session.TurnFailure
+	if outcome.Failure != nil {
+		failure = *outcome.Failure
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		s.q.finalizeTurn,
+		outcome.Status,
+		outcome.Reason,
+		failure.Code,
+		failure.Message,
+		failure.Stage,
+		time.Now().UnixMilli(),
+		s.SessionID,
+		turnID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+	turn, err := s.GetTurn(ctx, turnID)
+	if err != nil {
+		return err
+	}
+	if turn == nil {
+		return &session.TurnNotFoundError{TurnID: turnID}
+	}
+	return &session.TurnStateConflictError{TurnID: turnID, Status: turn.Status}
+}
+
+func (t *databaseTurn) toSession() *session.Turn {
+	turn := &session.Turn{
+		ID:         t.TurnID,
+		SessionID:  t.SessionID,
+		Status:     t.Status,
+		Reason:     t.Reason,
+		StartedAt:  t.StartedAt,
+		FinishedAt: t.FinishedAt,
+	}
+	if t.FailureCode != "" || t.FailureMessage != "" || t.FailureStage != "" {
+		turn.Failure = &session.TurnFailure{
+			Code:    t.FailureCode,
+			Message: t.FailureMessage,
+			Stage:   t.FailureStage,
+		}
+	}
+	return turn
 }

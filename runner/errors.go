@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/soasurs/adk/model"
+	"github.com/soasurs/adk/session"
 )
 
 // ErrSessionNotFound indicates that the requested session does not exist.
@@ -30,9 +31,9 @@ func (e *SessionNotFoundError) Unwrap() error {
 // determined safely.
 var ErrToolExecutionUnknown = errors.New("runner: tool execution status unknown")
 
-// ToolExecutionUnknownError reports unresolved tool calls from one persisted
-// assistant event. Runner returns this error before persisting a new user event
-// or invoking the agent.
+// ToolExecutionUnknownError reports unresolved tool calls from one assistant
+// event. Runner returns this error before persisting a new user event or
+// invoking the agent.
 type ToolExecutionUnknownError struct {
 	// SessionID identifies the affected session.
 	SessionID string
@@ -58,4 +59,13 @@ func (e *ToolExecutionUnknownError) Error() string {
 // Unwrap allows callers to match ErrToolExecutionUnknown with errors.Is.
 func (e *ToolExecutionUnknownError) Unwrap() error {
 	return ErrToolExecutionUnknown
+}
+
+// TurnFailure returns safe structured metadata for durable Turn display.
+func (e *ToolExecutionUnknownError) TurnFailure() session.TurnFailure {
+	return session.TurnFailure{
+		Code:    "tool_execution_unknown",
+		Message: "tool execution outcome is unknown",
+		Stage:   session.TurnFailureStageTool,
+	}
 }

@@ -116,6 +116,34 @@ type recordingTracer struct {
 	ends   []recordedSpan
 }
 
+type legacySession struct {
+	session.Session
+}
+
+type legacySessionService struct {
+	session.SessionService
+}
+
+type safeTestError struct{}
+
+func (safeTestError) Error() string { return "unsafe provider response body" }
+
+func (safeTestError) TurnFailure() session.TurnFailure {
+	return session.TurnFailure{
+		Code:    "provider_unavailable",
+		Message: "provider is temporarily unavailable",
+		Stage:   session.TurnFailureStageProvider,
+	}
+}
+
+func (s *legacySessionService) GetSession(ctx context.Context, sessionID string) (session.Session, error) {
+	sess, err := s.SessionService.GetSession(ctx, sessionID)
+	if sess == nil || err != nil {
+		return nil, err
+	}
+	return &legacySession{Session: sess}, nil
+}
+
 func (t *recordingTracer) Start(ctx context.Context, event adktrace.Event) (context.Context, adktrace.Span) {
 	t.starts = append(t.starts, event)
 	return ctx, &recordingSpan{tracer: t, kind: event.Kind}
@@ -370,10 +398,150 @@ func TestRunner_Run_AgentError(t *testing.T) {
 	require.NoError(t, err)
 	stored, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, stored, "failed turn must not remain in active history")
+	require.Len(t, stored, 1)
+	assert.Equal(t, "hello", stored[0].Content)
+	turns := sess.(session.TurnStore)
+	turn, err := turns.GetTurn(t.Context(), stored[0].TurnID)
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnFailed, turn.Status)
+	assert.Equal(t, session.TurnReasonAgentError, turn.Reason)
+	require.NotNil(t, turn.Failure)
+	assert.Equal(t, "agent_error", turn.Failure.Code)
+	assert.Equal(t, session.TurnFailureStageAgent, turn.Failure.Stage)
+	assert.Empty(t, turn.Failure.Message)
 }
 
-func TestRunner_Run_AgentErrorRollsBackYieldedTurnEvents(t *testing.T) {
+func TestRunner_Run_PersistsOnlyTypedSafeFailureMessage(t *testing.T) {
+	a := errorAgent(safeTestError{})
+	r, sessionID := newRunnerWithSession(t, a)
+
+	_, err := collectRun(t, r, sessionID, model.Content{Content: "hello"})
+	require.Error(t, err)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	turns, err := sess.(session.TurnStore).ListTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.NotNil(t, turns[0].Failure)
+	assert.Equal(t, "provider_unavailable", turns[0].Failure.Code)
+	assert.Equal(t, "provider is temporarily unavailable", turns[0].Failure.Message)
+	assert.NotContains(t, turns[0].Failure.Message, "response body")
+}
+
+func TestRunner_Run_UsesFailureClassifier(t *testing.T) {
+	const sessionID = "session-1"
+	svc := memorysession.NewMemorySessionService()
+	_, err := svc.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: sessionID})
+	require.NoError(t, err)
+	classifier := func(_ error, stage session.TurnFailureStage) *session.TurnFailure {
+		return &session.TurnFailure{
+			Code:    "koda_agent_error",
+			Message: "safe application message",
+			Stage:   stage,
+		}
+	}
+	r, err := New(errorAgent(errors.New("unsafe detail")), svc, WithFailureClassifier(classifier))
+	require.NoError(t, err)
+
+	_, runErr := collectRun(t, r, sessionID, model.Content{Content: "hello"})
+	require.Error(t, runErr)
+	sess, err := svc.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	turns, err := sess.(session.TurnStore).ListTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.NotNil(t, turns[0].Failure)
+	assert.Equal(t, "koda_agent_error", turns[0].Failure.Code)
+	assert.Equal(t, "safe application message", turns[0].Failure.Message)
+	assert.Equal(t, session.TurnFailureStageAgent, turns[0].Failure.Stage)
+}
+
+func TestRunner_Run_LegacySessionRollsBackFailedTurn(t *testing.T) {
+	base := memorysession.NewMemorySessionService()
+	_, err := base.CreateSession(t.Context(), session.CreateSessionRequest{SessionID: "session-1"})
+	require.NoError(t, err)
+	r, err := New(errorAgent(errors.New("agent failure")), &legacySessionService{SessionService: base})
+	require.NoError(t, err)
+
+	_, runErr := collectRun(t, r, "session-1", model.Content{Content: "hello"})
+	require.Error(t, runErr)
+	sess, err := base.GetSession(t.Context(), "session-1")
+	require.NoError(t, err)
+	events, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestRunner_Run_ProjectsClosedFailedTurn(t *testing.T) {
+	agentErr := errors.New("agent failure")
+	var runs atomic.Int32
+	a := &mockAgent{
+		name:        "retry-agent",
+		description: "fails once",
+		runFunc: func(_ context.Context, _ []model.Event) iter.Seq2[*model.Event, error] {
+			return func(yield func(*model.Event, error) bool) {
+				if runs.Add(1) == 1 {
+					if !yield(&model.Event{Content: model.Content{Role: model.RoleAssistant, Content: "attempted"}}, nil) {
+						return
+					}
+					yield(nil, agentErr)
+					return
+				}
+				yield(&model.Event{Content: model.Content{Role: model.RoleAssistant, Content: "done"}}, nil)
+			}
+		},
+	}
+	r, sessionID := newRunnerWithSession(t, a)
+	_, err := collectRun(t, r, sessionID, model.Content{Content: "do work"})
+	require.ErrorIs(t, err, agentErr)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	storedBeforeRetry, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	turnsBeforeRetry, err := sess.(session.TurnStore).ListTurns(t.Context())
+	require.NoError(t, err)
+	directProjection, err := NewDefaultProjector().Project(t.Context(), ProjectionInput{
+		Turns:  turnsBeforeRetry,
+		Events: storedBeforeRetry,
+	})
+	require.NoError(t, err)
+
+	_, err = collectRun(t, r, sessionID, model.Content{Content: "retry"})
+	require.NoError(t, err)
+	require.Len(t, a.capturedMessages, 4)
+	assert.Equal(t, directProjection, a.capturedMessages[:len(directProjection)])
+	assert.Equal(t, "do work", a.capturedMessages[0].Content.Content)
+	assert.Equal(t, "attempted", a.capturedMessages[1].Content.Content)
+	assert.Contains(t, a.capturedMessages[2].Content.Content, "failed")
+	assert.Equal(t, "retry", a.capturedMessages[3].Content.Content)
+	storedAfterRetry, err := sess.ListEvents(t.Context())
+	require.NoError(t, err)
+	require.Len(t, storedAfterRetry, 4, "synthetic projection notice must not be persisted")
+}
+
+func TestRunner_Run_RecoversAbandonedTurnWithLock(t *testing.T) {
+	a := staticAgent(model.Content{Role: model.RoleAssistant, Content: "done"})
+	r, sessionID := newRunnerWithSession(t, a)
+	sess, err := r.session.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	turns := sess.(session.TurnStore)
+	require.NoError(t, turns.BeginTurn(t.Context(), session.Turn{
+		ID:        "abandoned",
+		Status:    session.TurnRunning,
+		StartedAt: 1,
+	}))
+
+	_, err = collectRun(t, r, sessionID, model.Content{Content: "continue"})
+	require.NoError(t, err)
+	turn, err := turns.GetTurn(t.Context(), "abandoned")
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnInterrupted, turn.Status)
+	assert.Equal(t, session.TurnReasonAbandoned, turn.Reason)
+}
+
+func TestRunner_Run_AgentErrorPreservesYieldedTurnEvents(t *testing.T) {
 	agentErr := errors.New("tool execution failed")
 	a := &mockAgent{
 		name:        "event-then-error-agent",
@@ -405,7 +573,13 @@ func TestRunner_Run_AgentErrorRollsBackYieldedTurnEvents(t *testing.T) {
 	require.NoError(t, err)
 	stored, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, stored, "assistant tool call without a result must be rolled back")
+	require.Len(t, stored, 2)
+	assert.Equal(t, string(model.RoleUser), stored[0].Role)
+	assert.Equal(t, string(model.RoleAssistant), stored[1].Role)
+	turn, err := sess.(session.TurnStore).GetTurn(t.Context(), stored[0].TurnID)
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnFailed, turn.Status)
 }
 
 // TestRunner_Run_EarlyBreak verifies that a consumer breaking out of the
@@ -436,7 +610,12 @@ func TestRunner_Run_EarlyBreak(t *testing.T) {
 	require.NoError(t, err)
 	stored, err := sess.ListEvents(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, stored, "incomplete turn must not remain in active history")
+	require.Len(t, stored, 2)
+	turn, err := sess.(session.TurnStore).GetTurn(t.Context(), stored[0].TurnID)
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnInterrupted, turn.Status)
+	assert.Equal(t, session.TurnReasonConsumerStopped, turn.Reason)
 }
 
 // TestRunner_Run_NoAgentMessages verifies that an agent that yields nothing
@@ -529,6 +708,10 @@ func TestRunner_Run_AssignsTurnIDToRunEvents(t *testing.T) {
 	require.Len(t, stored, 2)
 	assert.Equal(t, turnID, stored[0].TurnID)
 	assert.Equal(t, turnID, stored[1].TurnID)
+	turn, err := sess.(session.TurnStore).GetTurn(t.Context(), turnID)
+	require.NoError(t, err)
+	require.NotNil(t, turn)
+	assert.Equal(t, session.TurnCompleted, turn.Status)
 
 	_, err = collectRun(t, r, sessionID, model.Content{Content: "again"})
 	require.NoError(t, err)

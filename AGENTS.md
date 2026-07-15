@@ -87,8 +87,10 @@ Tests auto-skip when required vars are absent; optional vars fall back to defaul
 ## Architecture — Critical Invariants
 
 - **`iter.Seq2[V, error]`** is the universal streaming primitive. Consume with `for v, err := range seq { if err != nil { ... } }`. On error, yield `(nil, err)` and return.
-- **Partial vs complete events** — `Event.Partial=true` fragments are forwarded to the caller for real-time display but **never persisted**. Complete events are saved while a run is active; if the run fails or the caller stops early, `Runner` removes the current turn's saved events so incomplete history is not replayed.
-- **Turn IDs** — `Event.TurnID` groups all events produced by one `Runner.Run` call. It is a correlation identifier, not an ordering key or an automatic resume checkpoint. Older persisted events may have an empty `TurnID`; keep replay compatible.
+- **Partial vs complete events** — `Event.Partial=true` fragments are forwarded to the caller for real-time display but **never persisted**. Complete events are saved while a run is active. Durable Turn stores preserve failed and interrupted facts; legacy stores retain rollback behavior.
+- **Durable turns** — `TurnStatus` records execution state independently from Event facts. Turn and Event writes are individually atomic and recover to a terminal state after a later run acquires the session lock; they are not one long transaction. Context projection must omit unsafe dangling tool-call suffixes without modifying the ledger. Runner always validates tool protocol after projection.
+- **Turn failures** — persist only structured `TurnFailure` values produced by a trusted typed error or classifier. Never persist arbitrary `error.Error()` text. A message safe for UI display is not automatically safe to inject into model context.
+- **Turn IDs** — `Event.TurnID` associates events with a durable Turn and groups events produced by one `Runner.Run` call. It is not an ordering key or an automatic resume checkpoint. Older persisted events may have an empty `TurnID`; keep replay compatible.
 - **Stateless agents** — agents hold no conversation state; all history is supplied by `Runner` via `SessionService` on every call.
 - **Session listing** — `ListSessions` is scoped by `app_id/user_id`, uses limit/offset pagination, and applies a stable `session_id` tiebreaker to configurable creation-time or ID ordering.
 - **Parallel tool execution** — `LlmAgent` dispatches tool calls from a single response concurrently via `sync.WaitGroup`; results write to pre-allocated index slots (no mutex contention).
