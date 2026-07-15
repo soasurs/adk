@@ -115,14 +115,6 @@ func (s *databaseSession) ListEvents(ctx context.Context) ([]*event.Event, error
 	return events, nil
 }
 
-func (s *databaseSession) ListTurns(ctx context.Context) ([]*session.Turn, error) {
-	events, err := s.ListEvents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return session.GroupEventsByTurn(events), nil
-}
-
 func (s *databaseSession) ListArchivedEvents(ctx context.Context) ([]*event.Event, error) {
 	events := make([]*event.Event, 0)
 	err := s.db.SelectContext(ctx, &events, s.q.listArchivedEvents, s.SessionID)
@@ -130,14 +122,6 @@ func (s *databaseSession) ListArchivedEvents(ctx context.Context) ([]*event.Even
 		return nil, err
 	}
 	return events, nil
-}
-
-func (s *databaseSession) ListArchivedTurns(ctx context.Context) ([]*session.Turn, error) {
-	events, err := s.ListArchivedEvents(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return session.GroupEventsByTurn(events), nil
 }
 
 func (s *databaseSession) ArchiveEventsBefore(ctx context.Context, eventID int64) error {
