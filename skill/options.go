@@ -2,6 +2,7 @@ package skill
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -31,6 +32,11 @@ type options struct {
 	loadToolName         string
 	readResourceToolName string
 	maxResourceBytes     int64
+
+	// usageInstruction overrides the default instruction text that tells
+	// the model how to decide when to invoke the load-skill tool. An empty
+	// string keeps the format-specific default.
+	usageInstruction string
 }
 
 // WithInstructionFormat selects text or JSON catalog rendering.
@@ -60,6 +66,19 @@ func WithReadResourceToolName(name string) Option {
 func WithMaxResourceBytes(limit int64) Option {
 	return func(options *options) {
 		options.maxResourceBytes = limit
+	}
+}
+
+// WithUsageInstruction replaces the default instruction text appended
+// after the skill list. The text should describe when the model should
+// call the load-skill tool. An empty or whitespace-only value keeps
+// the default.
+func WithUsageInstruction(text string) Option {
+	return func(opts *options) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		opts.usageInstruction = text
 	}
 }
 

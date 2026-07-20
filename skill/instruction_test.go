@@ -66,6 +66,44 @@ func TestCatalog_InstructionRejectsInvalidOptions(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCatalog_InstructionCustomUsage(t *testing.T) {
+	catalog, err := skill.NewCatalog(
+		skill.Skill{Name: "zeta", Description: "Zeta skill."},
+	)
+	require.NoError(t, err)
+
+	instruction, err := catalog.Instruction(
+		skill.WithUsageInstruction("Call load_skill only when the task genuinely falls within the skill's described domain."),
+	)
+	require.NoError(t, err)
+	assert.Contains(t, instruction,
+		"Call load_skill only when the task genuinely falls within the skill's described domain.")
+	assert.NotContains(t, instruction, "When a task matches a skill")
+}
+
+func TestCatalog_InstructionEmptyUsageKeepsDefault(t *testing.T) {
+	catalog, err := skill.NewCatalog(
+		skill.Skill{Name: "zeta", Description: "Zeta skill."},
+	)
+	require.NoError(t, err)
+
+	// Empty string keeps the default.
+	instruction, err := catalog.Instruction(
+		skill.WithUsageInstruction(""),
+	)
+	require.NoError(t, err)
+	assert.Contains(t, instruction,
+		"When a task matches a skill, call load_skill with its name before proceeding.")
+
+	// Whitespace only keeps the default.
+	instruction, err = catalog.Instruction(
+		skill.WithUsageInstruction("   "),
+	)
+	require.NoError(t, err)
+	assert.Contains(t, instruction,
+		"When a task matches a skill, call load_skill with its name before proceeding.")
+}
+
 func TestCatalog_JSONInstructionIsValidJSON(t *testing.T) {
 	catalog, err := skill.NewCatalog(skill.Skill{Name: "simple", Description: "quotes: \" and newline\n"})
 	require.NoError(t, err)
